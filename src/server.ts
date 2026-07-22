@@ -47,7 +47,7 @@ server.registerTool(
   'zendesk_query',
   {
     description: 'Re-extract fields from a previously cached tool response without re-fetching from Zendesk.',
-    inputSchema: { cacheHandle: z.string(), query: z.string() },
+    inputSchema: { cacheHandle: z.string().regex(/^[A-Za-z0-9_-]+$/), query: z.string() },
   },
   async ({ cacheHandle, query }) => {
     const data = cache.load(cacheHandle);

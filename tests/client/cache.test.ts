@@ -34,4 +34,12 @@ describe('ResponseCache', () => {
     const cache = new ResponseCache(dir);
     expect(() => cache.load('does-not-exist')).toThrow(/not found/i);
   });
+
+  it('rejects a path-traversal handle instead of reading outside the cache dir', () => {
+    const cache = new ResponseCache(dir);
+    // A handle escaping the cache dir must be refused before any filesystem read.
+    expect(() => cache.load('../../../../etc/passwd')).toThrow(/invalid cache handle/i);
+    expect(() => cache.load('..%2f..%2fsecret')).toThrow(/invalid cache handle/i);
+    expect(() => cache.load('foo/bar')).toThrow(/invalid cache handle/i);
+  });
 });
