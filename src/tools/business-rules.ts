@@ -183,3 +183,76 @@ export async function previewMacro(
     flagged,
   };
 }
+
+export type ApplyMacroResult =
+  | { status: 'preview'; summary: string; cacheHandle: string; flagged: boolean }
+  | { status: 'applied'; summary: string; cacheHandle: string }
+  | { status: 'conflict'; summary: string; cacheHandle: string; currentUpdatedStamp: string | null };
+
+// Ticket-scoped preview envelope: result.ticket is the ready-to-PUT payload for this ticket.
+const TicketScopedMacroSchema = z.object({ result: z.object({ ticket: z.record(z.unknown()) }) });
+const ConflictTicketSchema = z.object({ ticket: z.object({ id: z.number(), status: z.string().nullish(), updated_at: z.string().nullish() }) });
+
+export async function applyMacroToTicket(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { ticketId: number; macroId: number; confirm?: boolean; updatedStamp?: string; force?: boolean },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ApplyMacroResult> {
+  // Preview is ALWAYS computed read-only first (GET, no mutation) — PRD §5.2 macro apply is
+  // preview→confirm→persist and must never auto-fire.
+  const rawPreview = await client.request<unknown>(`/tickets/${params.ticketId}/macros/${params.macroId}/apply.json`);
+  const parsedPreview = TicketScopedMacroSchema.safeParse(rawPreview);
+  if (!parsedPreview.success) throw new Error('Unexpected /tickets/{id}/macros/{id}/apply response shape.');
+  const screener = makeScreener(securityLevel);
+  const { value: safePreview, flagged } = screenRecordDeep(parsedPreview.data, (key) => `macro-apply-${params.ticketId}-${params.macroId}-${key}`, screener);
+
+  // Phase 1 — no explicit confirmation: return the screened preview and STOP. Nothing persisted.
+  if (params.confirm !== true) {
+    const entry = cache.save('zendesk_apply_macro_to_ticket_preview', safePreview);
+    return {
+      status: 'preview',
+      summary:
+        `PREVIEW ONLY — macro #${params.macroId} would change ticket #${params.ticketId} (see cached result). Nothing was persisted. ` +
+        `Re-invoke with confirm:true and the ticket's updatedStamp (from zendesk_get_ticket) to apply, or force:true to overwrite without a concurrency check.${flagged ? SCREEN_WARNING : ''}`,
+      cacheHandle: entry.handle,
+      flagged,
+    };
+  }
+
+  // Phase 2 — explicit confirmation. Reuse the ticket safe_update contract (PRD §5.2): require
+  // the last-known updatedStamp for optimistic concurrency, or an explicit force override.
+  if (!params.updatedStamp && !params.force) {
+    throw new Error(
+      'Refusing to apply macro without an updatedStamp: pass the updatedStamp from a prior zendesk_get_ticket read to enable safe optimistic-concurrency (recommended), or set force:true to deliberately overwrite without a concurrency check.',
+    );
+  }
+  // The preview's result.ticket is the ready-to-PUT payload (macro fields + comment).
+  const ticketBody: Record<string, unknown> = { ...parsedPreview.data.result.ticket };
+  if (params.updatedStamp) {
+    ticketBody.safe_update = true;
+    ticketBody.updated_stamp = params.updatedStamp;
+  }
+  try {
+    const rawPut = await client.request<unknown>(`/tickets/${params.ticketId}.json`, {
+      method: 'PUT',
+      body: JSON.stringify({ ticket: ticketBody }),
+    });
+    const { value: safe } = screenRecordDeep(rawPut, (key) => `macro-applied-${params.ticketId}-${key}`, screener);
+    const entry = cache.save('zendesk_apply_macro_to_ticket', safe);
+    return { status: 'applied', summary: `Applied macro #${params.macroId} to ticket #${params.ticketId}.`, cacheHandle: entry.handle };
+  } catch (err) {
+    if (!(err instanceof ZendeskConflictError)) throw err;
+    const current = await client.request<unknown>(`/tickets/${params.ticketId}.json`);
+    const parsed = ConflictTicketSchema.safeParse(current);
+    if (!parsed.success) throw new Error('Conflict re-fetch returned a malformed /tickets/{id} response.');
+    const { value: safe } = screenRecordDeep(parsed.data, (key) => `macro-conflict-${params.ticketId}-${key}`, screener);
+    const entry = cache.save('zendesk_apply_macro_to_ticket_conflict', safe);
+    return {
+      status: 'conflict',
+      summary: `Conflict: ticket #${params.ticketId} changed since the updatedStamp you passed (current status: ${parsed.data.ticket.status ?? 'unknown'}). Re-read the ticket, review, and confirm before re-applying.`,
+      cacheHandle: entry.handle,
+      currentUpdatedStamp: parsed.data.ticket.updated_at ?? null,
+    };
+  }
+}
