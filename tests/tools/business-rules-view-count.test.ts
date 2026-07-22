@@ -8,15 +8,22 @@ describe('viewCount', () => {
     const client = { request: vi.fn().mockResolvedValue({ view_count: { view_id: 5, value: 42, fresh: true } }) } as unknown as ZendeskHttpClient;
     const result = await viewCount(client, { viewId: 5 });
     expect(client.request).toHaveBeenCalledWith('/views/5/count.json');
-    expect(result.count).toBe(42);
     expect(result.summary).toContain('42 ticket(s)');
   });
 
-  it('guards a null (not-yet-computed) value and flags a stale count', async () => {
+  it('appends a stale note when a real value is not fresh', async () => {
+    const client = { request: vi.fn().mockResolvedValue({ view_count: { view_id: 5, value: 12, fresh: false } }) } as unknown as ZendeskHttpClient;
+    const result = await viewCount(client, { viewId: 5 });
+    expect(result.summary).toContain('12 ticket(s)');
+    expect(result.summary).toContain('stale');
+  });
+
+  it('reports a null (not-yet-computed) value as unknown, not a true 0', async () => {
     const client = { request: vi.fn().mockResolvedValue({ view_count: { view_id: 5, value: null, fresh: false } }) } as unknown as ZendeskHttpClient;
     const result = await viewCount(client, { viewId: 5 });
-    expect(result.count).toBe(0);
-    expect(result.summary).toContain('stale');
+    expect(result.summary).toContain('unknown');
+    expect(result.summary).toContain('not a true 0');
+    expect(result.summary).not.toContain('matches 0 ticket(s)');
   });
 
   it('throws on a malformed response envelope', async () => {

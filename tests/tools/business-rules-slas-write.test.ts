@@ -19,7 +19,7 @@ describe('createSla', () => {
     expect(path).toBe('/slas/policies.json');
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body).sla_policy.title).toBe('Gold SLA');
-    expect(result.summary).toContain('Created sla #90');
+    expect(result.summary).toContain('Created sla-policy #90');
   });
 
   it('re-maps a 403 to an actionable admin-required error', async () => {
@@ -36,7 +36,7 @@ describe('updateSla', () => {
     expect(path).toBe('/slas/policies/90.json');
     expect(init.method).toBe('PUT');
     expect(JSON.parse(init.body)).toEqual({ sla_policy: { title: 'Gold SLA v2' } });
-    expect(result.summary).toContain('Updated sla #90');
+    expect(result.summary).toContain('Updated sla-policy #90');
   });
 
   it('rejects an empty (no-op) field set', async () => {
