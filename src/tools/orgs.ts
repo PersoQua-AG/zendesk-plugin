@@ -124,3 +124,47 @@ export async function updateOrg(
   const entry = cache.save('zendesk_update_org', safe);
   return { summary: `Updated organization #${params.orgId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
 }
+
+const OrgMembershipSchema = z.object({
+  id: z.number(),
+  user_id: z.number().nullish(),
+  organization_id: z.number().nullish(),
+  default: z.boolean().nullish(),
+});
+type OrgMembership = z.infer<typeof OrgMembershipSchema>;
+
+const OrgMembershipsPageSchema = cbpPageSchema(OrgMembershipSchema, 'organization_memberships');
+
+// Memberships are id-only join records with no free text; screenRecordDeep still runs by
+// construction (ids pass through untouched) so the pipeline stays uniform across read tools.
+function describeOrgMembership(m: OrgMembership, screen: Screener): RecordScreen<OrgMembership> {
+  const { value, flagged } = screenRecordDeep(m, (key) => `org-membership-${m.id}-${key}`, screen);
+  const safe = value as OrgMembership;
+  return { safe, line: `membership #${safe.id} user ${safe.user_id ?? '?'} ↔ org ${safe.organization_id ?? '?'}`, flagged };
+}
+
+export async function listOrgMemberships(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { maxRecords?: number } = {},
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const cap = params.maxRecords ?? 500;
+  const fetchPage = async (cursor: string | null): Promise<CbpPage<OrgMembership>> => {
+    const parts = ['page[size]=100'];
+    if (cursor) parts.push(`page[after]=${encodeURIComponent(cursor)}`);
+    const raw = await client.request<unknown>(`/organization_memberships.json?${parts.join('&')}`);
+    const parsed = OrgMembershipsPageSchema.safeParse(raw);
+    if (!parsed.success) throw new Error('Unexpected /organization_memberships response shape.');
+    return { records: parsed.data.organization_memberships, meta: parsed.data.meta, links: { next: parsed.data.links?.next ?? null } };
+  };
+
+  const capped = await collectCbp(fetchPage, cap);
+  const screened = summariseScreened(capped, describeOrgMembership, securityLevel);
+  const entry = cache.save('zendesk_list_org_memberships', { organization_memberships: screened.records });
+  return {
+    summary: `${screened.records.length} organization membership(s):\n${screened.lines.join('\n')}${screened.warning}`,
+    cacheHandle: entry.handle,
+    flagged: screened.flagged,
+  };
+}
