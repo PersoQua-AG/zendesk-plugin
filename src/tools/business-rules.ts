@@ -300,3 +300,38 @@ export async function listTriggers(
     errorLabel: '/triggers',
   });
 }
+
+const AutomationSchema = z.object({
+  id: z.number(),
+  title: z.string().nullish(),
+  active: z.boolean().nullish(),
+  description: z.string().nullish(),
+  conditions: RuleConditionsSchema,
+  actions: RuleActionsSchema,
+  updated_at: z.string().nullish(),
+});
+type Automation = z.infer<typeof AutomationSchema>;
+
+const describeAutomation = makeDescribe<Automation>('automation', (a) => `#${a.id} ${a.title ?? '(untitled)'}${a.active === false ? ' (inactive)' : ''}`);
+
+export async function listAutomations(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { pageSize?: number; maxRecords?: number } = {},
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  return listCbp<Automation>({
+    client,
+    cache,
+    securityLevel,
+    path: '/automations.json',
+    key: 'automations',
+    schema: AutomationSchema,
+    describe: describeAutomation,
+    handle: 'zendesk_list_automations',
+    cap: params.maxRecords ?? DEFAULT_LIST_CAP,
+    pageSize: params.pageSize,
+    label: (n) => `${n} automation(s)`,
+    errorLabel: '/automations',
+  });
+}
