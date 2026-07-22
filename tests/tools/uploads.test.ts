@@ -1,6 +1,6 @@
 // tests/tools/uploads.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { uploadAttachment } from '../../src/tools/uploads.js';
+import { uploadAttachment, MAX_UPLOAD_BASE64_CHARS } from '../../src/tools/uploads.js';
 import type { ZendeskHttpClient } from '../../src/client/http-client.js';
 
 describe('uploadAttachment', () => {
@@ -26,5 +26,16 @@ describe('uploadAttachment', () => {
     const big = Buffer.alloc(51 * 1024 * 1024).toString('base64');
     await expect(uploadAttachment(client, { filename: 'big.bin', contentBase64: big })).rejects.toThrow(/exceeds/i);
     expect(client.requestUpload).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized base64 string by estimate, before decoding it', async () => {
+    const client = { requestUpload: vi.fn() } as unknown as ZendeskHttpClient;
+    // A raw base64 char count above the cap — no valid payload is decoded/allocated.
+    const spy = vi.spyOn(Buffer, 'from');
+    const oversized = 'A'.repeat(MAX_UPLOAD_BASE64_CHARS + 8);
+    await expect(uploadAttachment(client, { filename: 'huge.bin', contentBase64: oversized })).rejects.toThrow(/exceeds/i);
+    expect(client.requestUpload).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
