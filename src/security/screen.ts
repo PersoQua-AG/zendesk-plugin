@@ -1,18 +1,22 @@
 import { randomBytes } from 'node:crypto';
 
+// High-severity, low-false-positive injection patterns — flagged on the DEFAULT
+// `standard` level (not merely delimiter-neutralized). Includes role-spoof,
+// system-prompt-boundary, and tool-call forgery attempts.
 const INJECTION_PATTERNS: RegExp[] = [
   /ignore\s+(all\s+)?(previous|prior|above)\s+instructions/i,
   /disregard\s+(all\s+)?(previous|prior|above)/i,
   /you\s+are\s+now\s+(in\s+)?(developer|admin|debug)\s+mode/i,
   /system\s*:\s*override/i,
   /\[\[?system\]?\]/i,
-];
-
-// strict mode adds chat-role and tool-call spoofing heuristics on top.
-const STRICT_PATTERNS: RegExp[] = [
-  /<\/?(system|assistant|user)>/i,
   /begin\s+system\s+prompt/i,
   /\b(tool_call|function_call)\b/i,
+];
+
+// strict mode adds broader (higher-false-positive) chat-role heuristics on top —
+// e.g. a bare <assistant> mention, which is often benign in ordinary text.
+const STRICT_PATTERNS: RegExp[] = [
+  /<\/?(system|assistant|user)>/i,
 ];
 
 // Any occurrence of our envelope delimiter inside untrusted text — a breakout attempt.
