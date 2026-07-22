@@ -28,6 +28,18 @@
       "type": "number",
       "title": "OAuth Callback Port",
       "default": 8976
+    },
+    "security_level": {
+      "type": "string",
+      "title": "Injection-Screening Level",
+      "description": "strict | standard | off — how aggressively inbound Zendesk content is screened for prompt injection.",
+      "default": "standard"
+    },
+    "markdown_conversion": {
+      "type": "boolean",
+      "title": "Markdown to HTML Conversion",
+      "description": "Default for converting comment/ticket bodies from Markdown to HTML. A per-call 'markdown' argument overrides this.",
+      "default": true
     }
   },
   "mcpServers": {
@@ -39,6 +51,8 @@
         "ZENDESK_OAUTH_CLIENT_ID": "${user_config.oauth_client_id}",
         "ZENDESK_OAUTH_CLIENT_SECRET": "${user_config.oauth_client_secret}",
         "ZENDESK_OAUTH_CALLBACK_PORT": "${user_config.oauth_callback_port}",
+        "ZENDESK_SECURITY_LEVEL": "${user_config.security_level}",
+        "ZENDESK_MARKDOWN_CONVERSION": "${user_config.markdown_conversion}",
         "CLAUDE_PLUGIN_DATA": "${CLAUDE_PLUGIN_DATA}"
       }
     }

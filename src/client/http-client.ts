@@ -61,7 +61,10 @@ export class ZendeskHttpClient {
     const token = await this.options.authManager.getAccessToken();
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method: 'POST',
-      body,
+      // @types/node types a typed array as Uint8Array<ArrayBufferLike>, which its
+      // fetch BodyInit union doesn't accept directly; the raw bytes are a valid
+      // BufferSource at runtime, so assert the union member.
+      body: body as BodyInit,
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType },
     });
     if (response.status === 429) {
