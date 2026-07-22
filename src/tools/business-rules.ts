@@ -70,3 +70,37 @@ export async function getView(
     flagged,
   };
 }
+
+const ViewTicketSchema = z.object({
+  id: z.number(),
+  subject: z.string().nullish(),
+  description: z.string().nullish(),
+  status: z.string().nullish(),
+  priority: z.string().nullish(),
+  updated_at: z.string().nullish(),
+});
+type ViewTicket = z.infer<typeof ViewTicketSchema>;
+
+const describeViewTicket = makeDescribe<ViewTicket>('view-ticket', (t) => `#${t.id} [${t.status ?? 'unknown'}] ${t.subject ?? '(no subject)'}`);
+
+export async function executeView(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { viewId: number; pageSize?: number; maxRecords?: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  return listCbp<ViewTicket>({
+    client,
+    cache,
+    securityLevel,
+    path: `/views/${params.viewId}/tickets.json`,
+    key: 'tickets',
+    schema: ViewTicketSchema,
+    describe: describeViewTicket,
+    handle: 'zendesk_execute_view',
+    cap: params.maxRecords ?? DEFAULT_LIST_CAP,
+    pageSize: params.pageSize,
+    label: (n) => `${n} ticket(s) in view #${params.viewId}`,
+    errorLabel: '/views/{id}/tickets',
+  });
+}
