@@ -1,0 +1,46 @@
+{
+  "name": "zendesk",
+  "displayName": "Zendesk Support Integration",
+  "version": "0.1.0",
+  "description": "Manage Zendesk tickets, users, organizations, business rules, and Help Center content from Claude Code.",
+  "author": { "name": "Persoqua", "email": "r.pfisterer@persoqua.de" },
+  "license": "MIT",
+  "userConfig": {
+    "zendesk_subdomain": {
+      "type": "string",
+      "title": "Zendesk Subdomain",
+      "description": "e.g. 'acme' for acme.zendesk.com",
+      "required": true
+    },
+    "oauth_client_id": {
+      "type": "string",
+      "title": "OAuth Client ID",
+      "description": "Client ID from the OAuth client registered in Zendesk Admin Center",
+      "required": true
+    },
+    "oauth_client_secret": {
+      "type": "string",
+      "title": "OAuth Client Secret",
+      "sensitive": true,
+      "required": true
+    },
+    "oauth_callback_port": {
+      "type": "number",
+      "title": "OAuth Callback Port",
+      "default": 8976
+    }
+  },
+  "mcpServers": {
+    "zendesk": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/server.js"],
+      "env": {
+        "ZENDESK_SUBDOMAIN": "${user_config.zendesk_subdomain}",
+        "ZENDESK_OAUTH_CLIENT_ID": "${user_config.oauth_client_id}",
+        "ZENDESK_OAUTH_CLIENT_SECRET": "${user_config.oauth_client_secret}",
+        "ZENDESK_OAUTH_CALLBACK_PORT": "${user_config.oauth_callback_port}",
+        "CLAUDE_PLUGIN_DATA": "${CLAUDE_PLUGIN_DATA}"
+      }
+    }
+  }
+}
