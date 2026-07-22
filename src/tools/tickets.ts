@@ -113,3 +113,46 @@ export async function getTicketsMany(
   });
   return { summary: `${parsed.data.tickets.length} ticket(s):\n${lines.join('\n')}`, cacheHandle: entry.handle, flagged };
 }
+
+export interface NewTicketInput {
+  subject: string;
+  comment: string;
+  requesterId?: number;
+  priority?: string;
+  status?: string;
+  tags?: string[];
+  groupId?: number;
+  assigneeId?: number;
+  markdown?: boolean;
+  publicComment?: boolean;
+}
+
+function buildComment(text: string, useMarkdown: boolean, isPublic: boolean): Record<string, unknown> {
+  return useMarkdown
+    ? { html_body: markdownToHtml(text), public: isPublic }
+    : { body: text, public: isPublic };
+}
+
+export async function createTicket(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: NewTicketInput,
+): Promise<{ summary: string; cacheHandle: string }> {
+  const ticket: Record<string, unknown> = {
+    subject: params.subject,
+    comment: buildComment(params.comment, params.markdown ?? true, params.publicComment ?? true),
+  };
+  if (params.requesterId !== undefined) ticket.requester_id = params.requesterId;
+  if (params.priority) ticket.priority = params.priority;
+  if (params.status) ticket.status = params.status;
+  if (params.tags) ticket.tags = params.tags;
+  if (params.groupId !== undefined) ticket.group_id = params.groupId;
+  if (params.assigneeId !== undefined) ticket.assignee_id = params.assigneeId;
+
+  const raw = await client.request<{ ticket: { id: number } }>('/tickets.json', {
+    method: 'POST',
+    body: JSON.stringify({ ticket }),
+  });
+  const entry = cache.save('zendesk_create_ticket', raw);
+  return { summary: `Created ticket #${raw.ticket.id}`, cacheHandle: entry.handle };
+}
