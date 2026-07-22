@@ -33,4 +33,11 @@ describe('CBP paginator', () => {
     const fetchPage = async () => page([1], true, null);
     await expect(collectAllCbp(fetchPage)).rejects.toThrow(/has_more.*after_cursor/i);
   });
+
+  it('aborts with a clear error if the API never stops advertising has_more', async () => {
+    // Always returns a valid next cursor — without a cap this would loop forever.
+    let n = 0;
+    const fetchPage = async () => page([n], true, `cursor-${n++}`);
+    await expect(collectAllCbp(fetchPage)).rejects.toThrow(/page cap/i);
+  });
 });

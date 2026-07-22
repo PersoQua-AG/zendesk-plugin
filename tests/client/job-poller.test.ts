@@ -38,4 +38,15 @@ describe('pollJobToCompletion', () => {
     ).rejects.toThrow(/did not complete/i);
     expect(fetchJobStatus).toHaveBeenCalledTimes(3);
   });
+
+  it('does not sleep after the final failed attempt before throwing (off-by-one)', async () => {
+    const fetchJobStatus = vi.fn(async (): Promise<JobStatus> => ({ id: 'job-4', status: 'working' }));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      pollJobToCompletion('job-4', { fetchJobStatus, sleep, maxAttempts: 3, intervalMs: 1 }),
+    ).rejects.toThrow(/did not complete/i);
+    // 3 polls, but only 2 inter-poll sleeps (none after the last).
+    expect(fetchJobStatus).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
 });

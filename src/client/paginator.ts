@@ -4,13 +4,20 @@ export interface CbpPage<T> {
   links: { next: string | null };
 }
 
+const MAX_PAGES = 10_000;
+
 export async function* paginateCbp<T>(
   fetchPage: (cursor: string | null) => Promise<CbpPage<T>>,
 ): AsyncGenerator<T[], void, void> {
   let cursor: string | null = null;
   let hasMore = true;
+  let pages = 0;
   while (hasMore) {
+    if (pages >= MAX_PAGES) {
+      throw new Error(`CBP pagination exceeded the ${MAX_PAGES}-page cap — aborting to avoid an infinite loop`);
+    }
     const pageResult = await fetchPage(cursor);
+    pages += 1;
     yield pageResult.records;
     hasMore = pageResult.meta.has_more;
     cursor = pageResult.meta.after_cursor;

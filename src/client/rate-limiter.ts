@@ -25,7 +25,7 @@ export class RateLimiter {
     if (delay > 0) {
       await this.sleepFn(delay);
     }
-    this.nextAvailableAt = Math.max(waitUntil, current) + this.intervalMs;
+    this.nextAvailableAt = waitUntil + this.intervalMs;
   }
 
   reportRetryAfter(seconds: number): void {

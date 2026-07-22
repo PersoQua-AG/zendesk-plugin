@@ -21,7 +21,10 @@ export async function pollJobToCompletion(jobId: string, options: JobPollerOptio
     if (status.status === 'completed' || status.status === 'failed') {
       return status;
     }
-    await sleepFn(intervalMs);
+    // Don't sleep after the final attempt — we're about to throw anyway.
+    if (attempt < maxAttempts - 1) {
+      await sleepFn(intervalMs);
+    }
   }
   throw new Error(`Job ${jobId} did not complete within ${maxAttempts} polling attempts`);
 }
