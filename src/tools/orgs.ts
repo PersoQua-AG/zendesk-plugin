@@ -55,3 +55,25 @@ export async function listOrgs(
     flagged: screened.flagged,
   };
 }
+
+const SingleOrgSchema = z.object({ organization: OrgSchema });
+
+export async function getOrg(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { orgId: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const raw = await client.request<unknown>(`/organizations/${params.orgId}.json`);
+  const parsed = SingleOrgSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /organizations/{id} response shape.');
+  const { value, flagged } = screenRecordDeep(parsed.data, (key) => `org-${params.orgId}-${key}`, makeScreener(securityLevel));
+  const safe = value as { organization: Org };
+  const entry = cache.save('zendesk_get_org', safe);
+  const warning = flagged ? SCREEN_WARNING : '';
+  return {
+    summary: `Organization #${safe.organization.id} ${safe.organization.name ?? '(no name)'}${warning}`,
+    cacheHandle: entry.handle,
+    flagged,
+  };
+}
