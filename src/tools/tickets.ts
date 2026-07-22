@@ -91,3 +91,25 @@ export async function getTicket(
   const summary = `Ticket #${t.id} [${t.status ?? 'unknown'}] priority=${t.priority ?? 'none'}\nSubject: ${subject.wrapped}\nDescription: ${description.wrapped}${warning}`;
   return { summary, cacheHandle: entry.handle, flagged, updatedStamp: t.updated_at ?? null };
 }
+
+const ManyTicketsSchema = z.object({ tickets: z.array(TicketSchema) });
+
+export async function getTicketsMany(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { ids: number[] },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  if (params.ids.length === 0) throw new Error('At least one ticket id is required.');
+  const raw = await client.request<unknown>(`/tickets/show_many.json?ids=${encodeURIComponent(params.ids.join(','))}`);
+  const parsed = ManyTicketsSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /tickets/show_many response shape.');
+  const entry = cache.save('zendesk_get_tickets_many', parsed.data);
+  let flagged = false;
+  const lines = parsed.data.tickets.map((t) => {
+    const { line, flagged: f } = ticketLine(t, securityLevel);
+    if (f) flagged = true;
+    return line;
+  });
+  return { summary: `${parsed.data.tickets.length} ticket(s):\n${lines.join('\n')}`, cacheHandle: entry.handle, flagged };
+}
