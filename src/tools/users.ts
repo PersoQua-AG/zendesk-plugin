@@ -72,3 +72,25 @@ export async function searchUsers(
     flagged: screened.flagged,
   };
 }
+
+const SingleUserSchema = z.object({ user: UserSchema });
+
+export async function getUser(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { userId: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const raw = await client.request<unknown>(`/users/${params.userId}.json`);
+  const parsed = SingleUserSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /users/{id} response shape.');
+  const { value, flagged } = screenRecordDeep(parsed.data, (key) => `user-${params.userId}-${key}`, makeScreener(securityLevel));
+  const safe = value as { user: User };
+  const entry = cache.save('zendesk_get_user', safe);
+  const warning = flagged ? SCREEN_WARNING : '';
+  return {
+    summary: `User #${safe.user.id} ${safe.user.name ?? '(no name)'} <${safe.user.email ?? 'no-email'}> [${safe.user.role ?? 'end-user'}]${warning}`,
+    cacheHandle: entry.handle,
+    flagged,
+  };
+}
