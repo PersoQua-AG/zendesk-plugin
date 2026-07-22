@@ -2,6 +2,7 @@
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { pollJobToCompletion, type JobStatus, type JobPollerOptions } from '../client/job-poller.js';
+import type { TicketUpdateFields } from './tickets.js';
 
 type PollOverrides = Partial<Pick<JobPollerOptions, 'sleep' | 'intervalMs' | 'maxAttempts'>>;
 
@@ -43,4 +44,15 @@ export async function createTicketsBulk(
 ): Promise<BulkResult> {
   if (params.tickets.length === 0) throw new Error('At least one ticket is required for a bulk create.');
   return runJob(client, cache, 'zendesk_create_tickets_bulk', '/tickets/create_many.json', { tickets: params.tickets }, 'POST', poll);
+}
+
+export async function updateTicketsBulk(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { ids: number[]; fields: TicketUpdateFields },
+  poll: PollOverrides = {},
+): Promise<BulkResult> {
+  if (params.ids.length === 0) throw new Error('At least one ticket id is required for a bulk update.');
+  const path = `/tickets/update_many.json?ids=${encodeURIComponent(params.ids.join(','))}`;
+  return runJob(client, cache, 'zendesk_update_tickets_bulk', path, { ticket: params.fields }, 'PUT', poll);
 }
