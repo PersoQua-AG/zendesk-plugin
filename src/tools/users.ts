@@ -2,10 +2,10 @@
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
-import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING } from './screening.js';
 import { SEARCH_HARD_CAP } from './search.js';
+import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
 import { stripUndefined } from '../util/object.js';
 import type { ReadResult } from './result.js';
 
@@ -168,8 +168,6 @@ const IdentitySchema = z.object({
 });
 type Identity = z.infer<typeof IdentitySchema>;
 
-const IdentitiesPageSchema = cbpPageSchema(IdentitySchema, 'identities');
-
 const describeIdentity = makeDescribe<Identity>(
   'identity',
   (i) => `identity #${i.id} [${i.type ?? 'unknown'}] ${i.value ?? ''}`,
@@ -178,25 +176,22 @@ const describeIdentity = makeDescribe<Identity>(
 export async function listUserIdentities(
   client: ZendeskHttpClient,
   cache: ResponseCache,
-  params: { userId: number; maxRecords?: number },
+  params: { userId: number; pageSize?: number; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
-  const cap = params.maxRecords ?? 200;
-  const fetchPage = async (cursor: string | null): Promise<CbpPage<Identity>> => {
-    const parts = ['page[size]=100'];
-    if (cursor) parts.push(`page[after]=${encodeURIComponent(cursor)}`);
-    const raw = await client.request<unknown>(`/users/${params.userId}/identities.json?${parts.join('&')}`);
-    const parsed = IdentitiesPageSchema.safeParse(raw);
-    if (!parsed.success) throw new Error('Unexpected /users/{id}/identities response shape.');
-    return { records: parsed.data.identities, meta: parsed.data.meta, links: { next: parsed.data.links?.next ?? null } };
-  };
-
-  const capped = await collectCbp(fetchPage, cap);
-  const screened = summariseScreened(capped, describeIdentity, securityLevel);
-  const entry = cache.save('zendesk_list_user_identities', { identities: screened.records });
-  return {
-    summary: `${screened.records.length} identit${screened.records.length === 1 ? 'y' : 'ies'} for user #${params.userId}:\n${screened.lines.join('\n')}${screened.warning}`,
-    cacheHandle: entry.handle,
-    flagged: screened.flagged,
-  };
+  return listCbp<Identity>({
+    client,
+    cache,
+    securityLevel,
+    path: `/users/${params.userId}/identities.json`,
+    key: 'identities',
+    schema: IdentitySchema,
+    describe: describeIdentity,
+    handle: 'zendesk_list_user_identities',
+    cap: params.maxRecords ?? DEFAULT_LIST_CAP,
+    pageSize: params.pageSize,
+    // The one irregular plural: identity → identities. Owned by the label fn.
+    label: (n) => `${n} identit${n === 1 ? 'y' : 'ies'} for user #${params.userId}`,
+    errorLabel: '/users/{id}/identities',
+  });
 }

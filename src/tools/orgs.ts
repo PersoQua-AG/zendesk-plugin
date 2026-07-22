@@ -2,9 +2,9 @@
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
-import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING } from './screening.js';
+import { makeDescribe, makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
+import { listCbp, DEFAULT_LIST_CAP, DEFAULT_MEMBERSHIP_CAP } from './cbp-list.js';
 import { stripUndefined } from '../util/object.js';
 import type { ReadResult } from './result.js';
 
@@ -24,33 +24,26 @@ export type Org = z.infer<typeof OrgSchema>;
 // cache neutralized/wrapped and the line is rendered from the safe copy.
 const describeOrg = makeDescribe<Org>('org', (o) => `#${o.id} ${o.name ?? '(no name)'}`);
 
-const OrgsPageSchema = cbpPageSchema(OrgSchema, 'organizations');
-
 export async function listOrgs(
   client: ZendeskHttpClient,
   cache: ResponseCache,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
-  const pageSize = Math.min(params.pageSize ?? 100, 100);
-  const cap = params.maxRecords ?? 200;
-  const fetchPage = async (cursor: string | null): Promise<CbpPage<Org>> => {
-    const parts = [`page[size]=${pageSize}`];
-    if (cursor) parts.push(`page[after]=${encodeURIComponent(cursor)}`);
-    const raw = await client.request<unknown>(`/organizations.json?${parts.join('&')}`);
-    const parsed = OrgsPageSchema.safeParse(raw);
-    if (!parsed.success) throw new Error('Unexpected /organizations response shape.');
-    return { records: parsed.data.organizations, meta: parsed.data.meta, links: { next: parsed.data.links?.next ?? null } };
-  };
-
-  const capped = await collectCbp(fetchPage, cap);
-  const screened = summariseScreened(capped, describeOrg, securityLevel);
-  const entry = cache.save('zendesk_list_orgs', { organizations: screened.records });
-  return {
-    summary: `${screened.records.length} organization(s):\n${screened.lines.join('\n')}${screened.warning}`,
-    cacheHandle: entry.handle,
-    flagged: screened.flagged,
-  };
+  return listCbp<Org>({
+    client,
+    cache,
+    securityLevel,
+    path: '/organizations.json',
+    key: 'organizations',
+    schema: OrgSchema,
+    describe: describeOrg,
+    handle: 'zendesk_list_orgs',
+    cap: params.maxRecords ?? DEFAULT_LIST_CAP,
+    pageSize: params.pageSize,
+    label: (n) => `${n} organization(s)`,
+    errorLabel: '/organizations',
+  });
 }
 
 const SingleOrgSchema = z.object({ organization: OrgSchema });
@@ -136,8 +129,6 @@ const OrgMembershipSchema = z.object({
 });
 type OrgMembership = z.infer<typeof OrgMembershipSchema>;
 
-const OrgMembershipsPageSchema = cbpPageSchema(OrgMembershipSchema, 'organization_memberships');
-
 // Memberships are id-only join records with no free text; screening still runs by
 // construction (ids pass through untouched) so the pipeline stays uniform across read tools.
 const describeOrgMembership = makeDescribe<OrgMembership>(
@@ -148,25 +139,21 @@ const describeOrgMembership = makeDescribe<OrgMembership>(
 export async function listOrgMemberships(
   client: ZendeskHttpClient,
   cache: ResponseCache,
-  params: { maxRecords?: number } = {},
+  params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
-  const cap = params.maxRecords ?? 500;
-  const fetchPage = async (cursor: string | null): Promise<CbpPage<OrgMembership>> => {
-    const parts = ['page[size]=100'];
-    if (cursor) parts.push(`page[after]=${encodeURIComponent(cursor)}`);
-    const raw = await client.request<unknown>(`/organization_memberships.json?${parts.join('&')}`);
-    const parsed = OrgMembershipsPageSchema.safeParse(raw);
-    if (!parsed.success) throw new Error('Unexpected /organization_memberships response shape.');
-    return { records: parsed.data.organization_memberships, meta: parsed.data.meta, links: { next: parsed.data.links?.next ?? null } };
-  };
-
-  const capped = await collectCbp(fetchPage, cap);
-  const screened = summariseScreened(capped, describeOrgMembership, securityLevel);
-  const entry = cache.save('zendesk_list_org_memberships', { organization_memberships: screened.records });
-  return {
-    summary: `${screened.records.length} organization membership(s):\n${screened.lines.join('\n')}${screened.warning}`,
-    cacheHandle: entry.handle,
-    flagged: screened.flagged,
-  };
+  return listCbp<OrgMembership>({
+    client,
+    cache,
+    securityLevel,
+    path: '/organization_memberships.json',
+    key: 'organization_memberships',
+    schema: OrgMembershipSchema,
+    describe: describeOrgMembership,
+    handle: 'zendesk_list_org_memberships',
+    cap: params.maxRecords ?? DEFAULT_MEMBERSHIP_CAP,
+    pageSize: params.pageSize,
+    label: (n) => `${n} organization membership(s)`,
+    errorLabel: '/organization_memberships',
+  });
 }
