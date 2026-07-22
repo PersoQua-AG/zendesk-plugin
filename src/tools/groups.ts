@@ -51,3 +51,45 @@ export async function listGroups(
     flagged: screened.flagged,
   };
 }
+
+const GroupMembershipSchema = z.object({
+  id: z.number(),
+  user_id: z.number().nullish(),
+  group_id: z.number().nullish(),
+  default: z.boolean().nullish(),
+});
+type GroupMembership = z.infer<typeof GroupMembershipSchema>;
+
+const GroupMembershipsPageSchema = cbpPageSchema(GroupMembershipSchema, 'group_memberships');
+
+function describeGroupMembership(m: GroupMembership, screen: Screener): RecordScreen<GroupMembership> {
+  const { value, flagged } = screenRecordDeep(m, (key) => `group-membership-${m.id}-${key}`, screen);
+  const safe = value as GroupMembership;
+  return { safe, line: `membership #${safe.id} user ${safe.user_id ?? '?'} ↔ group ${safe.group_id ?? '?'}`, flagged };
+}
+
+export async function listGroupMemberships(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { maxRecords?: number } = {},
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const cap = params.maxRecords ?? 500;
+  const fetchPage = async (cursor: string | null): Promise<CbpPage<GroupMembership>> => {
+    const parts = ['page[size]=100'];
+    if (cursor) parts.push(`page[after]=${encodeURIComponent(cursor)}`);
+    const raw = await client.request<unknown>(`/group_memberships.json?${parts.join('&')}`);
+    const parsed = GroupMembershipsPageSchema.safeParse(raw);
+    if (!parsed.success) throw new Error('Unexpected /group_memberships response shape.');
+    return { records: parsed.data.group_memberships, meta: parsed.data.meta, links: { next: parsed.data.links?.next ?? null } };
+  };
+
+  const capped = await collectCbp(fetchPage, cap);
+  const screened = summariseScreened(capped, describeGroupMembership, securityLevel);
+  const entry = cache.save('zendesk_list_group_memberships', { group_memberships: screened.records });
+  return {
+    summary: `${screened.records.length} group membership(s):\n${screened.lines.join('\n')}${screened.warning}`,
+    cacheHandle: entry.handle,
+    flagged: screened.flagged,
+  };
+}
