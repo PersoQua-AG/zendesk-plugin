@@ -160,3 +160,26 @@ export async function listMacros(
     errorLabel: '/macros',
   });
 }
+
+// The macro-apply result envelope: `result.ticket` is the would-be ticket payload (fields +
+// the macro's comment). Kept permissive (record) since a macro can set arbitrary fields;
+// screening walks it field-agnostically regardless of shape.
+const MacroApplyResultSchema = z.object({ result: z.record(z.unknown()) });
+
+export async function previewMacro(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { macroId: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const raw = await client.request<unknown>(`/macros/${params.macroId}/apply.json`);
+  const parsed = MacroApplyResultSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /macros/{id}/apply response shape.');
+  const { value, flagged } = screenRecordDeep(parsed.data, (key) => `macro-${params.macroId}-${key}`, makeScreener(securityLevel));
+  const entry = cache.save('zendesk_preview_macro', value);
+  return {
+    summary: `Preview of macro #${params.macroId} on a blank ticket — no changes persisted (read-only).${flagged ? SCREEN_WARNING : ''}`,
+    cacheHandle: entry.handle,
+    flagged,
+  };
+}
