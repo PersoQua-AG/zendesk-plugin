@@ -69,4 +69,43 @@ describe('ZendeskHttpClient', () => {
     });
     await expect(client.request('/tickets.json')).rejects.toThrow(/permission denied/i);
   });
+
+  it('retries after a 429 and succeeds on the next response', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('rate limited', { status: 429, headers: { 'Retry-After': '1' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const rateLimiter = fakeRateLimiter();
+    const client = new ZendeskHttpClient({
+      subdomain: 'acme',
+      authManager: fakeAuthManager(),
+      rateLimiter,
+      fetchImpl,
+    });
+
+    const result = await client.request('/tickets.json');
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(rateLimiter.reportRetryAfter).toHaveBeenCalledWith(1);
+    // acquire() runs before the initial call and before the retry.
+    expect(rateLimiter.acquire).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up after exhausting retries and throws ZendeskRateLimitError', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response('rate limited', { status: 429, headers: { 'Retry-After': '1' } }));
+    const client = new ZendeskHttpClient({
+      subdomain: 'acme',
+      authManager: fakeAuthManager(),
+      rateLimiter: fakeRateLimiter(),
+      fetchImpl,
+      maxRateLimitRetries: 2,
+    });
+
+    await expect(client.request('/tickets.json')).rejects.toBeInstanceOf(ZendeskRateLimitError);
+    // initial attempt + 2 retries = 3 calls.
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
 });
