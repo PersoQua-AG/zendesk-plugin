@@ -4,7 +4,7 @@ import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
+import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING } from './screening.js';
 import { stripUndefined } from '../util/object.js';
 import type { ReadResult } from './result.js';
 
@@ -20,13 +20,9 @@ const OrgSchema = z.object({
 });
 export type Org = z.infer<typeof OrgSchema>;
 
-// An org carries untrusted free text in name/notes/details. Screen field-agnostically so
-// every string field reaches the cache neutralized/wrapped; build the line from the safe copy.
-function describeOrg(o: Org, screen: Screener): RecordScreen<Org> {
-  const { value, flagged } = screenRecordDeep(o, (key) => `org-${o.id}-${key}`, screen);
-  const safe = value as Org;
-  return { safe, line: `#${safe.id} ${safe.name ?? '(no name)'}`, flagged };
-}
+// An org carries untrusted free text in name/notes/details; every string field reaches the
+// cache neutralized/wrapped and the line is rendered from the safe copy.
+const describeOrg = makeDescribe<Org>('org', (o) => `#${o.id} ${o.name ?? '(no name)'}`);
 
 const OrgsPageSchema = cbpPageSchema(OrgSchema, 'organizations');
 
@@ -142,13 +138,12 @@ type OrgMembership = z.infer<typeof OrgMembershipSchema>;
 
 const OrgMembershipsPageSchema = cbpPageSchema(OrgMembershipSchema, 'organization_memberships');
 
-// Memberships are id-only join records with no free text; screenRecordDeep still runs by
+// Memberships are id-only join records with no free text; screening still runs by
 // construction (ids pass through untouched) so the pipeline stays uniform across read tools.
-function describeOrgMembership(m: OrgMembership, screen: Screener): RecordScreen<OrgMembership> {
-  const { value, flagged } = screenRecordDeep(m, (key) => `org-membership-${m.id}-${key}`, screen);
-  const safe = value as OrgMembership;
-  return { safe, line: `membership #${safe.id} user ${safe.user_id ?? '?'} ↔ org ${safe.organization_id ?? '?'}`, flagged };
-}
+const describeOrgMembership = makeDescribe<OrgMembership>(
+  'org-membership',
+  (m) => `membership #${m.id} user ${m.user_id ?? '?'} ↔ org ${m.organization_id ?? '?'}`,
+);
 
 export async function listOrgMemberships(
   client: ZendeskHttpClient,

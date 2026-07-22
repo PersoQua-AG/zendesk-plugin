@@ -4,7 +4,7 @@ import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
+import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING } from './screening.js';
 import { SEARCH_HARD_CAP } from './search.js';
 import { stripUndefined } from '../util/object.js';
 import type { ReadResult } from './result.js';
@@ -25,14 +25,13 @@ const UserSchema = z.object({
 });
 export type User = z.infer<typeof UserSchema>;
 
-// A user carries untrusted free text in name/notes/details/phone. Screen field-agnostically
-// (as search.ts does) so every string field reaches the cache neutralized/wrapped — the line
-// is built from the SCREENED copy so no raw payload leaks into the summary.
-function describeUser(u: User, screen: Screener): RecordScreen<User> {
-  const { value, flagged } = screenRecordDeep(u, (key) => `user-${u.id}-${key}`, screen);
-  const safe = value as User;
-  return { safe, line: `#${safe.id} ${safe.name ?? '(no name)'} <${safe.email ?? 'no-email'}> [${safe.role ?? 'end-user'}]`, flagged };
-}
+// A user carries untrusted free text in name/notes/details/phone; every string field reaches
+// the cache neutralized/wrapped and the line is rendered from the SCREENED copy so no raw
+// payload leaks into the summary.
+const describeUser = makeDescribe<User>(
+  'user',
+  (u) => `#${u.id} ${u.name ?? '(no name)'} <${u.email ?? 'no-email'}> [${u.role ?? 'end-user'}]`,
+);
 
 const SearchUsersPageSchema = z.object({
   users: z.array(UserSchema),
@@ -171,11 +170,10 @@ type Identity = z.infer<typeof IdentitySchema>;
 
 const IdentitiesPageSchema = cbpPageSchema(IdentitySchema, 'identities');
 
-function describeIdentity(i: Identity, screen: Screener): RecordScreen<Identity> {
-  const { value, flagged } = screenRecordDeep(i, (key) => `identity-${i.id}-${key}`, screen);
-  const safe = value as Identity;
-  return { safe, line: `identity #${safe.id} [${safe.type ?? 'unknown'}] ${safe.value ?? ''}`, flagged };
-}
+const describeIdentity = makeDescribe<Identity>(
+  'identity',
+  (i) => `identity #${i.id} [${i.type ?? 'unknown'}] ${i.value ?? ''}`,
+);
 
 export async function listUserIdentities(
   client: ZendeskHttpClient,

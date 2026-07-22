@@ -84,6 +84,22 @@ export interface RecordScreen<T> {
   flagged: boolean;
 }
 
+// Build a per-record screen fn: deep-screen every field under a `${prefix}-${id}-${key}`
+// seed, then render one summary line from the SAFE copy. Every list/search tool declares its
+// record screening as one `makeDescribe` call, so ingest screening stays enforced by
+// construction — a tool cannot render a line without first routing the record through
+// screenRecordDeep. `lineFn` receives the already-screened record.
+export function makeDescribe<T extends { id: number }>(
+  prefix: string,
+  lineFn: (safe: T) => string,
+): (record: T, screen: Screener) => RecordScreen<T> {
+  return (record, screen) => {
+    const { value, flagged } = screenRecordDeep(record, (key) => `${prefix}-${record.id}-${key}`, screen);
+    const safe = value as T;
+    return { safe, line: lineFn(safe), flagged };
+  };
+}
+
 export interface ScreenedSummary<T> {
   records: T[];
   lines: string[];

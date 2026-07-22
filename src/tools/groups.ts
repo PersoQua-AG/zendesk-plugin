@@ -4,7 +4,7 @@ import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { screenRecordDeep, summariseScreened, type RecordScreen, type Screener } from './screening.js';
+import { makeDescribe, summariseScreened } from './screening.js';
 import type { ReadResult } from './result.js';
 
 const GroupSchema = z.object({
@@ -18,13 +18,9 @@ type Group = z.infer<typeof GroupSchema>;
 
 const GroupsPageSchema = cbpPageSchema(GroupSchema, 'groups');
 
-// A group carries untrusted free text in name/description. Screen field-agnostically so both
-// reach the cache neutralized/wrapped; build the line from the safe copy.
-function describeGroup(g: Group, screen: Screener): RecordScreen<Group> {
-  const { value, flagged } = screenRecordDeep(g, (key) => `group-${g.id}-${key}`, screen);
-  const safe = value as Group;
-  return { safe, line: `#${safe.id} ${safe.name ?? '(no name)'}`, flagged };
-}
+// A group carries untrusted free text in name/description; both reach the cache
+// neutralized/wrapped and the line is rendered from the safe copy.
+const describeGroup = makeDescribe<Group>('group', (g) => `#${g.id} ${g.name ?? '(no name)'}`);
 
 export async function listGroups(
   client: ZendeskHttpClient,
@@ -62,11 +58,10 @@ type GroupMembership = z.infer<typeof GroupMembershipSchema>;
 
 const GroupMembershipsPageSchema = cbpPageSchema(GroupMembershipSchema, 'group_memberships');
 
-function describeGroupMembership(m: GroupMembership, screen: Screener): RecordScreen<GroupMembership> {
-  const { value, flagged } = screenRecordDeep(m, (key) => `group-membership-${m.id}-${key}`, screen);
-  const safe = value as GroupMembership;
-  return { safe, line: `membership #${safe.id} user ${safe.user_id ?? '?'} ↔ group ${safe.group_id ?? '?'}`, flagged };
-}
+const describeGroupMembership = makeDescribe<GroupMembership>(
+  'group-membership',
+  (m) => `membership #${m.id} user ${m.user_id ?? '?'} ↔ group ${m.group_id ?? '?'}`,
+);
 
 export async function listGroupMemberships(
   client: ZendeskHttpClient,
