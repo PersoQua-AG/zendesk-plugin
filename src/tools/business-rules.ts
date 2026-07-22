@@ -465,3 +465,23 @@ export function updateTrigger(
 ): Promise<{ summary: string; cacheHandle: string }> {
   return updateRule(client, cache, { ...TRIGGER_WRITE, toolName: 'zendesk_update_trigger' }, params.id, params.fields, securityLevel);
 }
+
+const AUTOMATION_WRITE: Omit<RuleWriteConfig, 'toolName'> = { collection: '/automations', key: 'automation', resourceLabel: 'automation' };
+
+export function createAutomation(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { fields: RuleWriteFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  return createRule(client, cache, { ...AUTOMATION_WRITE, toolName: 'zendesk_create_automation' }, params.fields, securityLevel);
+}
+
+export function updateAutomation(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { id: number; fields: RuleWriteFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  return updateRule(client, cache, { ...AUTOMATION_WRITE, toolName: 'zendesk_update_automation' }, params.id, params.fields, securityLevel);
+}
