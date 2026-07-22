@@ -156,3 +156,53 @@ export async function createTicket(
   const entry = cache.save('zendesk_create_ticket', raw);
   return { summary: `Created ticket #${raw.ticket.id}`, cacheHandle: entry.handle };
 }
+
+export interface TicketUpdateFields {
+  status?: string;
+  priority?: string;
+  assignee_id?: number;
+  group_id?: number;
+  subject?: string;
+  tags?: string[];
+  custom_fields?: Array<{ id: number; value: unknown }>;
+}
+
+export type UpdateTicketResult =
+  | { status: 'updated'; summary: string; cacheHandle: string }
+  | { status: 'conflict'; summary: string; cacheHandle: string; currentUpdatedStamp: string | null };
+
+export async function updateTicket(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { ticketId: number; fields: TicketUpdateFields; updatedStamp?: string },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<UpdateTicketResult> {
+  const ticket: Record<string, unknown> = { ...params.fields };
+  // Optimistic concurrency (PRD §5.2): pass the last-known stamp; Zendesk 409s on conflict.
+  if (params.updatedStamp) {
+    ticket.safe_update = true;
+    ticket.updated_stamp = params.updatedStamp;
+  }
+  try {
+    const raw = await client.request<{ ticket: { id: number } }>(`/tickets/${params.ticketId}.json`, {
+      method: 'PUT',
+      body: JSON.stringify({ ticket }),
+    });
+    const entry = cache.save('zendesk_update_ticket', raw);
+    return { status: 'updated', summary: `Updated ticket #${params.ticketId}`, cacheHandle: entry.handle };
+  } catch (err) {
+    if (!(err instanceof ZendeskConflictError)) throw err;
+    const current = await client.request<unknown>(`/tickets/${params.ticketId}.json`);
+    const parsed = SingleTicketSchema.safeParse(current);
+    if (!parsed.success) throw new Error('Conflict re-fetch returned a malformed /tickets/{id} response.');
+    const entry = cache.save('zendesk_update_ticket_conflict', parsed.data);
+    const t = parsed.data.ticket;
+    const subject = screenContent(t.subject ?? '', `ticket-${t.id}-subject`, securityLevel);
+    return {
+      status: 'conflict',
+      summary: `Conflict: ticket #${params.ticketId} changed since last read (current status: ${t.status ?? 'unknown'}, subject: ${subject.wrapped}). Re-fetch, review the diff, and confirm before overwriting.`,
+      cacheHandle: entry.handle,
+      currentUpdatedStamp: t.updated_at ?? null,
+    };
+  }
+}
