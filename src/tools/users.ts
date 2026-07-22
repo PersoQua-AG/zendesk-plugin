@@ -150,3 +150,47 @@ export async function updateUser(
   const entry = cache.save('zendesk_update_user', safe);
   return { summary: `Updated user #${params.userId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
 }
+
+const IdentitySchema = z.object({
+  id: z.number(),
+  type: z.string().nullish(),
+  value: z.string().nullish(),
+  verified: z.boolean().nullish(),
+  primary: z.boolean().nullish(),
+  user_id: z.number().nullish(),
+});
+type Identity = z.infer<typeof IdentitySchema>;
+
+const IdentitiesPageSchema = cbpPageSchema(IdentitySchema, 'identities');
+
+function describeIdentity(i: Identity, screen: Screener): RecordScreen<Identity> {
+  const { value, flagged } = screenRecordDeep(i, (key) => `identity-${i.id}-${key}`, screen);
+  const safe = value as Identity;
+  return { safe, line: `identity #${safe.id} [${safe.type ?? 'unknown'}] ${safe.value ?? ''}`, flagged };
+}
+
+export async function listUserIdentities(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { userId: number; maxRecords?: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const cap = params.maxRecords ?? 200;
+  const fetchPage = async (cursor: string | null): Promise<CbpPage<Identity>> => {
+    const parts = ['page[size]=100'];
+    if (cursor) parts.push(`page[after]=${encodeURIComponent(cursor)}`);
+    const raw = await client.request<unknown>(`/users/${params.userId}/identities.json?${parts.join('&')}`);
+    const parsed = IdentitiesPageSchema.safeParse(raw);
+    if (!parsed.success) throw new Error('Unexpected /users/{id}/identities response shape.');
+    return { records: parsed.data.identities, meta: parsed.data.meta, links: { next: parsed.data.links?.next ?? null } };
+  };
+
+  const capped = await collectCbp(fetchPage, cap);
+  const screened = summariseScreened(capped, describeIdentity, securityLevel);
+  const entry = cache.save('zendesk_list_user_identities', { identities: screened.records });
+  return {
+    summary: `${screened.records.length} identit${screened.records.length === 1 ? 'y' : 'ies'} for user #${params.userId}:\n${screened.lines.join('\n')}${screened.warning}`,
+    cacheHandle: entry.handle,
+    flagged: screened.flagged,
+  };
+}
