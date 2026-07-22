@@ -130,3 +130,23 @@ export async function upsertUser(
   const entry = cache.save('zendesk_upsert_user', safe);
   return { summary: `Upserted user #${parsed.data.user.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
 }
+
+export async function updateUser(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { userId: number; fields: UserWriteFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  // Users have no updated_stamp safe_update path (unlike tickets); confirmation of the
+  // state change is the caller's in-conversation flow (PRD §5.2). Guard against a no-op PUT.
+  if (Object.keys(params.fields).length === 0) throw new Error('update_user requires at least one field to change.');
+  const raw = await client.request<unknown>(`/users/${params.userId}.json`, {
+    method: 'PUT',
+    body: JSON.stringify({ user: params.fields }),
+  });
+  const parsed = SingleUserSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /users/{id} update response shape.');
+  const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `update-user-${params.userId}-${key}`, makeScreener(securityLevel));
+  const entry = cache.save('zendesk_update_user', safe);
+  return { summary: `Updated user #${params.userId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+}
