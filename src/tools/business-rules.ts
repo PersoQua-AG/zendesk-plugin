@@ -127,3 +127,36 @@ export async function viewCount(
   const stale = parsed.data.view_count.fresh === false ? ' (count is stale — Zendesk is recalculating)' : '';
   return { summary: `View #${params.viewId} matches ${value} ticket(s)${stale}.`, count: value };
 }
+
+const MacroSchema = z.object({
+  id: z.number(),
+  title: z.string().nullish(),
+  active: z.boolean().nullish(),
+  description: z.string().nullish(),
+  updated_at: z.string().nullish(),
+});
+type Macro = z.infer<typeof MacroSchema>;
+
+const describeMacro = makeDescribe<Macro>('macro', (m) => `#${m.id} ${m.title ?? '(untitled)'}${m.active === false ? ' (inactive)' : ''}`);
+
+export async function listMacros(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { pageSize?: number; maxRecords?: number } = {},
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  return listCbp<Macro>({
+    client,
+    cache,
+    securityLevel,
+    path: '/macros.json',
+    key: 'macros',
+    schema: MacroSchema,
+    describe: describeMacro,
+    handle: 'zendesk_list_macros',
+    cap: params.maxRecords ?? DEFAULT_LIST_CAP,
+    pageSize: params.pageSize,
+    label: (n) => `${n} macro(s)`,
+    errorLabel: '/macros',
+  });
+}
