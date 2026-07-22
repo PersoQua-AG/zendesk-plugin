@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 export interface CbpPage<T> {
   records: T[];
   meta: { has_more: boolean; after_cursor: string | null };
@@ -5,6 +7,17 @@ export interface CbpPage<T> {
 }
 
 const MAX_PAGES = 10_000;
+
+// Retype the cursor-based-pagination (CBP) page envelope — a `<key>` array plus the
+// meta/links wrapper — once, instead of redeclaring it at each tool's call site.
+export function cbpPageSchema<T extends z.ZodTypeAny, K extends string>(itemSchema: T, key: K) {
+  return z
+    .object({
+      meta: z.object({ has_more: z.boolean(), after_cursor: z.string().nullable() }),
+      links: z.object({ next: z.string().nullable() }).nullish(),
+    })
+    .extend({ [key]: z.array(itemSchema) } as Record<K, z.ZodArray<T>>);
+}
 
 export async function* paginateCbp<T>(
   fetchPage: (cursor: string | null) => Promise<CbpPage<T>>,
@@ -27,12 +40,16 @@ export async function* paginateCbp<T>(
   }
 }
 
-export async function collectAllCbp<T>(
+// Collect CBP pages into a single array, stopping once `cap` records are gathered so
+// a tool can never accumulate an unbounded result set into memory.
+export async function collectCbp<T>(
   fetchPage: (cursor: string | null) => Promise<CbpPage<T>>,
+  cap: number,
 ): Promise<T[]> {
   const all: T[] = [];
   for await (const batch of paginateCbp(fetchPage)) {
     all.push(...batch);
+    if (all.length >= cap) break;
   }
-  return all;
+  return all.slice(0, cap);
 }
