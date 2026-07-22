@@ -4,9 +4,9 @@ import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
-import { ZendeskConflictError } from '../client/errors.js';
+import { makeScreener, summariseScreened, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
 import { markdownToHtml } from '../util/markdown.js';
+import { safeUpdateWithConflict } from './write-helpers.js';
 import type { ReadResult } from './result.js';
 
 const TicketSchema = z.object({
@@ -179,35 +179,22 @@ export async function updateTicket(
       'Refusing to update ticket without an updatedStamp: pass the updatedStamp from a prior read to enable safe optimistic-concurrency (recommended), or set force:true to deliberately overwrite without a concurrency check.',
     );
   }
-  const ticket: Record<string, unknown> = { ...params.fields };
-  if (params.updatedStamp) {
-    ticket.safe_update = true;
-    ticket.updated_stamp = params.updatedStamp;
-  }
-  try {
-    const raw = await client.request<{ ticket: { id: number } }>(`/tickets/${params.ticketId}.json`, {
-      method: 'PUT',
-      body: JSON.stringify({ ticket }),
-    });
-    // Defense in depth: the PUT response echoes the full ticket (incl. attacker-controlled
-    // subject). Screen at ingest so the cached payload is safe at rest, not solely reliant
-    // on the replay-boundary net.
-    const { value: safe, flagged } = screenRecordDeep(raw, (key) => `update-ticket-${params.ticketId}-${key}`, makeScreener(securityLevel));
-    const entry = cache.save('zendesk_update_ticket', safe);
-    return { status: 'updated', summary: `Updated ticket #${params.ticketId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
-  } catch (err) {
-    if (!(err instanceof ZendeskConflictError)) throw err;
-    const current = await client.request<unknown>(`/tickets/${params.ticketId}.json`);
-    const parsed = SingleTicketSchema.safeParse(current);
-    if (!parsed.success) throw new Error('Conflict re-fetch returned a malformed /tickets/{id} response.');
-    const t = parsed.data.ticket;
-    const { safe, subject } = screenTicket(t, makeScreener(securityLevel));
-    const entry = cache.save('zendesk_update_ticket_conflict', { ticket: safe });
-    return {
-      status: 'conflict',
-      summary: `Conflict: ticket #${params.ticketId} changed since last read (current status: ${t.status ?? 'unknown'}, subject: ${subject.wrapped}). Re-fetch, review the diff, and confirm before overwriting.`,
-      cacheHandle: entry.handle,
-      currentUpdatedStamp: t.updated_at ?? null,
-    };
-  }
+  const result = await safeUpdateWithConflict(client, cache, {
+    path: `/tickets/${params.ticketId}.json`,
+    envelopeKey: 'ticket',
+    body: { ...params.fields },
+    updatedStamp: params.updatedStamp,
+    force: params.force,
+    toolName: 'zendesk_update_ticket',
+    seedPrefix: `update-ticket-${params.ticketId}`,
+    securityLevel,
+    appliedSummary: `Updated ticket #${params.ticketId}`,
+    conflictSummary: ({ status, subject }) =>
+      `Conflict: ticket #${params.ticketId} changed since last read (current status: ${status ?? 'unknown'}, subject: ${subject ?? '(none)'}). Re-fetch, review the diff, and confirm before overwriting.`,
+  });
+  // updateTicket's success arm is labelled 'updated' (macro apply uses 'applied'); the conflict
+  // arm passes through unchanged.
+  return result.status === 'applied'
+    ? { status: 'updated', summary: result.summary, cacheHandle: result.cacheHandle }
+    : result;
 }

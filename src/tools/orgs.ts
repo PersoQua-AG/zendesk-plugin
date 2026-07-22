@@ -5,7 +5,7 @@ import type { ResponseCache } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeDescribe, makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
 import { listCbp, DEFAULT_LIST_CAP, DEFAULT_MEMBERSHIP_CAP } from './cbp-list.js';
-import { stripUndefined } from '../util/object.js';
+import { updateEntity } from './write-helpers.js';
 import type { ReadResult } from './result.js';
 
 const OrgSchema = z.object({
@@ -106,19 +106,8 @@ export async function updateOrg(
   params: { orgId: number; fields: OrgWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
-  // Strip undefined-valued keys before the guard so {name: undefined} cannot pass the
-  // key-count check and fire an empty {"organization":{}} PUT (see updateUser).
-  const defined = stripUndefined(params.fields);
-  if (Object.keys(defined).length === 0) throw new Error('update_org requires at least one field to change.');
-  const raw = await client.request<unknown>(`/organizations/${params.orgId}.json`, {
-    method: 'PUT',
-    body: JSON.stringify({ organization: defined }),
-  });
-  const parsed = SingleOrgSchema.safeParse(raw);
-  if (!parsed.success) throw new Error('Unexpected /organizations/{id} update response shape.');
-  const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `update-org-${params.orgId}-${key}`, makeScreener(securityLevel));
-  const entry = cache.save('zendesk_update_org', safe);
-  return { summary: `Updated organization #${params.orgId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+  // Shares the plain-PUT update tail (strip → empty-guard → PUT → screen → cache), same as users.
+  return updateEntity(client, cache, { collection: '/organizations', key: 'organization', toolName: 'zendesk_update_org', resourceLabel: 'organization' }, params.orgId, params.fields, securityLevel);
 }
 
 const OrgMembershipSchema = z.object({

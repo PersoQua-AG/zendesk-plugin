@@ -6,7 +6,7 @@ import type { SecurityLevel } from '../security/screen.js';
 import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING } from './screening.js';
 import { SEARCH_HARD_CAP } from './search.js';
 import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
-import { stripUndefined } from '../util/object.js';
+import { updateEntity } from './write-helpers.js';
 import type { ReadResult } from './result.js';
 
 const UserSchema = z.object({
@@ -141,21 +141,9 @@ export async function updateUser(
   params: { userId: number; fields: UserWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
-  // Users have no updated_stamp safe_update path (unlike tickets); confirmation of the
-  // state change is the caller's in-conversation flow (PRD §5.2). Strip undefined-valued
-  // keys BEFORE the guard: {role: undefined} counts as a key but JSON.stringify drops it,
-  // so guarding on raw key count would let an empty {"user":{}} PUT through.
-  const defined = stripUndefined(params.fields);
-  if (Object.keys(defined).length === 0) throw new Error('update_user requires at least one field to change.');
-  const raw = await client.request<unknown>(`/users/${params.userId}.json`, {
-    method: 'PUT',
-    body: JSON.stringify({ user: defined }),
-  });
-  const parsed = SingleUserSchema.safeParse(raw);
-  if (!parsed.success) throw new Error('Unexpected /users/{id} update response shape.');
-  const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `update-user-${params.userId}-${key}`, makeScreener(securityLevel));
-  const entry = cache.save('zendesk_update_user', safe);
-  return { summary: `Updated user #${params.userId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+  // Users have no updated_stamp safe_update path (unlike tickets); confirmation of the state
+  // change is the caller's in-conversation flow (PRD §5.2). The plain-PUT update tail is shared.
+  return updateEntity(client, cache, { collection: '/users', key: 'user', toolName: 'zendesk_update_user', resourceLabel: 'user' }, params.userId, params.fields, securityLevel);
 }
 
 const IdentitySchema = z.object({
