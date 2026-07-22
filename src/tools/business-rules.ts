@@ -485,3 +485,26 @@ export function updateAutomation(
 ): Promise<{ summary: string; cacheHandle: string }> {
   return updateRule(client, cache, { ...AUTOMATION_WRITE, toolName: 'zendesk_update_automation' }, params.id, params.fields, securityLevel);
 }
+
+// SLA policy create also needs policy_metrics/filter to be genuinely valid; the generic guard
+// enforces the common denominator (title) and Zendesk 422s on the rest — validated at the
+// register boundary. Envelope key is 'sla_policy'; collection is '/slas/policies'.
+const SLA_WRITE: Omit<RuleWriteConfig, 'toolName'> = { collection: '/slas/policies', key: 'sla_policy', resourceLabel: 'sla' };
+
+export function createSla(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { fields: RuleWriteFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  return createRule(client, cache, { ...SLA_WRITE, toolName: 'zendesk_create_sla' }, params.fields, securityLevel);
+}
+
+export function updateSla(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { id: number; fields: RuleWriteFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  return updateRule(client, cache, { ...SLA_WRITE, toolName: 'zendesk_update_sla' }, params.id, params.fields, securityLevel);
+}
