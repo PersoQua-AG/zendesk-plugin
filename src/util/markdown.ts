@@ -1,15 +1,25 @@
 // src/util/markdown.ts
 // Minimal, dependency-free Markdown→HTML for Zendesk comment/article bodies.
 // Escapes first (XSS-safe); links restricted to http(s) to block javascript: URIs.
+// Quotes are escaped too, so an attacker-controlled link URL cannot break out of the
+// href="…" attribute to inject an event handler (e.g. "onmouseover=).
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function inline(text: string): string {
   return escapeHtml(text)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    // Non-greedy so a single `*` inside a bold span (e.g. `**a *b* c**`) no longer
+    // leaks a literal `**`; italics are applied afterwards inside the captured text.
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    // href source is quote-escaped upstream, so $2 cannot contain a raw " to escape the attribute.
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
 }
 
