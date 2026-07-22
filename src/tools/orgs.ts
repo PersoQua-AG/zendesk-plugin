@@ -106,3 +106,21 @@ export async function upsertOrg(
   const entry = cache.save('zendesk_upsert_org', safe);
   return { summary: `Upserted organization #${parsed.data.organization.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
 }
+
+export async function updateOrg(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { orgId: number; fields: OrgWriteFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  if (Object.keys(params.fields).length === 0) throw new Error('update_org requires at least one field to change.');
+  const raw = await client.request<unknown>(`/organizations/${params.orgId}.json`, {
+    method: 'PUT',
+    body: JSON.stringify({ organization: params.fields }),
+  });
+  const parsed = SingleOrgSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /organizations/{id} update response shape.');
+  const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `update-org-${params.orgId}-${key}`, makeScreener(securityLevel));
+  const entry = cache.save('zendesk_update_org', safe);
+  return { summary: `Updated organization #${params.orgId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+}
