@@ -51,4 +51,26 @@ export class ZendeskHttpClient {
       return (await response.json()) as T;
     }
   }
+
+  // Binary upload path (POST /uploads): the JSON `request` method forces
+  // Content-Type: application/json and can't carry raw bytes. This reuses the
+  // same auth + rate-limiter + error-mapping seams, single-attempt (uploads
+  // are not safely auto-retried on 429 — we surface the typed error instead).
+  async requestUpload<T>(path: string, body: Uint8Array, contentType: string): Promise<T> {
+    await this.options.rateLimiter.acquire();
+    const token = await this.options.authManager.getAccessToken();
+    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      body,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType },
+    });
+    if (response.status === 429) {
+      this.options.rateLimiter.reportRetryAfter(parseRetryAfter(response.headers.get('retry-after')));
+      throw await mapErrorResponse(response);
+    }
+    if (!response.ok) {
+      throw await mapErrorResponse(response);
+    }
+    return (await response.json()) as T;
+  }
 }
