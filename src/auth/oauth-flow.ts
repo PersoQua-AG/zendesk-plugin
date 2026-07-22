@@ -63,3 +63,52 @@ export function waitForAuthorizationCode(port: number, expectedState: string): P
     server.listen(port);
   });
 }
+
+export async function exchangeCodeForTokens(
+  config: OAuthConfig,
+  code: string,
+  codeVerifier: string,
+  redirectUri: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
+  const response = await fetchImpl(`https://${config.subdomain}.zendesk.com/oauth/tokens`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'authorization_code',
+      code,
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
+      scope: config.scopes.join(' '),
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Token exchange failed: ${response.status} ${await response.text()}`);
+  }
+  const body = (await response.json()) as { access_token: string; refresh_token: string; expires_in: number };
+  return { accessToken: body.access_token, refreshToken: body.refresh_token, expiresIn: body.expires_in };
+}
+
+export async function refreshAccessToken(
+  config: OAuthConfig,
+  refreshToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
+  const response = await fetchImpl(`https://${config.subdomain}.zendesk.com/oauth/tokens`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Token refresh failed: ${response.status} ${await response.text()}`);
+  }
+  const body = (await response.json()) as { access_token: string; refresh_token: string; expires_in: number };
+  return { accessToken: body.access_token, refreshToken: body.refresh_token, expiresIn: body.expires_in };
+}
