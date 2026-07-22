@@ -4,14 +4,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { okWithHandle, toText } from '../tools/result.js';
+import { listViews, getView, executeView, viewCount } from '../tools/business-rules/views.js';
+import { listMacros, previewMacro, applyMacroToTicket } from '../tools/business-rules/macros.js';
 import {
-  listViews,
-  getView,
-  executeView,
-  viewCount,
-  listMacros,
-  previewMacro,
-  applyMacroToTicket,
   listTriggers,
   listAutomations,
   listSlaPolicies,
@@ -21,37 +16,15 @@ import {
   updateAutomation,
   createSla,
   updateSla,
-} from '../tools/business-rules.js';
+  ruleWriteFieldsSchema,
+  slaWriteFieldsSchema,
+} from '../tools/business-rules/rules.js';
 import { DEFAULT_LIST_CAP, MAX_PAGE_SIZE } from '../tools/cbp-list.js';
 import type { ToolContext } from './context.js';
 
 const pageSizeSchema = z.number().int().positive().max(MAX_PAGE_SIZE).optional();
 const listMaxRecordsSchema = z.number().int().positive().max(DEFAULT_LIST_CAP).optional();
-
-// Rule conditions/actions are structured JSON config. Validate the envelope shape (arrays of
-// objects) without over-constraining Zendesk's evolving field vocabulary.
-const conditionsSchema = z
-  .object({ all: z.array(z.record(z.unknown())).optional(), any: z.array(z.record(z.unknown())).optional() })
-  .optional();
-const actionsSchema = z.array(z.record(z.unknown())).optional();
-
-// Shared write-field schemas: title optional here (the tool enforces it on create), so upsert
-// and update validate symmetrically — mirrors the M3 directory registrar pattern.
-const ruleWriteFieldsSchema = z.object({
-  title: z.string().min(1).optional(),
-  active: z.boolean().optional(),
-  description: z.string().optional(),
-  conditions: conditionsSchema,
-  actions: actionsSchema,
-});
-
-const slaWriteFieldsSchema = z.object({
-  title: z.string().min(1).optional(),
-  description: z.string().optional(),
-  position: z.number().int().nonnegative().optional(),
-  filter: z.record(z.unknown()).optional(),
-  policy_metrics: z.array(z.record(z.unknown())).optional(),
-});
+const idSchema = z.number().int().positive();
 
 export function registerBusinessRulesTools(server: McpServer, ctx: ToolContext): void {
   const { httpClient, cache, securityLevel } = ctx;
@@ -144,10 +117,12 @@ export function registerBusinessRulesTools(server: McpServer, ctx: ToolContext):
   server.registerTool(
     'zendesk_update_trigger',
     {
+      // Flat args with a top-level `id` — same shape as create (which is flat) so an LLM caller
+      // uses one consistent field layout across create and update.
       description: 'Update a trigger by id (admin only). Confirm the change in-conversation before calling.',
-      inputSchema: { id: z.number().int().positive(), fields: ruleWriteFieldsSchema },
+      inputSchema: { id: idSchema, ...ruleWriteFieldsSchema.shape },
     },
-    async ({ id, fields }) => okWithHandle(await updateTrigger(httpClient, cache, { id, fields }, securityLevel)),
+    async ({ id, ...fields }) => okWithHandle(await updateTrigger(httpClient, cache, { id, fields }, securityLevel)),
   );
 
   server.registerTool(
@@ -163,9 +138,9 @@ export function registerBusinessRulesTools(server: McpServer, ctx: ToolContext):
     'zendesk_update_automation',
     {
       description: 'Update an automation by id (admin only). Confirm the change in-conversation before calling.',
-      inputSchema: { id: z.number().int().positive(), fields: ruleWriteFieldsSchema },
+      inputSchema: { id: idSchema, ...ruleWriteFieldsSchema.shape },
     },
-    async ({ id, fields }) => okWithHandle(await updateAutomation(httpClient, cache, { id, fields }, securityLevel)),
+    async ({ id, ...fields }) => okWithHandle(await updateAutomation(httpClient, cache, { id, fields }, securityLevel)),
   );
 
   server.registerTool(
@@ -181,8 +156,8 @@ export function registerBusinessRulesTools(server: McpServer, ctx: ToolContext):
     'zendesk_update_sla',
     {
       description: 'Update an SLA policy by id (admin only). Confirm the change in-conversation before calling.',
-      inputSchema: { id: z.number().int().positive(), fields: slaWriteFieldsSchema },
+      inputSchema: { id: idSchema, ...slaWriteFieldsSchema.shape },
     },
-    async ({ id, fields }) => okWithHandle(await updateSla(httpClient, cache, { id, fields }, securityLevel)),
+    async ({ id, ...fields }) => okWithHandle(await updateSla(httpClient, cache, { id, fields }, securityLevel)),
   );
 }
