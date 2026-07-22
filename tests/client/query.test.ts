@@ -33,4 +33,10 @@ describe('runQuery', () => {
     const data = { ticket: { status: 'open' } };
     expect(runQuery(data, 'ticket.status')).toBe('open');
   });
+
+  it('comments_slim returns [] (not throw) when comments is missing or null', () => {
+    expect(runQuery({}, 'comments_slim')).toEqual([]);
+    expect(runQuery({ comments: null }, 'comments_slim')).toEqual([]);
+    expect(runQuery(null, 'comments_slim')).toEqual([]);
+  });
 });

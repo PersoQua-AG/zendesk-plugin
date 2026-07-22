@@ -16,4 +16,11 @@ describe('getMe', () => {
     expect(result.summary).toBe('Authenticated as Ada Lovelace <ada@acme.com> — role: admin');
     expect(result.cacheHandle).toBe('zendesk_get_me-abc123');
   });
+
+  it('throws a clear error when the response is missing a valid user object', async () => {
+    const client = { request: vi.fn().mockResolvedValue({ error: 'Unauthorized' }) } as unknown as ZendeskHttpClient;
+    const cache = { save: vi.fn() } as unknown as ResponseCache;
+    await expect(getMe(client, cache)).rejects.toThrow(/user/i);
+    expect(cache.save).not.toHaveBeenCalled();
+  });
 });
