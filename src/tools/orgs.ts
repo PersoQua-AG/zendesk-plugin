@@ -77,3 +77,32 @@ export async function getOrg(
     flagged,
   };
 }
+
+export interface OrgWriteFields {
+  name?: string;
+  notes?: string;
+  details?: string;
+  external_id?: string;
+  group_id?: number;
+  tags?: string[];
+}
+
+export async function upsertOrg(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { fields: OrgWriteFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  const f = params.fields;
+  // create_or_update matches an existing org by name (or external_id); a name is required.
+  if (!f.name || f.name.trim() === '') throw new Error('upsert_org requires a name.');
+  const raw = await client.request<unknown>('/organizations/create_or_update.json', {
+    method: 'POST',
+    body: JSON.stringify({ organization: f }),
+  });
+  const parsed = SingleOrgSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /organizations/create_or_update response shape.');
+  const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `upsert-org-${parsed.data.organization.id}-${key}`, makeScreener(securityLevel));
+  const entry = cache.save('zendesk_upsert_org', safe);
+  return { summary: `Upserted organization #${parsed.data.organization.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+}
