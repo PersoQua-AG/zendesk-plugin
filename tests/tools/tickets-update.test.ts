@@ -49,6 +49,22 @@ describe('updateTicket', () => {
 
   it('re-throws non-conflict errors unchanged', async () => {
     const client = { request: vi.fn().mockRejectedValue(new Error('boom')) } as unknown as ZendeskHttpClient;
-    await expect(updateTicket(client, cacheStub(), { ticketId: 1, fields: { status: 'open' } })).rejects.toThrow('boom');
+    await expect(updateTicket(client, cacheStub(), { ticketId: 1, fields: { status: 'open' }, force: true })).rejects.toThrow('boom');
+  });
+
+  it('refuses a field update with neither updatedStamp nor force (safe-by-default, no clobber)', async () => {
+    const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
+    await expect(updateTicket(client, cacheStub(), { ticketId: 1, fields: { status: 'open' } })).rejects.toThrow(/updatedStamp|force/i);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it('force:true overwrites without safe_update (documented escape hatch)', async () => {
+    const client = { request: vi.fn().mockResolvedValue({ ticket: { id: 7 } }) } as unknown as ZendeskHttpClient;
+    const result = await updateTicket(client, cacheStub(), { ticketId: 7, fields: { status: 'solved' }, force: true });
+    const body = JSON.parse((client.request as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+    expect(body.ticket.safe_update).toBeUndefined();
+    expect(body.ticket.updated_stamp).toBeUndefined();
+    expect(body.ticket.status).toBe('solved');
+    expect(result.status).toBe('updated');
   });
 });

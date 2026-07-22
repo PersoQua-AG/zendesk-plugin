@@ -15,7 +15,11 @@ describe('getTicketsMany', () => {
     const cache = cacheStub();
     const result = await getTicketsMany(client, cache, { ids: [1, 2] });
     expect(client.request).toHaveBeenCalledWith('/tickets/show_many.json?ids=1%2C2');
-    expect(cache.save).toHaveBeenCalledWith('zendesk_get_tickets_many', fixture);
+    // Ingest screening caches the SCREENED tickets (subjects wrapped).
+    const [toolName, cached] = (cache.save as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(toolName).toBe('zendesk_get_tickets_many');
+    expect(cached.tickets).toHaveLength(2);
+    expect(cached.tickets[0].subject).toContain('zendesk-content-ticket-1-subject-');
     expect(result.summary).toContain('#1');
     expect(result.summary).toContain('#2');
   });

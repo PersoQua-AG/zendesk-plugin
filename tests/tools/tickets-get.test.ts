@@ -19,7 +19,12 @@ describe('getTicket', () => {
     const result = await getTicket(client, cache, { ticketId: 42 });
 
     expect(client.request).toHaveBeenCalledWith('/tickets/42.json');
-    expect(cache.save).toHaveBeenCalledWith('zendesk_get_ticket', fixture);
+    // Ingest screening caches the SCREENED ticket: subject/description are wrapped.
+    const [toolName, cached] = (cache.save as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(toolName).toBe('zendesk_get_ticket');
+    expect(cached.ticket.subject).toContain('zendesk-content-ticket-42-subject-');
+    expect(cached.ticket.subject).toContain('Cannot log in');
+    expect(cached.ticket.description).toContain('Please help');
     expect(result.updatedStamp).toBe('2026-07-20T10:00:00Z');
     expect(result.flagged).toBe(false);
     expect(result.summary).toContain('Ticket #42');

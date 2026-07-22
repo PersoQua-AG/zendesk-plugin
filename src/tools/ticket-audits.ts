@@ -2,18 +2,38 @@
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
-import { paginateCbp, type CbpPage } from '../client/paginator.js';
-import { screenContent, type SecurityLevel } from '../security/screen.js';
-import type { ReadResult } from './tickets.js';
+import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
+import type { SecurityLevel } from '../security/screen.js';
+import { summariseScreened, type RecordScreen, type Screener } from './screening.js';
+import type { ReadResult } from './result.js';
 
 const AuditSchema = z.object({ id: z.number(), events: z.array(z.record(z.unknown())).nullish() });
 type Audit = z.infer<typeof AuditSchema>;
 
-const AuditsPageSchema = z.object({
-  audits: z.array(AuditSchema),
-  meta: z.object({ has_more: z.boolean(), after_cursor: z.string().nullable() }),
-  links: z.object({ next: z.string().nullable() }).nullish(),
-});
+const AuditsPageSchema = cbpPageSchema(AuditSchema, 'audits');
+
+// Untrusted free-text on an audit event: the comment body, the changed value, and a
+// rich-text comment's html_body. All are rewritten to their wrapped form on ingest.
+const UNTRUSTED_EVENT_FIELDS = ['body', 'value', 'html_body'] as const;
+
+function screenEvent(event: Record<string, unknown>, auditId: number, screen: Screener) {
+  const screened = UNTRUSTED_EVENT_FIELDS.filter((field) => typeof event[field] === 'string').map((field) => ({
+    field,
+    result: screen(event[field] as string, `audit-${auditId}-${field}`),
+  }));
+  const safe: Record<string, unknown> = { ...event };
+  for (const { field, result } of screened) safe[field] = result.wrapped;
+  return { safe, flagged: screened.some(({ result }) => result.flagged) };
+}
+
+function describeAudit(a: Audit, screen: Screener): RecordScreen<Audit> {
+  const events = (a.events ?? []).map((event) => screenEvent(event, a.id, screen));
+  return {
+    safe: { ...a, events: events.map((e) => e.safe) },
+    line: `audit #${a.id} (${events.length} event(s))`,
+    flagged: events.some((e) => e.flagged),
+  };
+}
 
 export async function getTicketAudits(
   client: ZendeskHttpClient,
@@ -31,21 +51,12 @@ export async function getTicketAudits(
     return { records: parsed.data.audits, meta: parsed.data.meta, links: { next: parsed.data.links?.next ?? null } };
   };
 
-  const audits: Audit[] = [];
-  for await (const batch of paginateCbp(fetchPage)) {
-    audits.push(...batch);
-    if (audits.length >= cap) break;
-  }
-  const capped = audits.slice(0, cap);
-  const entry = cache.save('zendesk_get_ticket_audits', { audits: capped });
-
-  let flagged = false;
-  for (const audit of capped) {
-    for (const event of audit.events ?? []) {
-      const body = typeof event.body === 'string' ? event.body : null;
-      if (body && screenContent(body, `audit-${audit.id}`, securityLevel).flagged) flagged = true;
-    }
-  }
-  const warning = flagged ? ' — WARNING: injection patterns detected in audit content' : '';
-  return { summary: `${capped.length} audit(s) for ticket #${params.ticketId}${warning}`, cacheHandle: entry.handle, flagged };
+  const capped = await collectCbp(fetchPage, cap);
+  const screened = summariseScreened(capped, describeAudit, securityLevel);
+  const entry = cache.save('zendesk_get_ticket_audits', { audits: screened.records });
+  return {
+    summary: `${screened.records.length} audit(s) for ticket #${params.ticketId}${screened.warning}`,
+    cacheHandle: entry.handle,
+    flagged: screened.flagged,
+  };
 }

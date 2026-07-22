@@ -21,7 +21,11 @@ describe('searchExport', () => {
 
     expect((client.request as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('/search/export.json?query=created%3E2026-01-01&filter[type]=ticket&page[size]=100');
     expect((client.request as ReturnType<typeof vi.fn>).mock.calls[1][0]).toBe('/search/export.json?query=created%3E2026-01-01&filter[type]=ticket&page[size]=100&page[after]=c1');
-    expect(cache.save).toHaveBeenCalledWith('zendesk_search_export', { results: [{ id: 1, subject: 's' }, { id: 2, subject: 's' }] });
+    // Ingest screening caches the SCREENED results (subjects wrapped).
+    const [toolName, cached] = (cache.save as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(toolName).toBe('zendesk_search_export');
+    expect(cached.results).toHaveLength(2);
+    expect(cached.results[0].subject).toContain('zendesk-content-search-subject-');
     expect(result.summary).toContain('2 result(s)');
   });
 });
