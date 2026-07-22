@@ -120,9 +120,17 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
 
   server.registerTool(
     'zendesk_update_tickets_bulk',
-    { description: 'Update up to 100 tickets with shared fields in one async job (auto-polled).', inputSchema: { ids: z.array(z.number().int().positive()).min(1).max(100), fields: ticketUpdateFieldsSchema } },
-    async ({ ids, fields }) => {
-      const r = await updateTicketsBulk(httpClient, cache, { ids, fields });
+    {
+      description:
+        'Update up to 100 tickets with shared fields in one async job (auto-polled). Bulk update_many skips per-ticket optimistic-concurrency (safe_update), so it requires force:true to acknowledge that concurrent changes may be silently overwritten.',
+      inputSchema: {
+        ids: z.array(z.number().int().positive()).min(1).max(100),
+        fields: ticketUpdateFieldsSchema,
+        force: z.boolean().optional(),
+      },
+    },
+    async ({ ids, fields, force }) => {
+      const r = await updateTicketsBulk(httpClient, cache, { ids, fields, force });
       return toText(`${r.summary} failures=${JSON.stringify(r.failures)}\n(cache: ${r.cacheHandle})`);
     },
   );

@@ -49,10 +49,20 @@ export async function createTicketsBulk(
 export async function updateTicketsBulk(
   client: ZendeskHttpClient,
   cache: ResponseCache,
-  params: { ids: number[]; fields: TicketUpdateFields },
+  params: { ids: number[]; fields: TicketUpdateFields; force?: boolean },
   poll: PollOverrides = {},
 ): Promise<BulkResult> {
   if (params.ids.length === 0) throw new Error('At least one ticket id is required for a bulk update.');
+  // Safe-by-default (PRD §5.2): update_many applies one shared field set across up to 100
+  // tickets with no per-ticket updatedStamp/safe_update, so it cannot do optimistic
+  // concurrency and would silently clobber concurrent edits. Require force:true as the
+  // explicit acknowledgment — mirroring single-update's escape hatch — rather than letting
+  // a bulk write bypass the concurrency guard the single-update path enforces.
+  if (!params.force) {
+    throw new Error(
+      'Refusing bulk field update: update_many skips per-ticket optimistic-concurrency (safe_update) and can silently overwrite concurrent changes across up to 100 tickets. Set force:true to acknowledge and proceed with the bulk overwrite.',
+    );
+  }
   const path = `/tickets/update_many.json?ids=${encodeURIComponent(params.ids.join(','))}`;
   return runJob(client, cache, 'zendesk_update_tickets_bulk', path, { ticket: params.fields }, 'PUT', poll);
 }

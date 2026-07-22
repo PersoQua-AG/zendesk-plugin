@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { summariseScreened, type RecordScreen, type Screener } from './screening.js';
+import { screenRecordDeep, summariseScreened, type RecordScreen, type Screener } from './screening.js';
 import { collectCbp, type CbpPage } from '../client/paginator.js';
 import type { ReadResult } from './result.js';
 
@@ -16,20 +16,13 @@ const SearchPageSchema = z.object({
   next_page: z.string().nullable().nullish(),
 });
 
-// Untrusted free-text fields across heterogeneous search results (ticket/user/org/group).
-const UNTRUSTED_RESULT_FIELDS = ['subject', 'title', 'name', 'description'] as const;
-
+// Search returns heterogeneous records (ticket/user/org/group) whose untrusted free-text
+// lives in different fields per type (subject/title/name/description, but also notes,
+// details, raw_subject, …). Screen field-agnostically so no result field reaches the cache
+// — and thus a later zendesk_query replay — carrying a raw payload.
 function describeResult(record: Record<string, unknown>, screen: Screener): RecordScreen<Record<string, unknown>> {
-  const screened = UNTRUSTED_RESULT_FIELDS.filter(
-    (field) => typeof record[field] === 'string' && (record[field] as string).length > 0,
-  ).map((field) => ({ field, result: screen(record[field] as string, `search-${field}`) }));
-  const safe: Record<string, unknown> = { ...record };
-  for (const { field, result } of screened) safe[field] = result.wrapped;
-  return {
-    safe,
-    line: screened[0]?.result.wrapped ?? '',
-    flagged: screened.some(({ result }) => result.flagged),
-  };
+  const { value, flagged } = screenRecordDeep(record, (key) => `search-${key}`, screen);
+  return { safe: value as Record<string, unknown>, line: '', flagged };
 }
 
 export async function search(

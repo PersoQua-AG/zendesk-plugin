@@ -2,9 +2,11 @@
 import type { ZendeskHttpClient } from '../client/http-client.js';
 
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // Zendesk hard limit is plan-dependent; cap defensively.
-// Base64 encodes 3 bytes per 4 chars, so this many chars is the largest input whose
-// decoded size can stay within MAX_UPLOAD_BYTES. Used as the schema .max() ceiling.
-export const MAX_UPLOAD_BASE64_CHARS = Math.ceil(MAX_UPLOAD_BYTES / 3) * 4;
+// The largest base64 length whose estimated decode (floor(len*3/4)) is still within
+// MAX_UPLOAD_BYTES — i.e. the exact boundary the decode-size check enforces, so the schema
+// .max() ceiling and the runtime check agree. Derived from floor(len*3/4) <= MAX ⟺
+// len <= floor((4*MAX + 3)/3); Math.ceil(MAX/3)*4 overshot by one char.
+export const MAX_UPLOAD_BASE64_CHARS = Math.floor((MAX_UPLOAD_BYTES * 4 + 3) / 3);
 
 // Upper bound on the decoded byte size of a base64 string, without allocating it.
 // floor(len * 3/4) >= actual decoded bytes, so a pass here guarantees the decode is safe.

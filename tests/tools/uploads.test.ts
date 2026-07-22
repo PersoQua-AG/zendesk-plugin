@@ -38,4 +38,15 @@ describe('uploadAttachment', () => {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  it('accepts exactly MAX_UPLOAD_BASE64_CHARS but rejects one char more (schema/decode agree)', async () => {
+    const client = { requestUpload: vi.fn().mockResolvedValue({ upload: { token: 'up-edge' } }) } as unknown as ZendeskHttpClient;
+    // The schema .max() ceiling must be the exact boundary the decode-size check enforces:
+    // the ceiling itself decodes within the cap, one char beyond it does not.
+    const atCap = 'A'.repeat(MAX_UPLOAD_BASE64_CHARS);
+    await expect(uploadAttachment(client, { filename: 'edge.bin', contentBase64: atCap })).resolves.toEqual({ token: 'up-edge' });
+
+    const overCap = 'A'.repeat(MAX_UPLOAD_BASE64_CHARS + 1);
+    await expect(uploadAttachment(client, { filename: 'edge.bin', contentBase64: overCap })).rejects.toThrow(/exceeds/i);
+  });
 });

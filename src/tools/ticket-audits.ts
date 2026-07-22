@@ -4,7 +4,7 @@ import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { summariseScreened, type RecordScreen, type Screener } from './screening.js';
+import { screenRecordDeep, summariseScreened, type RecordScreen, type Screener } from './screening.js';
 import type { ReadResult } from './result.js';
 
 const AuditSchema = z.object({ id: z.number(), events: z.array(z.record(z.unknown())).nullish() });
@@ -12,27 +12,15 @@ type Audit = z.infer<typeof AuditSchema>;
 
 const AuditsPageSchema = cbpPageSchema(AuditSchema, 'audits');
 
-// Untrusted free-text on an audit event: the comment body, the changed value, and a
-// rich-text comment's html_body. All are rewritten to their wrapped form on ingest.
-const UNTRUSTED_EVENT_FIELDS = ['body', 'value', 'html_body'] as const;
-
-function screenEvent(event: Record<string, unknown>, auditId: number, screen: Screener) {
-  const screened = UNTRUSTED_EVENT_FIELDS.filter((field) => typeof event[field] === 'string').map((field) => ({
-    field,
-    result: screen(event[field] as string, `audit-${auditId}-${field}`),
-  }));
-  const safe: Record<string, unknown> = { ...event };
-  for (const { field, result } of screened) safe[field] = result.wrapped;
-  return { safe, flagged: screened.some(({ result }) => result.flagged) };
-}
-
+// Screen every free-text field on every event, field-agnostically: an event can carry
+// prose in fields far beyond a fixed allowlist (plain_body, previous_value, subject,
+// transcription_text, …). screenRecordDeep fences known prose fields and any other string
+// that trips an injection detector, so no field name can be added later to smuggle a raw
+// payload into the cache and out through zendesk_query.
 function describeAudit(a: Audit, screen: Screener): RecordScreen<Audit> {
-  const events = (a.events ?? []).map((event) => screenEvent(event, a.id, screen));
-  return {
-    safe: { ...a, events: events.map((e) => e.safe) },
-    line: `audit #${a.id} (${events.length} event(s))`,
-    flagged: events.some((e) => e.flagged),
-  };
+  const events = a.events ?? [];
+  const { value, flagged } = screenRecordDeep({ ...a, events }, (key) => `audit-${a.id}-${key}`, screen);
+  return { safe: value as Audit, line: `audit #${a.id} (${events.length} event(s))`, flagged };
 }
 
 export async function getTicketAudits(
