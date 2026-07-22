@@ -256,3 +256,47 @@ export async function applyMacroToTicket(
     };
   }
 }
+
+// Trigger/automation conditions & actions are structured config (field/operator/value).
+// Numbers/operators pass through; the field-agnostic deep screen neutralizes any embedded
+// free-text (an authored `value` string, a notification body) — the reason we screen these
+// reads even though the top-level record is config.
+const RuleConditionsSchema = z
+  .object({ all: z.array(z.record(z.unknown())).nullish(), any: z.array(z.record(z.unknown())).nullish() })
+  .nullish();
+const RuleActionsSchema = z.array(z.record(z.unknown())).nullish();
+
+const TriggerSchema = z.object({
+  id: z.number(),
+  title: z.string().nullish(),
+  active: z.boolean().nullish(),
+  description: z.string().nullish(),
+  conditions: RuleConditionsSchema,
+  actions: RuleActionsSchema,
+  updated_at: z.string().nullish(),
+});
+type Trigger = z.infer<typeof TriggerSchema>;
+
+const describeTrigger = makeDescribe<Trigger>('trigger', (t) => `#${t.id} ${t.title ?? '(untitled)'}${t.active === false ? ' (inactive)' : ''}`);
+
+export async function listTriggers(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { pageSize?: number; maxRecords?: number } = {},
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  return listCbp<Trigger>({
+    client,
+    cache,
+    securityLevel,
+    path: '/triggers.json',
+    key: 'triggers',
+    schema: TriggerSchema,
+    describe: describeTrigger,
+    handle: 'zendesk_list_triggers',
+    cap: params.maxRecords ?? DEFAULT_LIST_CAP,
+    pageSize: params.pageSize,
+    label: (n) => `${n} trigger(s)`,
+    errorLabel: '/triggers',
+  });
+}
