@@ -335,3 +335,39 @@ export async function listAutomations(
     errorLabel: '/automations',
   });
 }
+
+const SlaPolicySchema = z.object({
+  id: z.number(),
+  title: z.string().nullish(),
+  description: z.string().nullish(),
+  position: z.number().nullish(),
+  filter: z.record(z.unknown()).nullish(),
+  policy_metrics: z.array(z.record(z.unknown())).nullish(),
+});
+type SlaPolicy = z.infer<typeof SlaPolicySchema>;
+
+const describeSla = makeDescribe<SlaPolicy>('sla-policy', (p) => `#${p.id} ${p.title ?? '(untitled)'}`);
+
+const SlaListSchema = z.object({ sla_policies: z.array(SlaPolicySchema) });
+
+export async function listSlaPolicies(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { maxRecords?: number } = {},
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  // /slas/policies is not CBP — it returns the full set in one response. Cap defensively so an
+  // oversized account cannot push an unbounded array through screening/into the cache.
+  const cap = params.maxRecords ?? DEFAULT_LIST_CAP;
+  const raw = await client.request<unknown>('/slas/policies.json');
+  const parsed = SlaListSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /slas/policies response shape.');
+  const capped = parsed.data.sla_policies.slice(0, cap);
+  const screened = summariseScreened(capped, describeSla, securityLevel);
+  const entry = cache.save('zendesk_list_slas', { sla_policies: screened.records });
+  return {
+    summary: `${screened.records.length} SLA policy(ies):\n${screened.lines.join('\n')}${screened.warning}`,
+    cacheHandle: entry.handle,
+    flagged: screened.flagged,
+  };
+}
