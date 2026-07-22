@@ -10,7 +10,7 @@ import type { ToolContext } from './register/context.js';
 import { registerCoreTools } from './register/core.js';
 import { registerTicketTools } from './register/tickets.js';
 import { registerSearchTools } from './register/search.js';
-import { registerUserOrgTools } from './register/users-orgs.js';
+import { registerDirectoryTools } from './register/directory.js';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -52,7 +52,7 @@ const ctx: ToolContext = { httpClient, cache, securityLevel, markdownDefault };
 registerCoreTools(server, ctx);
 registerTicketTools(server, ctx);
 registerSearchTools(server, ctx);
-registerUserOrgTools(server, ctx);
+registerDirectoryTools(server, ctx);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
