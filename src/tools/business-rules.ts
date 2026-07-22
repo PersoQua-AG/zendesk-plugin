@@ -49,3 +49,24 @@ export async function listViews(
     errorLabel: '/views',
   });
 }
+
+const SingleViewSchema = z.object({ view: ViewSchema });
+
+export async function getView(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { viewId: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const raw = await client.request<unknown>(`/views/${params.viewId}.json`);
+  const parsed = SingleViewSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /views/{id} response shape.');
+  const { value, flagged } = screenRecordDeep(parsed.data, (key) => `view-${params.viewId}-${key}`, makeScreener(securityLevel));
+  const safe = value as { view: View };
+  const entry = cache.save('zendesk_get_view', safe);
+  return {
+    summary: `View #${safe.view.id} ${safe.view.title ?? '(untitled)'}${flagged ? SCREEN_WARNING : ''}`,
+    cacheHandle: entry.handle,
+    flagged,
+  };
+}
