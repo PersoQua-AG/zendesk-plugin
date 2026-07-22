@@ -28,6 +28,20 @@ describe('updateUser', () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it('rejects an undefined-only field set and sends no PUT', async () => {
+    // {role: undefined} has one key but JSON.stringify drops it → empty {"user":{}} PUT.
+    const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
+    await expect(updateUser(client, cacheStub(), { userId: 9, fields: { role: undefined } })).rejects.toThrow(/at least one field/i);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it('omits undefined-valued keys from the PUT body', async () => {
+    const client = { request: vi.fn().mockResolvedValue({ user: { id: 9, name: 'Carol' } }) } as unknown as ZendeskHttpClient;
+    await updateUser(client, cacheStub(), { userId: 9, fields: { role: undefined, name: 'Carol' } });
+    const [, init] = (client.request as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ user: { name: 'Carol' } });
+  });
+
   it('throws on a malformed response envelope', async () => {
     const client = { request: vi.fn().mockResolvedValue({ nope: true }) } as unknown as ZendeskHttpClient;
     await expect(updateUser(client, cacheStub(), { userId: 9, fields: { role: 'agent' } })).rejects.toThrow(/Unexpected \/users\/\{id\} update/);

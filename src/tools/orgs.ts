@@ -5,6 +5,7 @@ import type { ResponseCache } from '../client/cache.js';
 import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
+import { stripUndefined } from '../util/object.js';
 import type { ReadResult } from './result.js';
 
 const OrgSchema = z.object({
@@ -113,10 +114,13 @@ export async function updateOrg(
   params: { orgId: number; fields: OrgWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
-  if (Object.keys(params.fields).length === 0) throw new Error('update_org requires at least one field to change.');
+  // Strip undefined-valued keys before the guard so {name: undefined} cannot pass the
+  // key-count check and fire an empty {"organization":{}} PUT (see updateUser).
+  const defined = stripUndefined(params.fields);
+  if (Object.keys(defined).length === 0) throw new Error('update_org requires at least one field to change.');
   const raw = await client.request<unknown>(`/organizations/${params.orgId}.json`, {
     method: 'PUT',
-    body: JSON.stringify({ organization: params.fields }),
+    body: JSON.stringify({ organization: defined }),
   });
   const parsed = SingleOrgSchema.safeParse(raw);
   if (!parsed.success) throw new Error('Unexpected /organizations/{id} update response shape.');

@@ -28,6 +28,19 @@ describe('updateOrg', () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it('rejects an undefined-only field set and sends no PUT', async () => {
+    const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
+    await expect(updateOrg(client, cacheStub(), { orgId: 5, fields: { name: undefined } })).rejects.toThrow(/at least one field/i);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it('omits undefined-valued keys from the PUT body', async () => {
+    const client = { request: vi.fn().mockResolvedValue({ organization: { id: 5, name: 'Acme' } }) } as unknown as ZendeskHttpClient;
+    await updateOrg(client, cacheStub(), { orgId: 5, fields: { name: undefined, notes: 'x' } });
+    const [, init] = (client.request as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ organization: { notes: 'x' } });
+  });
+
   it('throws on a malformed response envelope', async () => {
     const client = { request: vi.fn().mockResolvedValue({ nope: true }) } as unknown as ZendeskHttpClient;
     await expect(updateOrg(client, cacheStub(), { orgId: 5, fields: { notes: 'x' } })).rejects.toThrow(/Unexpected \/organizations\/\{id\} update/);
