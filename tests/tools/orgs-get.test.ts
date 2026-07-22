@@ -28,6 +28,16 @@ describe('getOrg', () => {
     expect(result.flagged).toBe(true);
     const [, cached] = (cache.save as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(cached.organization.details).toContain('zendesk-content-org-4-details-');
+    // Summary shows a short safe indicator, never the raw wrapped envelope.
+    expect(result.summary).toContain('[flagged]');
+    expect(result.summary).not.toContain('zendesk-content-');
+  });
+
+  it('shows the plain name in the summary when nothing is flagged', async () => {
+    const client = { request: vi.fn().mockResolvedValue({ organization: { id: 3, name: 'Acme' } }) } as unknown as ZendeskHttpClient;
+    const result = await getOrg(client, cacheStub(), { orgId: 3 });
+    expect(result.summary).toContain('Acme');
+    expect(result.summary).not.toContain('zendesk-content-');
   });
 
   it('throws on a malformed response envelope', async () => {

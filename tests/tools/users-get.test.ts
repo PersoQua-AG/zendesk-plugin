@@ -28,6 +28,16 @@ describe('getUser', () => {
     expect(result.flagged).toBe(true);
     const [, cached] = (cache.save as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(cached.user.notes).toContain('zendesk-content-user-8-notes-');
+    // Summary shows a short safe indicator, never the raw wrapped envelope.
+    expect(result.summary).toContain('[flagged]');
+    expect(result.summary).not.toContain('zendesk-content-');
+  });
+
+  it('shows the plain name in the summary when nothing is flagged', async () => {
+    const client = { request: vi.fn().mockResolvedValue({ user: { id: 7, name: 'Bob', email: 'b@x.io', role: 'admin' } }) } as unknown as ZendeskHttpClient;
+    const result = await getUser(client, cacheStub(), { userId: 7 });
+    expect(result.summary).toContain('Bob');
+    expect(result.summary).not.toContain('zendesk-content-');
   });
 
   it('throws on a malformed response envelope', async () => {
