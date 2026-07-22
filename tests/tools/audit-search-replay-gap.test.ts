@@ -1,11 +1,10 @@
 // tests/tools/audit-search-replay-gap.test.ts
-// SECURITY PIN (M2 re-verification): the ingest-screening chokepoint must neutralize
-// EVERY untrusted free-text field that reaches the cache, because zendesk_query replays
-// cached values verbatim without re-screening. Audits and search parse events/results
-// with z.record(z.unknown()), so any text field NOT on the screen allowlist passes
-// through raw. These assert the invariant "no raw injection payload is replayable".
-// They are EXPECTED TO FAIL until the allowlist is completed (or the schemas are made
-// field-selective like tickets/comments). Do not delete to make green.
+// SECURITY PIN (M2): the ingest-screening chokepoint must neutralize EVERY untrusted
+// free-text field that reaches the cache, because zendesk_query replays cached values
+// without re-fetching. Audits and search parse events/results with z.record(z.unknown()),
+// so screening must be field-agnostic (screenRecordDeep), not allowlist-bound. These assert
+// the invariant "no raw injection payload is replayable" and are GREEN — keep them green;
+// they pin the field-agnostic screening against regressions to a fixed allowlist.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

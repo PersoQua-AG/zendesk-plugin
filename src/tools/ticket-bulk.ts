@@ -2,6 +2,8 @@
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { pollJobToCompletion, type JobStatus, type JobPollerOptions } from '../client/job-poller.js';
+import type { SecurityLevel } from '../security/screen.js';
+import { makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
 import type { TicketUpdateFields } from './tickets.js';
 
 type PollOverrides = Partial<Pick<JobPollerOptions, 'sleep' | 'intervalMs' | 'maxAttempts'>>;
@@ -21,6 +23,7 @@ async function runJob(
   payload: unknown,
   method: 'POST' | 'PUT',
   poll: PollOverrides,
+  securityLevel: SecurityLevel = 'standard',
 ): Promise<BulkResult> {
   const created = await client.request<{ job_status: { id: string } }>(path, {
     method,
@@ -30,10 +33,14 @@ async function runJob(
     fetchJobStatus: async (id) => (await client.request<{ job_status: JobStatus }>(`/job_statuses/${id}.json`)).job_status,
     ...poll,
   });
-  const entry = cache.save(toolName, final);
-  const failures = (final.results ?? []).filter((r) => !r.success);
-  const summary = `Job ${final.status}: ${(final.results ?? []).length} record(s), ${failures.length} failed.`;
-  return { summary, cacheHandle: entry.handle, jobStatus: final.status, failures };
+  // Defense in depth: job-status results carry inbound per-record error text — screen at
+  // ingest so the cached payload is safe at rest (booleans/ids pass through untouched).
+  const { value, flagged } = screenRecordDeep(final, (key) => `${toolName}-${key}`, makeScreener(securityLevel));
+  const safe = value as JobStatus;
+  const entry = cache.save(toolName, safe);
+  const failures = (safe.results ?? []).filter((r) => !r.success);
+  const summary = `Job ${safe.status}: ${(safe.results ?? []).length} record(s), ${failures.length} failed.${flagged ? SCREEN_WARNING : ''}`;
+  return { summary, cacheHandle: entry.handle, jobStatus: safe.status, failures };
 }
 
 export async function createTicketsBulk(
@@ -41,9 +48,10 @@ export async function createTicketsBulk(
   cache: ResponseCache,
   params: { tickets: unknown[] },
   poll: PollOverrides = {},
+  securityLevel: SecurityLevel = 'standard',
 ): Promise<BulkResult> {
   if (params.tickets.length === 0) throw new Error('At least one ticket is required for a bulk create.');
-  return runJob(client, cache, 'zendesk_create_tickets_bulk', '/tickets/create_many.json', { tickets: params.tickets }, 'POST', poll);
+  return runJob(client, cache, 'zendesk_create_tickets_bulk', '/tickets/create_many.json', { tickets: params.tickets }, 'POST', poll, securityLevel);
 }
 
 export async function updateTicketsBulk(
@@ -51,6 +59,7 @@ export async function updateTicketsBulk(
   cache: ResponseCache,
   params: { ids: number[]; fields: TicketUpdateFields; force?: boolean },
   poll: PollOverrides = {},
+  securityLevel: SecurityLevel = 'standard',
 ): Promise<BulkResult> {
   if (params.ids.length === 0) throw new Error('At least one ticket id is required for a bulk update.');
   // Safe-by-default (PRD §5.2): update_many applies one shared field set across up to 100
@@ -64,5 +73,5 @@ export async function updateTicketsBulk(
     );
   }
   const path = `/tickets/update_many.json?ids=${encodeURIComponent(params.ids.join(','))}`;
-  return runJob(client, cache, 'zendesk_update_tickets_bulk', path, { ticket: params.fields }, 'PUT', poll);
+  return runJob(client, cache, 'zendesk_update_tickets_bulk', path, { ticket: params.fields }, 'PUT', poll, securityLevel);
 }

@@ -27,6 +27,10 @@ export function makeScreener(level: SecurityLevel): Screener {
 // are still neutralized without fencing benign metadata (ids, statuses, types).
 const ALWAYS_FENCE = new Set(['subject', 'description', 'body', 'value', 'html_body', 'name', 'title']);
 
+// Cap recursion so a pathologically nested inbound payload cannot blow the call stack.
+// Inputs are already size-capped; legitimate Zendesk records nest far shallower than this.
+const MAX_INGEST_DEPTH = 100;
+
 export interface DeepScreen {
   value: unknown;
   flagged: boolean;
@@ -42,7 +46,9 @@ export function screenRecordDeep(
   labelFor: (key: string) => string,
   screen: Screener,
   key?: string,
+  depth = 0,
 ): DeepScreen {
+  if (depth > MAX_INGEST_DEPTH) throw new Error('screenRecordDeep: input nesting exceeds safe depth.');
   if (typeof value === 'string') {
     if (value === '' || key === undefined) return { value, flagged: false };
     const { wrapped, flagged } = screen(value, labelFor(key));
@@ -51,7 +57,7 @@ export function screenRecordDeep(
   if (Array.isArray(value)) {
     let flagged = false;
     const out = value.map((item) => {
-      const s = screenRecordDeep(item, labelFor, screen, key);
+      const s = screenRecordDeep(item, labelFor, screen, key, depth + 1);
       flagged = flagged || s.flagged;
       return s.value;
     });
@@ -61,7 +67,7 @@ export function screenRecordDeep(
     let flagged = false;
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      const s = screenRecordDeep(v, labelFor, screen, k);
+      const s = screenRecordDeep(v, labelFor, screen, k, depth + 1);
       flagged = flagged || s.flagged;
       out[k] = s.value;
     }

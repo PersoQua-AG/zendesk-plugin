@@ -4,7 +4,7 @@ import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { summariseScreened, type RecordScreen, type Screener } from './screening.js';
+import { makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
 import { buildComment } from './tickets.js';
 import type { ReadResult } from './result.js';
 
@@ -12,6 +12,7 @@ export async function addComment(
   client: ZendeskHttpClient,
   cache: ResponseCache,
   params: { ticketId: number; body: string; public?: boolean; markdown?: boolean },
+  securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
   if (params.body.trim() === '') throw new Error('Comment body must not be empty.');
   const isPublic = params.public ?? true;
@@ -20,8 +21,11 @@ export async function addComment(
     method: 'PUT',
     body: JSON.stringify({ ticket: { comment } }),
   });
-  const entry = cache.save('zendesk_add_comment', raw);
-  return { summary: `Added ${isPublic ? 'public' : 'internal'} comment to ticket #${params.ticketId}`, cacheHandle: entry.handle };
+  // Defense in depth: the PUT response echoes the full ticket (incl. attacker-controlled
+  // subject). Screen at ingest so the cached payload is safe at rest.
+  const { value: safe, flagged } = screenRecordDeep(raw, (key) => `add-comment-${params.ticketId}-${key}`, makeScreener(securityLevel));
+  const entry = cache.save('zendesk_add_comment', safe);
+  return { summary: `Added ${isPublic ? 'public' : 'internal'} comment to ticket #${params.ticketId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
 }
 
 const CommentSchema = z.object({

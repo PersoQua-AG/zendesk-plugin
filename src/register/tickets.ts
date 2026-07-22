@@ -94,7 +94,7 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
       description: 'Add a public or internal comment to a ticket (Markdown→HTML unless markdown:false).',
       inputSchema: { ticketId: z.number().int().positive(), body: z.string().min(1), public: z.boolean().optional(), markdown: z.boolean().optional() },
     },
-    async (args) => okWithHandle(await addComment(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault })),
+    async (args) => okWithHandle(await addComment(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault }, securityLevel)),
   );
 
   server.registerTool(
@@ -106,14 +106,14 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     'zendesk_add_ticket_tags',
     { description: 'Add tags to a ticket. Appends by default; set replace:true to overwrite the full set.', inputSchema: { ticketId: z.number().int().positive(), tags: z.array(z.string()).min(1), replace: z.boolean().optional() } },
-    async (args) => okWithHandle(await addTicketTags(httpClient, cache, args)),
+    async (args) => okWithHandle(await addTicketTags(httpClient, cache, args, securityLevel)),
   );
 
   server.registerTool(
     'zendesk_create_tickets_bulk',
     { description: 'Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table).', inputSchema: { tickets: z.array(z.record(z.unknown())).min(1).max(100) } },
     async ({ tickets }) => {
-      const r = await createTicketsBulk(httpClient, cache, { tickets });
+      const r = await createTicketsBulk(httpClient, cache, { tickets }, {}, securityLevel);
       return toText(`${r.summary} failures=${JSON.stringify(r.failures)}\n(cache: ${r.cacheHandle})`);
     },
   );
@@ -130,7 +130,7 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
       },
     },
     async ({ ids, fields, force }) => {
-      const r = await updateTicketsBulk(httpClient, cache, { ids, fields, force });
+      const r = await updateTicketsBulk(httpClient, cache, { ids, fields, force }, {}, securityLevel);
       return toText(`${r.summary} failures=${JSON.stringify(r.failures)}\n(cache: ${r.cacheHandle})`);
     },
   );

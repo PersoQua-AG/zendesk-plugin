@@ -6,9 +6,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-// A string already fenced upstream (ingest) carries this marker — do not re-screen it, or
-// screenContent would redact its envelope delimiters. Keeps replay screening idempotent.
-const FENCE_MARKER = 'zendesk-content-';
+// Cap recursion so a pathologically nested cached payload cannot blow the call stack.
+// Inputs are already size-capped; legitimate Zendesk records nest far shallower than this.
+const MAX_REPLAY_DEPTH = 100;
 
 export interface ReplayScreen {
   value: unknown;
@@ -53,20 +53,24 @@ export function runQuery(data: unknown, query: string): unknown {
 }
 
 // Replay-boundary screen: the field-agnostic guarantee that NOTHING inbound reaches the
-// model unscreened, independent of ingest field coverage. Recursively neutralize any
-// string a zendesk_query extract returns before it is handed back. Already-fenced strings
-// (screened at ingest) and benign strings pass through untouched; numbers/booleans/ids too.
-export function screenReplay(value: unknown, level: SecurityLevel): ReplayScreen {
+// model unscreened, independent of ingest field coverage. Every string is run through
+// screenContent — which redacts any forged envelope delimiter in its INPUT and re-wraps
+// flagged content in a fresh, unforgeable per-call nonce fence. There is deliberately NO
+// "already fenced" fast-path: a substring an attacker can embed (e.g. `zendesk-content-`)
+// must never let untrusted text skip screening. Re-screening a genuinely-fenced string is
+// safe — its old delimiters are redacted and it is re-fenced. Numbers/booleans/ids pass
+// through untouched so structured extraction (ids_only, numeric dot-paths) stays usable.
+export function screenReplay(value: unknown, level: SecurityLevel, depth = 0): ReplayScreen {
   if (level === 'off') return { value, flagged: false };
+  if (depth > MAX_REPLAY_DEPTH) throw new Error('screenReplay: input nesting exceeds safe depth.');
   if (typeof value === 'string') {
-    if (value.includes(FENCE_MARKER)) return { value, flagged: false };
     const { wrapped, flagged } = screenContent(value, 'query-replay', level);
     return flagged ? { value: wrapped, flagged: true } : { value, flagged: false };
   }
   if (Array.isArray(value)) {
     let flagged = false;
     const out = value.map((item) => {
-      const s = screenReplay(item, level);
+      const s = screenReplay(item, level, depth + 1);
       flagged = flagged || s.flagged;
       return s.value;
     });
@@ -76,7 +80,7 @@ export function screenReplay(value: unknown, level: SecurityLevel): ReplayScreen
     let flagged = false;
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      const s = screenReplay(v, level);
+      const s = screenReplay(v, level, depth + 1);
       flagged = flagged || s.flagged;
       out[k] = s.value;
     }

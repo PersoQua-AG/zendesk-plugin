@@ -4,7 +4,7 @@ import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeScreener, summariseScreened, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
+import { makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
 import { ZendeskConflictError } from '../client/errors.js';
 import { markdownToHtml } from '../util/markdown.js';
 import type { ReadResult } from './result.js';
@@ -189,8 +189,12 @@ export async function updateTicket(
       method: 'PUT',
       body: JSON.stringify({ ticket }),
     });
-    const entry = cache.save('zendesk_update_ticket', raw);
-    return { status: 'updated', summary: `Updated ticket #${params.ticketId}`, cacheHandle: entry.handle };
+    // Defense in depth: the PUT response echoes the full ticket (incl. attacker-controlled
+    // subject). Screen at ingest so the cached payload is safe at rest, not solely reliant
+    // on the replay-boundary net.
+    const { value: safe, flagged } = screenRecordDeep(raw, (key) => `update-ticket-${params.ticketId}-${key}`, makeScreener(securityLevel));
+    const entry = cache.save('zendesk_update_ticket', safe);
+    return { status: 'updated', summary: `Updated ticket #${params.ticketId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
   } catch (err) {
     if (!(err instanceof ZendeskConflictError)) throw err;
     const current = await client.request<unknown>(`/tickets/${params.ticketId}.json`);
