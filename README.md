@@ -6,8 +6,31 @@ Data Analytics, plus a Microsoft 365 bridge (Outlook/Teams/Calendar/SharePoint).
 
 ## Status
 
-Research (Phase 1) and requirements (Phase 2) complete. Foundation implementation
-(M0+M1: OAuth, core infra) planned, not yet built.
+Foundation (M0+M1: OAuth 2.0 PKCE auth + core infrastructure — rate limiter,
+cursor paginator, async job poller, response cache, query engine, error mapping,
+injection screening, raw-REST client) implemented, with one working end-to-end
+tool: `zendesk_get_me`. Tool coverage for tickets, users, business rules, Guide,
+and analytics lands in follow-up milestones — see the PRD.
+
+## Setup
+
+1. In Zendesk Admin Center, go to **Apps and integrations → APIs → Zendesk API → OAuth Clients**
+   and register a new client. Set the redirect URI to `http://localhost:8976/callback`
+   (or your chosen `oauth_callback_port`).
+2. Install this plugin in Claude Code and provide, when prompted:
+   - `zendesk_subdomain` — the part before `.zendesk.com` in your Zendesk URL
+   - `oauth_client_id` and `oauth_client_secret` — from step 1
+3. Run the OAuth setup flow (see follow-up milestone) to authorize the plugin.
+4. Ask Claude: "Who am I in Zendesk?" — this calls `zendesk_get_me` to confirm the
+   connection works.
+
+## Development
+
+```bash
+npm install
+npm test        # run the test suite
+npm run build
+```
 
 ## Documents
 
