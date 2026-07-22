@@ -95,3 +95,15 @@ export async function searchExport(
   const warning = flagged ? ' — WARNING: injection patterns detected in results' : '';
   return { summary: `${capped.length} result(s)${warning}`, cacheHandle: entry.handle, flagged };
 }
+
+const CountSchema = z.object({ count: z.number() });
+
+export async function searchCount(
+  client: ZendeskHttpClient,
+  params: { query: string },
+): Promise<{ summary: string; count: number }> {
+  const raw = await client.request<unknown>(`/search/count.json?query=${encodeURIComponent(params.query)}`);
+  const parsed = CountSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /search/count response shape.');
+  return { summary: `${parsed.data.count} matching record(s).`, count: parsed.data.count };
+}
