@@ -94,3 +94,39 @@ export async function getUser(
     flagged,
   };
 }
+
+export interface UserWriteFields {
+  name?: string;
+  email?: string;
+  external_id?: string;
+  role?: string;
+  phone?: string;
+  notes?: string;
+  details?: string;
+  organization_id?: number;
+  verified?: boolean;
+}
+
+export async function upsertUser(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { fields: UserWriteFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  const f = params.fields;
+  // Input validation at the trust boundary: create_or_update needs a name plus a unique
+  // idempotency key (email or external_id) to be genuinely idempotent (PRD §6).
+  if (!f.name || f.name.trim() === '') throw new Error('upsert_user requires a name.');
+  if (!f.email && !f.external_id) throw new Error('upsert_user requires an email or external_id as the idempotency key.');
+  const raw = await client.request<unknown>('/users/create_or_update.json', {
+    method: 'POST',
+    body: JSON.stringify({ user: f }),
+  });
+  const parsed = SingleUserSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /users/create_or_update response shape.');
+  // The echoed record may carry attacker-influenced free text (e.g. a merged existing name).
+  // Screen at ingest so the cached payload is safe at rest, not merely at replay.
+  const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `upsert-user-${parsed.data.user.id}-${key}`, makeScreener(securityLevel));
+  const entry = cache.save('zendesk_upsert_user', safe);
+  return { summary: `Upserted user #${parsed.data.user.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+}
