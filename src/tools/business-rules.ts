@@ -104,3 +104,26 @@ export async function executeView(
     errorLabel: '/views/{id}/tickets',
   });
 }
+
+const ViewCountSchema = z.object({
+  view_count: z.object({
+    view_id: z.number().nullish(),
+    value: z.number().nullable(),
+    pretty: z.string().nullish(),
+    fresh: z.boolean().nullish(),
+  }),
+});
+
+export async function viewCount(
+  client: ZendeskHttpClient,
+  params: { viewId: number },
+): Promise<{ summary: string; count: number }> {
+  const raw = await client.request<unknown>(`/views/${params.viewId}/count.json`);
+  const parsed = ViewCountSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /views/{id}/count response shape.');
+  // Zendesk returns value:null (and fresh:false) while the count is still being recomputed.
+  // Guard the null so a consumer never divides/indexes on an absent number.
+  const value = parsed.data.view_count.value ?? 0;
+  const stale = parsed.data.view_count.fresh === false ? ' (count is stale — Zendesk is recalculating)' : '';
+  return { summary: `View #${params.viewId} matches ${value} ticket(s)${stale}.`, count: value };
+}
