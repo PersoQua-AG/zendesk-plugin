@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { screenContent, type SecurityLevel } from '../security/screen.js';
+import { paginateCbp, type CbpPage } from '../client/paginator.js';
 import type { ReadResult } from './tickets.js';
 
 const SEARCH_HARD_CAP = 1000; // Zendesk /search returns at most 1000 results.
@@ -54,4 +55,43 @@ export async function search(
   }
   const warning = flagged ? ' — WARNING: injection patterns detected in results' : '';
   return { summary: `${capped.length} result(s) (total ${count})${warning}`, cacheHandle: entry.handle, flagged };
+}
+
+const ExportPageSchema = z.object({
+  results: z.array(ResultSchema),
+  meta: z.object({ has_more: z.boolean(), after_cursor: z.string().nullable() }),
+  links: z.object({ next: z.string().nullable() }).nullish(),
+});
+
+export async function searchExport(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { query: string; type: string; maxRecords?: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const cap = params.maxRecords ?? 1000;
+  const encoded = encodeURIComponent(params.query);
+  const base = `/search/export.json?query=${encoded}&filter[type]=${encodeURIComponent(params.type)}&page[size]=100`;
+  const fetchPage = async (cursor: string | null): Promise<CbpPage<Record<string, unknown>>> => {
+    const url = cursor ? `${base}&page[after]=${encodeURIComponent(cursor)}` : base;
+    const raw = await client.request<unknown>(url);
+    const parsed = ExportPageSchema.safeParse(raw);
+    if (!parsed.success) throw new Error('Unexpected /search/export response shape.');
+    return { records: parsed.data.results, meta: parsed.data.meta, links: { next: parsed.data.links?.next ?? null } };
+  };
+
+  const results: Array<Record<string, unknown>> = [];
+  for await (const batch of paginateCbp(fetchPage)) {
+    results.push(...batch);
+    if (results.length >= cap) break;
+  }
+  const capped = results.slice(0, cap);
+  const entry = cache.save('zendesk_search_export', { results: capped });
+
+  let flagged = false;
+  for (const record of capped) {
+    if (screenContent(resultText(record), 'search-export-result', securityLevel).flagged) flagged = true;
+  }
+  const warning = flagged ? ' — WARNING: injection patterns detected in results' : '';
+  return { summary: `${capped.length} result(s)${warning}`, cacheHandle: entry.handle, flagged };
 }
