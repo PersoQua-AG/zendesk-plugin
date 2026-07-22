@@ -371,3 +371,97 @@ export async function listSlaPolicies(
     flagged: screened.flagged,
   };
 }
+
+// A user-authored rule write body: title plus structured/optional config. Kept as an open
+// record (values are structured JSON validated at the register boundary) — no `any`.
+export type RuleWriteFields = Record<string, unknown>;
+
+interface RuleWriteConfig {
+  collection: string; // e.g. '/triggers'
+  key: string; // envelope key, e.g. 'trigger'
+  toolName: string; // cache tool name, e.g. 'zendesk_create_trigger'
+  resourceLabel: string; // human label, e.g. 'trigger'
+}
+
+// Business-rules writes require an admin role. The base client maps a 403 to a generic
+// ZendeskPermissionError; re-map it to an actionable, resource-specific message. A write
+// cannot degrade to empty (unlike the M2 ticket-forms read), so it surfaces the typed error.
+async function withAdminGuard<T>(action: string, thunk: () => Promise<T>): Promise<T> {
+  try {
+    return await thunk();
+  } catch (err) {
+    if (err instanceof ZendeskPermissionError) {
+      throw new ZendeskPermissionError(
+        `${action} requires an admin role — your token's scope ∩ role is insufficient. Re-authorize with an admin account or ask an admin to make this change.`,
+      );
+    }
+    throw err;
+  }
+}
+
+const RuleEnvelopeSchema = z.record(z.unknown());
+const RuleRecordSchema = z.object({ id: z.number() }).passthrough();
+
+async function createRule(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  config: RuleWriteConfig,
+  fields: RuleWriteFields,
+  securityLevel: SecurityLevel,
+): Promise<{ summary: string; cacheHandle: string }> {
+  const title = fields.title;
+  if (typeof title !== 'string' || title.trim() === '') throw new Error(`create_${config.resourceLabel} requires a title.`);
+  const body = stripUndefined(fields);
+  const raw = await withAdminGuard(`Creating a ${config.resourceLabel}`, () =>
+    client.request<unknown>(`${config.collection}.json`, { method: 'POST', body: JSON.stringify({ [config.key]: body }) }),
+  );
+  const parsed = RuleEnvelopeSchema.safeParse(raw);
+  const record = parsed.success ? RuleRecordSchema.safeParse(parsed.data[config.key]) : null;
+  if (!record || !record.success) throw new Error(`Unexpected ${config.collection} create response shape.`);
+  const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `${config.toolName}-${record.data.id}-${key}`, makeScreener(securityLevel));
+  const entry = cache.save(config.toolName, safe);
+  return { summary: `Created ${config.resourceLabel} #${record.data.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+}
+
+async function updateRule(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  config: RuleWriteConfig,
+  id: number,
+  fields: RuleWriteFields,
+  securityLevel: SecurityLevel,
+): Promise<{ summary: string; cacheHandle: string }> {
+  // stripUndefined so a payload like {title: undefined} — which JSON.stringify would drop to
+  // {} — cannot slip past this guard and fire an empty update.
+  const body = stripUndefined(fields);
+  if (Object.keys(body).length === 0) throw new Error(`update_${config.resourceLabel} requires at least one field to change.`);
+  const raw = await withAdminGuard(`Updating a ${config.resourceLabel}`, () =>
+    client.request<unknown>(`${config.collection}/${id}.json`, { method: 'PUT', body: JSON.stringify({ [config.key]: body }) }),
+  );
+  const parsed = RuleEnvelopeSchema.safeParse(raw);
+  const record = parsed.success ? RuleRecordSchema.safeParse(parsed.data[config.key]) : null;
+  if (!record || !record.success) throw new Error(`Unexpected ${config.collection} update response shape.`);
+  const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `${config.toolName}-${id}-${key}`, makeScreener(securityLevel));
+  const entry = cache.save(config.toolName, safe);
+  return { summary: `Updated ${config.resourceLabel} #${id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+}
+
+const TRIGGER_WRITE: Omit<RuleWriteConfig, 'toolName'> = { collection: '/triggers', key: 'trigger', resourceLabel: 'trigger' };
+
+export function createTrigger(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { fields: RuleWriteFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  return createRule(client, cache, { ...TRIGGER_WRITE, toolName: 'zendesk_create_trigger' }, params.fields, securityLevel);
+}
+
+export function updateTrigger(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { id: number; fields: RuleWriteFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  return updateRule(client, cache, { ...TRIGGER_WRITE, toolName: 'zendesk_update_trigger' }, params.id, params.fields, securityLevel);
+}
