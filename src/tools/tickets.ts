@@ -2,9 +2,9 @@
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
-import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeScreener, summariseScreened, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
+import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING } from './screening.js';
+import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
 import { markdownToHtml } from '../util/markdown.js';
 import { safeUpdateWithConflict } from './write-helpers.js';
 import type { ReadResult } from './result.js';
@@ -19,26 +19,9 @@ const TicketSchema = z.object({
 });
 export type Ticket = z.infer<typeof TicketSchema>;
 
-const TicketsPageSchema = cbpPageSchema(TicketSchema, 'tickets');
-
-// A ticket's untrusted free-text fields are subject + description. Screening rewrites
-// them to their wrapped form so the CACHED ticket is safe (cached text fields are stored
-// screened), then reports the aggregate flag.
-function screenTicket(t: Ticket, screen: Screener) {
-  const subject = screen(t.subject ?? '', `ticket-${t.id}-subject`);
-  const description = screen(t.description ?? '', `ticket-${t.id}-description`);
-  const safe: Ticket = {
-    ...t,
-    ...(typeof t.subject === 'string' ? { subject: subject.wrapped } : {}),
-    ...(typeof t.description === 'string' ? { description: description.wrapped } : {}),
-  };
-  return { safe, subject, description, flagged: subject.flagged || description.flagged };
-}
-
-function describeTicket(t: Ticket, screen: Screener): RecordScreen<Ticket> {
-  const s = screenTicket(t, screen);
-  return { safe: s.safe, line: `#${t.id} [${t.status ?? 'unknown'}] ${s.subject.wrapped}`, flagged: s.flagged };
-}
+// A ticket carries untrusted free text in subject/description (both in ALWAYS_FENCE); every
+// string field reaches the cache neutralized/wrapped and the line renders from the safe copy.
+const describeTicket = makeDescribe<Ticket>('ticket', (t) => `#${t.id} [${t.status ?? 'unknown'}] ${t.subject ?? ''}`);
 
 export async function listTickets(
   client: ZendeskHttpClient,
@@ -46,25 +29,20 @@ export async function listTickets(
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
-  const pageSize = Math.min(params.pageSize ?? 100, 100);
-  const cap = params.maxRecords ?? 200;
-  const fetchPage = async (cursor: string | null): Promise<CbpPage<Ticket>> => {
-    const parts = [`page[size]=${pageSize}`];
-    if (cursor) parts.push(`page[after]=${encodeURIComponent(cursor)}`);
-    const raw = await client.request<unknown>(`/tickets.json?${parts.join('&')}`);
-    const parsed = TicketsPageSchema.safeParse(raw);
-    if (!parsed.success) throw new Error('Unexpected /tickets response shape.');
-    return { records: parsed.data.tickets, meta: parsed.data.meta, links: { next: parsed.data.links?.next ?? null } };
-  };
-
-  const capped = await collectCbp(fetchPage, cap);
-  const screened = summariseScreened(capped, describeTicket, securityLevel);
-  const entry = cache.save('zendesk_list_tickets', { tickets: screened.records });
-  return {
-    summary: `${screened.records.length} ticket(s):\n${screened.lines.join('\n')}${screened.warning}`,
-    cacheHandle: entry.handle,
-    flagged: screened.flagged,
-  };
+  return listCbp<Ticket>({
+    client,
+    cache,
+    securityLevel,
+    path: '/tickets.json',
+    key: 'tickets',
+    schema: TicketSchema,
+    describe: describeTicket,
+    handle: 'zendesk_list_tickets',
+    cap: params.maxRecords ?? DEFAULT_LIST_CAP,
+    pageSize: params.pageSize,
+    label: (n) => `${n} ticket(s)`,
+    errorLabel: '/tickets',
+  });
 }
 
 const SingleTicketSchema = z.object({ ticket: TicketSchema });
@@ -79,10 +57,11 @@ export async function getTicket(
   const parsed = SingleTicketSchema.safeParse(raw);
   if (!parsed.success) throw new Error('Unexpected /tickets/{id} response shape.');
   const t = parsed.data.ticket;
-  const { safe, subject, description, flagged } = screenTicket(t, makeScreener(securityLevel));
-  const entry = cache.save('zendesk_get_ticket', { ticket: safe });
+  const { value, flagged } = screenRecordDeep(parsed.data, (key) => `ticket-${params.ticketId}-${key}`, makeScreener(securityLevel));
+  const safe = value as { ticket: Ticket };
+  const entry = cache.save('zendesk_get_ticket', safe);
   const warning = flagged ? SCREEN_WARNING : '';
-  const summary = `Ticket #${t.id} [${t.status ?? 'unknown'}] priority=${t.priority ?? 'none'}\nSubject: ${subject.wrapped}\nDescription: ${description.wrapped}${warning}`;
+  const summary = `Ticket #${t.id} [${t.status ?? 'unknown'}] priority=${t.priority ?? 'none'}\nSubject: ${safe.ticket.subject ?? ''}\nDescription: ${safe.ticket.description ?? ''}${warning}`;
   return { summary, cacheHandle: entry.handle, flagged, updatedStamp: t.updated_at ?? null };
 }
 
