@@ -49,3 +49,37 @@ export async function listSections(
     errorLabel: '/help_center/sections',
   });
 }
+
+const CategorySchema = z.object({
+  id: z.number(),
+  name: z.string().nullish(),
+  description: z.string().nullish(),
+  locale: z.string().nullish(),
+  position: z.number().nullish(),
+  updated_at: z.string().nullish(),
+});
+type Category = z.infer<typeof CategorySchema>;
+
+const describeCategory = makeDescribe<Category>('category', (c) => `#${c.id} ${c.name ?? '(unnamed)'} [${c.locale ?? '?'}]`);
+
+export async function listCategories(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { pageSize?: number; maxRecords?: number } = {},
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  return listCbp<Category>({
+    client,
+    cache,
+    securityLevel,
+    path: '/help_center/categories.json',
+    key: 'categories',
+    schema: CategorySchema,
+    describe: describeCategory,
+    handle: 'zendesk_list_categories',
+    cap: Math.min(params.maxRecords ?? DEFAULT_LIST_CAP, DEFAULT_LIST_CAP),
+    pageSize: params.pageSize,
+    label: (n) => `${n} category(ies)`,
+    errorLabel: '/help_center/categories',
+  });
+}
