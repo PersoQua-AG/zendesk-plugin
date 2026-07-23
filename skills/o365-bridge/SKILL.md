@@ -26,6 +26,8 @@ Build a concise summary + the ticket's Zendesk URL (`https://<subdomain>.zendesk
 
 ## Workflows
 
+The `outlook_*` / `teams_*` / `sharepoint_*` / `find_meeting_availability` names below are **illustrative examples** of the M365 capabilities each workflow needs — the connector is the authority on the actual tool names. Use the ones you discovered in Step 0; do not assume these literal names exist.
+
 **Escalate to Teams.** Post the summary + ticket link to the chosen Teams chat/channel using the M365 Teams tool(s) available (use `teams_list_chats` to resolve the target). If no Teams *post* capability is exposed by the connector, fall back to Outlook email and say so.
 
 **Email via Outlook.** Send a ticket summary to a colleague (`outlook_send_mail`) or **draft** a customer-facing reply for review (`outlook_create_draft`) — prefer a draft for anything customer-facing so a human sends it. Confirm recipients and body before sending.

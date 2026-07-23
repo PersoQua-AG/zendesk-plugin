@@ -18,7 +18,7 @@ function registeredTools(): Set<string> {
   const names = new Set<string>();
   for (const f of readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
     const src = readFileSync(join(dir, f), 'utf8');
-    for (const m of src.matchAll(/registerTool\(\s*'(zendesk_[a-z_]+)'/g)) names.add(m[1]);
+    for (const m of src.matchAll(/registerTool\(\s*'(zendesk_[a-z0-9_]+)'/g)) names.add(m[1]);
   }
   return names;
 }
@@ -68,7 +68,9 @@ describe('M7 Claude layer', () => {
     const unknown: string[] = [];
     for (const f of contentFiles) {
       const text = readFileSync(f, 'utf8');
-      for (const m of text.matchAll(/zendesk_[a-z_]+/g)) {
+      // Include digits so a digit-suffixed hallucination (e.g. `zendesk_report2`) is caught
+      // rather than silently truncated to a real tool prefix (`zendesk_report`) that passes.
+      for (const m of text.matchAll(/zendesk_[a-z0-9_]+/g)) {
         if (!registered.has(m[0])) unknown.push(`${f}: ${m[0]}`);
       }
     }

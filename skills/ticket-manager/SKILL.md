@@ -1,6 +1,6 @@
 ---
 name: ticket-manager
-description: Manage the full Zendesk ticket lifecycle from Claude — read context, change status/priority/assignee/tags, post public replies or internal notes, and bulk re-tag or reassign. Use whenever the user wants to triage, update, reply to, close, reopen, or bulk-edit one or more Zendesk tickets. Enforces safe optimistic-concurrency updates, valid status transitions, append-by-default tags, and confirms before every write.
+description: Write and manage the Zendesk ticket lifecycle from Claude — change status/priority/assignee/tags, post public replies or internal notes, and bulk re-tag or reassign. Use whenever the user wants to update, reply to, close, reopen, or bulk-edit one or more Zendesk tickets. For ranking the queue by what to work on next, use the triage-tickets skill instead. Enforces safe optimistic-concurrency updates, valid status transitions, append-by-default tags, and confirms before every write.
 ---
 
 # Zendesk Ticket Manager
@@ -47,6 +47,7 @@ Rules:
 - **`closed` is terminal.** A closed ticket cannot be reopened or edited. If the user asks to reopen a closed ticket, DO NOT attempt `zendesk_update_ticket`. Explain it is closed and offer to **create a linked follow-up ticket** (see below).
 - **Never move a ticket back to `new`** — `new` is the birth state only; warn and confirm if requested.
 - Reopening a `solved` ticket (→ `open`/`pending`) is allowed while it is still solved; confirm it is not already closed first.
+- **`hold` may be plan-gated.** The on-hold status is an Enterprise/Professional feature on many plans; a `→ hold` update can fail on accounts where it is not enabled. If it errors, report that it is likely unavailable on this plan rather than retrying.
 - `closed` is normally set by Zendesk automations, not manually — if the user asks to set `closed`, note that and confirm.
 
 ### Creating a follow-up for a closed ticket
@@ -65,6 +66,8 @@ zendesk_create_tickets_bulk  tickets:[{
 (For an unlinked new ticket, `zendesk_create_ticket` with `subject` + `comment` is simpler — mention the trade-off and let the user choose.) Confirm before creating.
 
 ## Replies and internal notes
+
+**Reply contract:** this skill owns *posting* replies, not *wording* them. When the user wants a drafted customer reply, delegate the wording to the `support-agent` subagent (it drafts, it cannot write), show the user its draft, and only after they confirm do you post it with `zendesk_add_comment`. Short factual notes you may write directly.
 
 - Public reply to the customer: `zendesk_add_comment` (`ticketId`, `body`, `public:true`). Body is Markdown→HTML by default; pass `markdown:false` to send raw HTML.
 - Internal note (agents only): `zendesk_add_comment` with `public:false`. Always confirm which visibility the user wants before posting — a private note leaked publicly, or vice versa, is a real incident.
