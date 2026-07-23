@@ -21,6 +21,17 @@ describe('resolveAuthConfig', () => {
     expect(overridden.config.callbackPort).toBe(9000);
   });
 
+  it('treats an empty-string callback port as absent (Number("")===0 would bind port 0)', () => {
+    const { config } = resolveAuthConfig({ ...fullEnv(), ZENDESK_OAUTH_CALLBACK_PORT: '' });
+    expect(config.callbackPort).toBe(8976);
+  });
+
+  it('treats an empty-string CLAUDE_PLUGIN_DATA as absent (""→tokens.enc at fs root)', () => {
+    const resolved = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '' });
+    expect(resolved.dataDir).toBe('.zendesk-plugin-data');
+    expect(resolved.tokensPath).toBe('.zendesk-plugin-data/tokens.enc');
+  });
+
   it('uses read/write scopes (server source of truth)', () => {
     expect(resolveAuthConfig(fullEnv()).config.scopes).toEqual(['read', 'write']);
   });
@@ -29,6 +40,18 @@ describe('resolveAuthConfig', () => {
     expect(resolveAuthConfig(fullEnv()).dataDir).toBe('.zendesk-plugin-data');
     const overridden = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '/var/data' });
     expect(overridden.dataDir).toBe('/var/data');
+  });
+
+  it('server + bin resolve the identical TokenStore path + key from the same env', () => {
+    // Both server.ts and bin/authorize.ts derive the token store from
+    // resolveAuthConfig(process.env); given one env they must never diverge, or
+    // the bin writes tokens the server cannot find.
+    const env = { ...fullEnv(), CLAUDE_PLUGIN_DATA: '/var/data' };
+    const forServer = resolveAuthConfig(env);
+    const forBin = resolveAuthConfig(env);
+    expect(forServer.tokensPath).toBe('/var/data/tokens.enc');
+    expect(forBin.tokensPath).toBe(forServer.tokensPath); // identical path
+    expect(forBin.config.clientSecret).toBe(forServer.config.clientSecret); // identical TokenStore key source
   });
 
   it.each(['ZENDESK_SUBDOMAIN', 'ZENDESK_OAUTH_CLIENT_ID', 'ZENDESK_OAUTH_CLIENT_SECRET'])(

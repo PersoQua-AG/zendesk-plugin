@@ -26,12 +26,12 @@ function parseMarkdownDefault(raw: string | undefined): boolean {
   return raw !== 'false';
 }
 
-const { config: oauthConfig, dataDir } = resolveAuthConfig(process.env);
+const { config: oauthConfig, dataDir, tokensPath } = resolveAuthConfig(process.env);
 const { subdomain, clientSecret } = oauthConfig;
 const securityLevel = parseSecurityLevel(process.env.ZENDESK_SECURITY_LEVEL);
 const markdownDefault = parseMarkdownDefault(process.env.ZENDESK_MARKDOWN_CONVERSION);
 
-const tokenStore = new TokenStore(`${dataDir}/tokens.enc`, clientSecret);
+const tokenStore = new TokenStore(tokensPath, clientSecret);
 const authManager = new AuthManager(tokenStore, oauthConfig);
 const rateLimiter = new RateLimiter({ requestsPerMinute: 400 });
 // Incremental export is special-cased to 10 req/min globally (PRD §5 infra 1).
