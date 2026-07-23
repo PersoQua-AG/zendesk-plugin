@@ -13,6 +13,8 @@ import { registerSearchTools } from './register/search.js';
 import { registerDirectoryTools } from './register/directory.js';
 import { registerBusinessRulesTools } from './register/business-rules.js';
 import { registerGuideTools } from './register/guide.js';
+import { registerAnalyticsTools } from './register/analytics.js';
+import { parseReportConfig } from './tools/analytics/business-hours.js';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -45,18 +47,21 @@ const authManager = new AuthManager(tokenStore, {
   scopes: ['read', 'write'],
 });
 const rateLimiter = new RateLimiter({ requestsPerMinute: 400 });
-const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter });
+// Incremental export is special-cased to 10 req/min globally (PRD §5 infra 1).
+const incrementalRateLimiter = new RateLimiter({ requestsPerMinute: 10 });
+const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter });
 const cache = new ResponseCache(`${dataDir}/cache`);
 
 const server = new McpServer({ name: 'zendesk', version: '0.1.0' });
 
-const ctx: ToolContext = { httpClient, cache, securityLevel, markdownDefault };
+const ctx: ToolContext = { httpClient, cache, securityLevel, markdownDefault, reportConfig: parseReportConfig(process.env) };
 registerCoreTools(server, ctx);
 registerTicketTools(server, ctx);
 registerSearchTools(server, ctx);
 registerDirectoryTools(server, ctx);
 registerBusinessRulesTools(server, ctx);
 registerGuideTools(server, ctx);
+registerAnalyticsTools(server, ctx);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
