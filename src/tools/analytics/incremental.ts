@@ -219,3 +219,86 @@ export async function incrementalUsers(
     flagged: screened.flagged,
   };
 }
+
+// ---- Generic time reader (paginate time-mode + screen) ----
+
+export interface IncrementalTimeConfig<T extends { id: number }> {
+  client: ZendeskHttpClient;
+  path: string; // e.g. '/incremental/ticket_metric_events.json'
+  key: string; // envelope array key, e.g. 'ticket_metric_events'
+  schema: z.ZodType<T>;
+  describe: (record: T, screen: Screener) => RecordScreen<T>;
+  startTime: number;
+  cap: number;
+  securityLevel: SecurityLevel;
+  errorLabel: string;
+}
+
+export async function fetchIncrementalTime<T extends { id: number }>(
+  config: IncrementalTimeConfig<T>,
+): Promise<ScreenedSummary<T>> {
+  assertStartTime(config.startTime);
+  const pageSchema = z
+    .object({ end_time: z.number().nullable(), next_page: z.string().nullable(), count: z.number() })
+    .extend({ [config.key]: z.array(config.schema) } as Record<string, z.ZodTypeAny>);
+  const fetchPage = async (startTime: number): Promise<IncrementalTimePage<T>> => {
+    const raw = await config.client.request<unknown>(`${config.path}?start_time=${startTime}`, {}, { rateClass: 'incremental' });
+    const parsed = pageSchema.safeParse(raw);
+    if (!parsed.success) throw new Error(`Unexpected ${config.errorLabel} response shape.`);
+    const data = parsed.data as Record<string, unknown>;
+    return {
+      records: data[config.key] as T[],
+      end_time: data.end_time as number | null,
+      next_page: data.next_page as string | null,
+      count: data.count as number,
+    };
+  };
+  const collected = await collectIncremental(paginateIncrementalTime(fetchPage, config.startTime), config.cap);
+  return summariseScreened(collected, config.describe, config.securityLevel);
+}
+
+// ---- zendesk_ticket_metric_events ----
+
+export const MetricEventSchema = z.object({
+  id: z.number(),
+  ticket_id: z.number(),
+  metric: z.string(),
+  instance_id: z.number().nullish(),
+  type: z.string(),
+  time: z.string(),
+});
+export type MetricEvent = z.infer<typeof MetricEventSchema>;
+
+const describeMetricEvent = makeDescribe<MetricEvent>(
+  'metric-event',
+  (e) => `#${e.id} ticket ${e.ticket_id} ${e.metric}/${e.type} @ ${e.time}`,
+);
+
+export const DEFAULT_EVENTS_CAP = 5000;
+export const MAX_EVENTS_CAP = 50_000;
+
+export async function ticketMetricEvents(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { startTime: number; maxRecords?: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const cap = Math.min(params.maxRecords ?? DEFAULT_EVENTS_CAP, MAX_EVENTS_CAP);
+  const screened = await fetchIncrementalTime<MetricEvent>({
+    client,
+    path: '/incremental/ticket_metric_events.json',
+    key: 'ticket_metric_events',
+    schema: MetricEventSchema,
+    describe: describeMetricEvent,
+    startTime: params.startTime,
+    cap,
+    securityLevel,
+    errorLabel: '/incremental/ticket_metric_events',
+  });
+  const entry = cache.save('zendesk_ticket_metric_events', { ticket_metric_events: screened.records });
+  return {
+    summary: `${screened.records.length} metric event(s) since ${new Date(params.startTime * 1000).toISOString()}:\n${screened.lines.join('\n')}${screened.warning}`,
+    cacheHandle: entry.handle,
+    flagged: screened.flagged,
+  };
+}
