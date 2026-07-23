@@ -83,3 +83,27 @@ export async function listCategories(
     errorLabel: '/help_center/categories',
   });
 }
+
+export interface SectionCreateFields {
+  name?: string;
+  locale?: string;
+  description?: string;
+  position?: number;
+}
+
+export function createSection(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { categoryId: number; fields: SectionCreateFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  const locale = params.fields.locale ?? DEFAULT_LOCALE;
+  const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale });
+  return createRule(
+    client,
+    cache,
+    { collection: `/help_center/categories/${params.categoryId}/sections`, key: 'section', toolName: 'zendesk_create_section', resourceLabel: 'section', requiredFields: ['name', 'locale'] },
+    built,
+    securityLevel,
+  );
+}
