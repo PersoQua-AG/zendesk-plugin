@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# A second push to the same ref cancels the older in-flight run — the gate always
+# reflects the newest commit rather than wasting a runner on a stale one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      # Reproducible install from the lockfile; any drift fails here.
+      - run: npm ci
+      # Validate the plugin manifests BEFORE build/test so a broken manifest fails fast.
+      # `claude plugin validate --strict` is the ideal check, but the `claude` CLI is not
+      # present on stock GitHub Actions runners, so this zero-dep Node script is the fallback:
+      # it asserts both manifests parse as JSON and carry their required fields. See the script
+      # header. Swap to `claude plugin validate` here once the CLI is available in CI.
+      - run: node scripts/validate-manifests.mjs
+      - run: npm run build
+      - run: npm test

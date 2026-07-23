@@ -1,0 +1,75 @@
+import { mapErrorResponse, parseRetryAfter } from './errors.js';
+const MAX_RATE_LIMIT_RETRIES = 3;
+export class ZendeskHttpClient {
+    options;
+    baseUrl;
+    fetchImpl;
+    maxRateLimitRetries;
+    constructor(options) {
+        this.options = options;
+        this.baseUrl = `https://${options.subdomain}.zendesk.com/api/v2`;
+        this.fetchImpl = options.fetchImpl ?? fetch;
+        this.maxRateLimitRetries = options.maxRateLimitRetries ?? MAX_RATE_LIMIT_RETRIES;
+    }
+    // Pick the bucket for this request. 'incremental' selects the 10/min limiter when configured,
+    // otherwise falls back to the default so the client is usable without the second limiter.
+    limiterFor(opts) {
+        if (opts.rateClass === 'incremental' && this.options.incrementalRateLimiter) {
+            return this.options.incrementalRateLimiter;
+        }
+        return this.options.rateLimiter;
+    }
+    // On 429 we feed the Retry-After window to the SAME limiter we acquired from and retry: the
+    // next acquire() blocks until the window elapses. This centralizes rate-limit self-healing so
+    // paginators and bulk tools don't each reimplement it.
+    async request(path, init = {}, opts = {}) {
+        const limiter = this.limiterFor(opts);
+        for (let attempt = 0;; attempt++) {
+            await limiter.acquire();
+            const token = await this.options.authManager.getAccessToken();
+            const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+                ...init,
+                headers: {
+                    ...init.headers,
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+            if (response.status === 429) {
+                limiter.reportRetryAfter(parseRetryAfter(response.headers.get('retry-after')));
+                if (attempt >= this.maxRateLimitRetries) {
+                    throw await mapErrorResponse(response);
+                }
+                continue;
+            }
+            if (!response.ok) {
+                throw await mapErrorResponse(response);
+            }
+            return (await response.json());
+        }
+    }
+    // Binary upload path (POST /uploads): the JSON `request` method forces
+    // Content-Type: application/json and can't carry raw bytes. This reuses the
+    // same auth + rate-limiter + error-mapping seams, single-attempt (uploads
+    // are not safely auto-retried on 429 — we surface the typed error instead).
+    async requestUpload(path, body, contentType) {
+        await this.options.rateLimiter.acquire();
+        const token = await this.options.authManager.getAccessToken();
+        const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+            method: 'POST',
+            // @types/node types a typed array as Uint8Array<ArrayBufferLike>, which its
+            // fetch BodyInit union doesn't accept directly; the raw bytes are a valid
+            // BufferSource at runtime, so assert the union member.
+            body: body,
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType },
+        });
+        if (response.status === 429) {
+            this.options.rateLimiter.reportRetryAfter(parseRetryAfter(response.headers.get('retry-after')));
+            throw await mapErrorResponse(response);
+        }
+        if (!response.ok) {
+            throw await mapErrorResponse(response);
+        }
+        return (await response.json());
+    }
+}

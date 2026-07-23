@@ -1,5 +1,6 @@
 node_modules/
-dist/
 *.log
 .zendesk-plugin-data/
 .DS_Store
+
+.worktrees/
