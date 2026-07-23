@@ -108,12 +108,8 @@ export function createSection(
   );
 }
 
-export interface CategoryCreateFields {
-  name?: string;
-  locale?: string;
-  description?: string;
-  position?: number;
-}
+// A category carries the same authored fields as a section; keep the semantic name as an alias.
+export type CategoryCreateFields = SectionCreateFields;
 
 export function createCategory(
   client: ZendeskHttpClient,

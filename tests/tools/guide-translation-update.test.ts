@@ -17,7 +17,9 @@ describe('updateArticleTranslation', () => {
     expect(path).toBe('/help_center/articles/5/translations/de.json');
     expect(init.method).toBe('PUT');
     expect(JSON.parse(init.body)).toEqual({ translation: { body: '<h1>Neu</h1>' } });
-    expect(result.summary).toContain('Updated article translation #de');
+    // A locale is a string id — render it as "(de)", not "#de" (# implies a numeric id).
+    expect(result.summary).toContain('Updated article translation (de)');
+    expect(result.summary).not.toContain('#de');
   });
 
   it('rejects an empty (no-op) update', async () => {

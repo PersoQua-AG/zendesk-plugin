@@ -159,7 +159,10 @@ export async function updateEntity<F extends object>(
   if (!parsed.success) throw new Error(`Unexpected ${config.collection}/{id} update response shape.`);
   const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `${config.toolName}-${id}-${key}`, makeScreener(securityLevel));
   const entry = cache.save(config.toolName, safe);
-  return { summary: `Updated ${config.resourceLabel} #${id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+  // A numeric id reads as "#42"; a string id (e.g. a translation locale) uses "(de)" since "#"
+  // implies a numeric record id.
+  const idLabel = typeof id === 'number' ? `#${id}` : `(${id})`;
+  return { summary: `Updated ${config.resourceLabel} ${idLabel}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
 }
 
 export interface CreateEntityConfig {

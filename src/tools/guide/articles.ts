@@ -192,12 +192,8 @@ export function updateArticle(
   );
 }
 
-export interface TranslationCreateFields {
-  locale?: string;
-  title?: string;
-  body?: string;
-  draft?: boolean;
-}
+// A translation carries the same authored fields as an article; keep the semantic name as an alias.
+export type TranslationCreateFields = ArticleCreateFields;
 
 export function createArticleTranslation(
   client: ZendeskHttpClient,
@@ -218,11 +214,7 @@ export function createArticleTranslation(
   );
 }
 
-export interface TranslationUpdateFields {
-  title?: string;
-  body?: string;
-  draft?: boolean;
-}
+export type TranslationUpdateFields = ArticleUpdateFields;
 
 export function updateArticleTranslation(
   client: ZendeskHttpClient,
