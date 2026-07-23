@@ -178,3 +178,44 @@ export async function incrementalTickets(
     flagged: screened.flagged,
   };
 }
+
+// ---- zendesk_incremental_users ----
+
+const IncUserSchema = z.object({
+  id: z.number(),
+  name: z.string().nullish(),
+  email: z.string().nullish(),
+  role: z.string().nullish(),
+  created_at: z.string().nullish(),
+  updated_at: z.string().nullish(),
+});
+export type IncrementalUser = z.infer<typeof IncUserSchema>;
+
+// name is in ALWAYS_FENCE → wrapped unconditionally by the deep screen.
+const describeIncUser = makeDescribe<IncrementalUser>('inc-user', (u) => `#${u.id} ${u.name ?? '(no name)'} [${u.role ?? '?'}]`);
+
+export async function incrementalUsers(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { startTime: number; maxRecords?: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const cap = Math.min(params.maxRecords ?? DEFAULT_INCREMENTAL_CAP, MAX_INCREMENTAL_CAP);
+  const screened = await fetchIncrementalCursor<IncrementalUser>({
+    client,
+    path: '/incremental/users/cursor.json',
+    key: 'users',
+    schema: IncUserSchema,
+    describe: describeIncUser,
+    startTime: params.startTime,
+    cap,
+    securityLevel,
+    errorLabel: '/incremental/users',
+  });
+  const entry = cache.save('zendesk_incremental_users', { users: screened.records });
+  return {
+    summary: `${screened.records.length} user(s) since ${new Date(params.startTime * 1000).toISOString()}:\n${screened.lines.join('\n')}${screened.warning}`,
+    cacheHandle: entry.handle,
+    flagged: screened.flagged,
+  };
+}
