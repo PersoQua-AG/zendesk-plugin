@@ -169,3 +169,28 @@ export function updateArticle(
     securityLevel,
   );
 }
+
+export interface TranslationCreateFields {
+  locale?: string;
+  title?: string;
+  body?: string;
+  draft?: boolean;
+}
+
+export function createArticleTranslation(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { articleId: number; fields: TranslationCreateFields; markdown: boolean },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  const locale = params.fields.locale ?? DEFAULT_LOCALE;
+  const body = params.fields.body !== undefined ? renderBody(params.fields.body, params.markdown) : undefined;
+  const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale, body });
+  return createRule(
+    client,
+    cache,
+    { collection: `/help_center/articles/${params.articleId}/translations`, key: 'translation', toolName: 'zendesk_create_article_translation', resourceLabel: 'article translation', requiredFields: ['locale', 'title', 'body'] },
+    built,
+    securityLevel,
+  );
+}
