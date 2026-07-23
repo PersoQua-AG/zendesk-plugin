@@ -149,8 +149,11 @@ export async function updateEntity<F extends object>(
   // JSON.stringify drops it, so a raw key-count guard would let an empty PUT through.
   const body = stripUndefined(fields);
   if (Object.keys(body).length === 0) throw new Error(`update_${config.resourceLabel} requires at least one field to change.`);
+  // Defense in depth: percent-encode the id/locale so a traversal segment (e.g. a "../"-style
+  // locale from a direct in-process caller) stays one inert path component and cannot escape the
+  // collection. Not reachable via MCP (the register regex rejects it), but the helper is safe alone.
   const run = () =>
-    client.request<unknown>(`${config.collection}/${id}.json`, { method: 'PUT', body: JSON.stringify({ [config.key]: body }) });
+    client.request<unknown>(`${config.collection}/${encodeURIComponent(String(id))}.json`, { method: 'PUT', body: JSON.stringify({ [config.key]: body }) });
   const raw = config.guard ? await config.guard(`Updating a ${config.resourceLabel}`, run) : await run();
   const parsed = z.object({ [config.key]: IdRecordSchema }).passthrough().safeParse(raw);
   if (!parsed.success) throw new Error(`Unexpected ${config.collection}/{id} update response shape.`);

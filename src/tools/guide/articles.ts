@@ -20,7 +20,14 @@ import type { ReadResult } from '../result.js';
 // when a create/translation omits a locale; any OTHER shape-valid locale string is still accepted
 // (the register schema validates shape, not membership — Zendesk 422s a genuinely unknown locale).
 export const DEFAULT_LOCALE = 'en-us';
-export const GUIDE_LOCALES = ['en-us', 'de'] as const;
+
+// Locale shape must be validated here too, not solely at the register regex: a direct in-process
+// caller could pass a path-segment locale ("../../users/1") that would slot into the locale-keyed
+// translation path. Same shape as the register localeSchema — Zendesk 422s a genuinely unknown one.
+const LOCALE_SHAPE = /^[a-z]{2,3}(-[a-z0-9]{2,4})?$/i;
+function assertLocaleShape(locale: string): void {
+  if (!LOCALE_SHAPE.test(locale)) throw new Error(`Invalid translation locale "${locale}" — expected a shape like "en-us" or "de".`);
+}
 
 const ArticleSchema = z.object({
   id: z.number(),
@@ -183,6 +190,7 @@ export function createArticleTranslation(
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
   const locale = params.fields.locale ?? DEFAULT_LOCALE;
+  assertLocaleShape(locale);
   const body = params.fields.body !== undefined ? renderBody(params.fields.body, params.markdown) : undefined;
   const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale, body });
   return createEntity(
@@ -206,11 +214,12 @@ export function updateArticleTranslation(
   params: { articleId: number; locale: string; fields: TranslationUpdateFields; markdown: boolean },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
+  assertLocaleShape(params.locale);
   const body = params.fields.body !== undefined ? renderBody(params.fields.body, params.markdown) : undefined;
   const built = stripUndefined({ ...params.fields, body });
   // The translation is keyed by locale in the path: PUT .../articles/{id}/translations/{locale}.
-  // updateEntity keys the PUT on its `id` argument (widened to string in Task 1), so the locale
-  // slots directly into the collection tail.
+  // updateEntity keys the PUT on its `id` argument (a string here) and percent-encodes it, so the
+  // locale slots into the collection tail as one inert segment.
   return updateEntity(
     client,
     cache,
