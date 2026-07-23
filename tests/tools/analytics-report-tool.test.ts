@@ -75,4 +75,10 @@ describe('report (composite)', () => {
   it('rejects a non-positive start_time', async () => {
     await expect(report(routedClient(), cacheStub(), { startTime: 0 }, 'standard', DEFAULT_BUSINESS_HOURS)).rejects.toThrow(/start_time/i);
   });
+
+  it('rejects an inverted range (end_time before start_time) with an actionable error', async () => {
+    await expect(
+      report(routedClient(), cacheStub(), { startTime, endTime: startTime - 1 }, 'standard', DEFAULT_BUSINESS_HOURS),
+    ).rejects.toThrow(/end_time.*start_time/i);
+  });
 });

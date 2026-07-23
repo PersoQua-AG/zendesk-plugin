@@ -36,27 +36,62 @@ export interface DurationStats {
   p50Minutes: number;
 }
 
-// Pair activate→fulfill per (ticket, instance) for one metric into closed intervals. A group with
-// an activate but no fulfill is still open → excluded. Earliest activate / latest fulfill win.
-export function pairDurations(events: MetricEvent[], metric: string): Interval[] {
-  const groups = new Map<string, { activate?: number; fulfill?: number }>();
+interface TimedEvent {
+  type: 'activate' | 'fulfill';
+  t: number;
+}
+
+// Pair a ticket's activate/fulfill events into closed intervals by walking them in time order:
+// each activate opens an interval that the next fulfill closes. This keeps DISTINCT cycles on one
+// ticket separate (activate→next fulfill) instead of collapsing them into one earliest→latest span
+// that would inflate reply/resolution time. Used only when instance_id is absent to disambiguate.
+function pairSequential(events: TimedEvent[]): Interval[] {
+  const order = (type: TimedEvent['type']): number => (type === 'activate' ? 0 : 1);
+  const sorted = [...events].sort((a, b) => a.t - b.t || order(a.type) - order(b.type));
+  const out: Interval[] = [];
+  let openStart: number | undefined;
+  for (const e of sorted) {
+    if (e.type === 'activate') {
+      if (openStart === undefined) openStart = e.t; // ignore a second activate before any fulfill
+    } else if (openStart !== undefined && e.t > openStart) {
+      out.push({ startMs: openStart, endMs: e.t });
+      openStart = undefined;
+    }
+  }
+  return out;
+}
+
+// Pair activate→fulfill for one metric into closed intervals. Events carrying an instance_id are
+// grouped per (ticket, instance) — Zendesk's own cycle key — as earliest activate / latest fulfill.
+// Events WITHOUT an instance_id are paired sequentially per ticket so multiple cycles stay distinct.
+// An activate with no matching fulfill is still open → excluded.
+export function pairEventIntervals(events: MetricEvent[], metric: string): Interval[] {
+  const instanced = new Map<string, { activate?: number; fulfill?: number }>();
+  const sequential = new Map<number, TimedEvent[]>();
   for (const e of events) {
     if (e.metric !== metric) continue;
     if (e.type !== 'activate' && e.type !== 'fulfill') continue;
     const t = Date.parse(e.time);
     if (Number.isNaN(t)) continue;
-    const gkey = `${e.ticket_id}-${e.instance_id ?? 0}`;
-    const g = groups.get(gkey) ?? {};
+    if (e.instance_id === undefined || e.instance_id === null) {
+      const arr = sequential.get(e.ticket_id) ?? [];
+      arr.push({ type: e.type, t });
+      sequential.set(e.ticket_id, arr);
+      continue;
+    }
+    const gkey = `${e.ticket_id}-${e.instance_id}`;
+    const g = instanced.get(gkey) ?? {};
     if (e.type === 'activate') g.activate = g.activate === undefined ? t : Math.min(g.activate, t);
     else g.fulfill = g.fulfill === undefined ? t : Math.max(g.fulfill, t);
-    groups.set(gkey, g);
+    instanced.set(gkey, g);
   }
   const out: Interval[] = [];
-  for (const g of groups.values()) {
+  for (const g of instanced.values()) {
     if (g.activate !== undefined && g.fulfill !== undefined && g.fulfill > g.activate) {
       out.push({ startMs: g.activate, endMs: g.fulfill });
     }
   }
+  for (const evts of sequential.values()) out.push(...pairSequential(evts));
   return out;
 }
 
@@ -115,21 +150,23 @@ export interface Report {
   csat: CsatSummary;
 }
 
+// Range membership is half-open [start, end): an instant at exactly rangeEndMs belongs to the NEXT
+// range, so adjacent report windows never double-count the same boundary event.
 function inRange(iso: string | null | undefined, startMs: number, endMs: number): boolean {
   if (!iso) return false;
   const t = Date.parse(iso);
-  return !Number.isNaN(t) && t >= startMs && t <= endMs;
+  return !Number.isNaN(t) && t >= startMs && t < endMs;
 }
 
 function pairsInRange(pairs: Interval[], startMs: number, endMs: number): Interval[] {
-  // A pair is attributed to the range by its activate (start) instant.
-  return pairs.filter((p) => p.startMs >= startMs && p.startMs <= endMs);
+  // A pair is attributed to the range by its activate (start) instant, half-open [start, end).
+  return pairs.filter((p) => p.startMs >= startMs && p.startMs < endMs);
 }
 
 export function buildReport(input: ReportInput): Report {
   const volume = input.tickets.filter((t) => inRange(t.created_at, input.rangeStartMs, input.rangeEndMs)).length;
-  const frt = pairsInRange(pairDurations(input.events, 'reply_time'), input.rangeStartMs, input.rangeEndMs);
-  const res = pairsInRange(pairDurations(input.events, 'resolution_time'), input.rangeStartMs, input.rangeEndMs);
+  const frt = pairsInRange(pairEventIntervals(input.events, 'reply_time'), input.rangeStartMs, input.rangeEndMs);
+  const res = pairsInRange(pairEventIntervals(input.events, 'resolution_time'), input.rangeStartMs, input.rangeEndMs);
   const eventsInRange = input.events.filter((e) => inRange(e.time, input.rangeStartMs, input.rangeEndMs));
   const slaBreaches = countBreaches(eventsInRange);
   const slaBreachTotal = Object.values(slaBreaches).reduce((acc, n) => acc + n, 0);
@@ -182,6 +219,9 @@ export async function report(
     throw new Error('zendesk_report requires a positive unix-seconds start_time.');
   }
   const endTime = params.endTime ?? Math.floor(nowMs / 1000);
+  if (endTime < params.startTime) {
+    throw new Error(`zendesk_report end_time (${endTime}) must be greater than or equal to start_time (${params.startTime}).`);
+  }
   const rangeStartMs = params.startTime * 1000;
   const rangeEndMs = endTime * 1000;
 

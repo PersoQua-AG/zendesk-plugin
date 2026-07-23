@@ -1,16 +1,16 @@
 // tests/tools/analytics-report-aggregation.test.ts
 import { describe, it, expect } from 'vitest';
-import { pairDurations, countBreaches, summariseDurations, buildReport, renderReport } from '../../src/tools/analytics/report.js';
+import { pairEventIntervals, countBreaches, summariseDurations, buildReport, renderReport } from '../../src/tools/analytics/report.js';
 import type { MetricEvent } from '../../src/tools/analytics/incremental.js';
 import type { BusinessHoursConfig } from '../../src/tools/analytics/business-hours.js';
 
 const BERLIN: BusinessHoursConfig = { timeZone: 'Europe/Berlin', workHours: { start: '09:00', end: '17:00' }, workdays: [1, 2, 3, 4, 5] };
 
-const ev = (id: number, ticket: number, metric: string, type: string, time: string, instance = 1): MetricEvent => ({
+const ev = (id: number, ticket: number, metric: string, type: string, time: string, instance: number | null = 1): MetricEvent => ({
   id, ticket_id: ticket, metric, instance_id: instance, type, time,
 });
 
-describe('pairDurations', () => {
+describe('pairEventIntervals', () => {
   it('pairs activate→fulfill per ticket/instance for the target metric', () => {
     const events: MetricEvent[] = [
       ev(1, 42, 'reply_time', 'activate', '2026-07-01T09:00:00Z'),
@@ -18,9 +18,25 @@ describe('pairDurations', () => {
       ev(3, 43, 'reply_time', 'activate', '2026-07-01T10:00:00Z'), // no fulfill → excluded
       ev(4, 42, 'resolution_time', 'activate', '2026-07-01T09:00:00Z'), // other metric → excluded
     ];
-    const pairs = pairDurations(events, 'reply_time');
+    const pairs = pairEventIntervals(events, 'reply_time');
     expect(pairs).toHaveLength(1);
     expect(pairs[0].endMs - pairs[0].startMs).toBe(30 * 60_000);
+  });
+
+  it('keeps two cycles on one ticket distinct when instance_id is absent (no earliest→latest inflation)', () => {
+    // Two activate→fulfill cycles, 30 min each, on the same ticket, NO instance_id to disambiguate.
+    // Earliest-activate→latest-fulfill would collapse to one inflated ~2h30 interval; sequential
+    // pairing must yield two 30-min intervals.
+    const events: MetricEvent[] = [
+      ev(1, 42, 'reply_time', 'activate', '2026-07-01T09:00:00Z', null),
+      ev(2, 42, 'reply_time', 'fulfill', '2026-07-01T09:30:00Z', null),
+      ev(3, 42, 'reply_time', 'activate', '2026-07-01T11:00:00Z', null),
+      ev(4, 42, 'reply_time', 'fulfill', '2026-07-01T11:30:00Z', null),
+    ];
+    const pairs = pairEventIntervals(events, 'reply_time').sort((a, b) => a.startMs - b.startMs);
+    expect(pairs).toHaveLength(2);
+    expect(pairs[0].endMs - pairs[0].startMs).toBe(30 * 60_000);
+    expect(pairs[1].endMs - pairs[1].startMs).toBe(30 * 60_000);
   });
 });
 
@@ -87,5 +103,30 @@ describe('buildReport + renderReport', () => {
     expect(text).toContain('First reply time — business');
     expect(text).toContain('SLA breaches (total 1)');
     expect(text).toContain('CSAT: 67%');
+  });
+});
+
+describe('range membership is half-open [start, end)', () => {
+  const rangeStartMs = Date.UTC(2026, 6, 1, 0, 0);
+  const rangeEndMs = Date.UTC(2026, 6, 31, 0, 0);
+  const boundaryIso = new Date(rangeEndMs).toISOString();
+
+  it('excludes a ticket and a metric interval that land exactly on rangeEndMs', () => {
+    const report = buildReport({
+      tickets: [
+        { id: 1, created_at: new Date(rangeStartMs).toISOString() }, // at start → included
+        { id: 2, created_at: boundaryIso }, // exactly at end → excluded (belongs to next range)
+      ],
+      events: [
+        ev(1, 1, 'reply_time', 'activate', boundaryIso), // starts exactly at end → excluded
+        ev(2, 1, 'reply_time', 'fulfill', new Date(rangeEndMs + 60_000).toISOString()),
+      ],
+      ratings: [],
+      rangeStartMs,
+      rangeEndMs,
+      config: BERLIN,
+    });
+    expect(report.volume).toBe(1);
+    expect(report.firstReplyTime.calendar.count).toBe(0);
   });
 });
