@@ -145,3 +145,27 @@ export function createArticle(
     securityLevel,
   );
 }
+
+export interface ArticleUpdateFields {
+  title?: string;
+  body?: string;
+  draft?: boolean;
+}
+
+export function updateArticle(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { articleId: number; fields: ArticleUpdateFields; markdown: boolean },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  const body = params.fields.body !== undefined ? renderBody(params.fields.body, params.markdown) : undefined;
+  const built = stripUndefined({ ...params.fields, body });
+  return updateEntity(
+    client,
+    cache,
+    { collection: '/help_center/articles', key: 'article', toolName: 'zendesk_update_article', resourceLabel: 'article', guard: withAdminGuard },
+    params.articleId,
+    built,
+    securityLevel,
+  );
+}
