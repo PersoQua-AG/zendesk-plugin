@@ -12,6 +12,7 @@ import { registerTicketTools } from './register/tickets.js';
 import { registerSearchTools } from './register/search.js';
 import { registerDirectoryTools } from './register/directory.js';
 import { registerBusinessRulesTools } from './register/business-rules.js';
+import { registerGuideTools } from './register/guide.js';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -55,6 +56,7 @@ registerTicketTools(server, ctx);
 registerSearchTools(server, ctx);
 registerDirectoryTools(server, ctx);
 registerBusinessRulesTools(server, ctx);
+registerGuideTools(server, ctx);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
