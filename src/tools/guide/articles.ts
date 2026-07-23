@@ -68,3 +68,24 @@ export async function listArticles(
     errorLabel: '/help_center/articles',
   });
 }
+
+const SingleArticleSchema = z.object({ article: ArticleSchema });
+
+export async function getArticle(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { articleId: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  const raw = await client.request<unknown>(`/help_center/articles/${params.articleId}.json`);
+  const parsed = SingleArticleSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /help_center/articles/{id} response shape.');
+  const { value, flagged } = screenRecordDeep(parsed.data, (key) => `article-${params.articleId}-${key}`, makeScreener(securityLevel));
+  const safe = value as { article: Article };
+  const entry = cache.save('zendesk_get_article', safe);
+  return {
+    summary: `Article #${safe.article.id} ${safe.article.title ?? '(untitled)'} [${safe.article.locale ?? '?'}]${flagged ? SCREEN_WARNING : ''}`,
+    cacheHandle: entry.handle,
+    flagged,
+  };
+}
