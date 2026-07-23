@@ -16,7 +16,6 @@ export interface AuthorizeDeps {
   exchange?: typeof exchangeCodeForTokens;
   generateVerifier?: () => string;
   generateState?: () => string;
-  fetchImpl?: typeof fetch;
   now?: () => number;
   print?: (line: string) => void;
 }
@@ -32,7 +31,6 @@ export async function authorize(deps: AuthorizeDeps): Promise<void> {
     exchange = exchangeCodeForTokens,
     generateVerifier = generateCodeVerifier,
     generateState = () => randomBytes(16).toString('base64url'),
-    fetchImpl = fetch,
     now = Date.now,
     print = (line) => process.stdout.write(`${line}\n`),
   } = deps;
@@ -47,7 +45,7 @@ export async function authorize(deps: AuthorizeDeps): Promise<void> {
   print(`Waiting for the callback on http://localhost:${config.callbackPort}/callback ...`);
 
   const result = await waitForCode(config.callbackPort, state);
-  const tokens = await exchange(config, result.code, verifier, result.redirectUri, fetchImpl);
+  const tokens = await exchange(config, result.code, verifier, result.redirectUri);
 
   const store = new TokenStore(`${dataDir}/tokens.enc`, config.clientSecret);
   store.save({
