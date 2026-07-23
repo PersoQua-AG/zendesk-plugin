@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "zendesk",
+  "owner": {
+    "name": "Persoqua",
+    "email": "r.pfisterer@persoqua.de"
+  },
+  "metadata": {
+    "description": "Full-spectrum Zendesk integration for Claude Code — tickets, users, business rules, Guide, analytics.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "zendesk",
+      "source": "./",
+      "description": "Manage Zendesk tickets, users, organizations, business rules, and Help Center content from Claude Code.",
+      "category": "productivity"
+    }
+  ]
+}
