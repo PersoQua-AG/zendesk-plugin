@@ -8,8 +8,17 @@ export interface ZendeskHttpClientOptions {
   subdomain: string;
   authManager: AuthManager;
   rateLimiter: RateLimiter;
+  // Optional lower bucket for /incremental/* endpoints (10 req/min global, PRD §5 infra 1).
+  // Absent → the 'incremental' rateClass falls back to the default limiter.
+  incrementalRateLimiter?: RateLimiter;
   fetchImpl?: typeof fetch;
   maxRateLimitRetries?: number;
+}
+
+// Which account-wide bucket a request is metered against. Incremental export is special-cased
+// at 10/min; everything else shares the 400/min bucket.
+export interface RequestOptions {
+  rateClass?: 'default' | 'incremental';
 }
 
 export class ZendeskHttpClient {
@@ -23,12 +32,22 @@ export class ZendeskHttpClient {
     this.maxRateLimitRetries = options.maxRateLimitRetries ?? MAX_RATE_LIMIT_RETRIES;
   }
 
-  // On 429 we feed the Retry-After window to the limiter and retry: the next
-  // acquire() blocks until the window elapses. This centralizes rate-limit
-  // self-healing so paginators and bulk tools don't each reimplement it.
-  async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // Pick the bucket for this request. 'incremental' selects the 10/min limiter when configured,
+  // otherwise falls back to the default so the client is usable without the second limiter.
+  private limiterFor(opts: RequestOptions): RateLimiter {
+    if (opts.rateClass === 'incremental' && this.options.incrementalRateLimiter) {
+      return this.options.incrementalRateLimiter;
+    }
+    return this.options.rateLimiter;
+  }
+
+  // On 429 we feed the Retry-After window to the SAME limiter we acquired from and retry: the
+  // next acquire() blocks until the window elapses. This centralizes rate-limit self-healing so
+  // paginators and bulk tools don't each reimplement it.
+  async request<T>(path: string, init: RequestInit = {}, opts: RequestOptions = {}): Promise<T> {
+    const limiter = this.limiterFor(opts);
     for (let attempt = 0; ; attempt++) {
-      await this.options.rateLimiter.acquire();
+      await limiter.acquire();
       const token = await this.options.authManager.getAccessToken();
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         ...init,
@@ -39,7 +58,7 @@ export class ZendeskHttpClient {
         },
       });
       if (response.status === 429) {
-        this.options.rateLimiter.reportRetryAfter(parseRetryAfter(response.headers.get('retry-after')));
+        limiter.reportRetryAfter(parseRetryAfter(response.headers.get('retry-after')));
         if (attempt >= this.maxRateLimitRetries) {
           throw await mapErrorResponse(response);
         }
