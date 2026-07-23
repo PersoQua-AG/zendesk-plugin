@@ -53,6 +53,22 @@ function renderBody(body: string, useMarkdown: boolean): string {
   return useMarkdown ? markdownToHtml(body) : body;
 }
 
+// A whitespace-only body still renders to structurally-non-empty HTML (markdownToHtml('# ') →
+// '<h1></h1>'), so the raw-string required-`body` guard would let it through. Strip tags and check
+// for real text content: a body with no content is treated as missing for the required-field guard.
+function hasNoContent(html: string): boolean {
+  return html.replace(/<[^>]*>/g, '').trim() === '';
+}
+
+// Render a create body, collapsing a content-empty result to undefined so the required-field guard
+// in createEntity rejects it (rather than POSTing an empty article). Returns undefined when the
+// caller omitted a body too, so "missing" and "effectively empty" fail identically.
+function renderRequiredBody(body: string | undefined, useMarkdown: boolean): string | undefined {
+  if (body === undefined) return undefined;
+  const rendered = renderBody(body, useMarkdown);
+  return hasNoContent(rendered) ? undefined : rendered;
+}
+
 export async function listArticles(
   client: ZendeskHttpClient,
   cache: ResponseCache,
@@ -141,7 +157,7 @@ export function createArticle(
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
   const locale = params.fields.locale ?? DEFAULT_LOCALE;
-  const body = params.fields.body !== undefined ? renderBody(params.fields.body, params.markdown) : undefined;
+  const body = renderRequiredBody(params.fields.body, params.markdown);
   const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale, body });
   return createEntity(
     client,
@@ -191,7 +207,7 @@ export function createArticleTranslation(
 ): Promise<{ summary: string; cacheHandle: string }> {
   const locale = params.fields.locale ?? DEFAULT_LOCALE;
   assertLocaleShape(locale);
-  const body = params.fields.body !== undefined ? renderBody(params.fields.body, params.markdown) : undefined;
+  const body = renderRequiredBody(params.fields.body, params.markdown);
   const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale, body });
   return createEntity(
     client,
