@@ -210,9 +210,9 @@ const describeReportEvent = makeDescribe<MetricEvent>('report-event', (e) => `#$
 export async function report(
   client: ZendeskHttpClient,
   cache: ResponseCache,
-  params: { startTime: number; endTime?: number; maxRecords?: number },
-  securityLevel: SecurityLevel = 'standard',
+  params: { startTime: number; endTime?: number },
   config: BusinessHoursConfig,
+  securityLevel: SecurityLevel = 'standard',
   nowMs: number = Date.now(),
 ): Promise<ReadResult> {
   if (!Number.isInteger(params.startTime) || params.startTime <= 0) {
@@ -226,29 +226,29 @@ export async function report(
   const rangeEndMs = endTime * 1000;
 
   // All pulls screen at ingest via the reused fetch layer (identical to the standalone readers).
-  const ticketsS = await fetchIncrementalCursor<ReportTicket>({
+  const screenedTickets = await fetchIncrementalCursor<ReportTicket>({
     client, path: '/incremental/tickets/cursor.json', key: 'tickets', schema: ReportTicketSchema,
     describe: describeReportTicket, startTime: params.startTime, cap: DEFAULT_INCREMENTAL_CAP, securityLevel, errorLabel: '/incremental/tickets',
   });
-  const eventsS = await fetchIncrementalTime<MetricEvent>({
+  const screenedEvents = await fetchIncrementalTime<MetricEvent>({
     client, path: '/incremental/ticket_metric_events.json', key: 'ticket_metric_events', schema: MetricEventSchema,
     describe: describeReportEvent, startTime: params.startTime, cap: DEFAULT_EVENTS_CAP, securityLevel, errorLabel: '/incremental/ticket_metric_events',
   });
-  const ratingsS = await fetchRatings(client, { startTime: params.startTime, cap: DEFAULT_RATINGS_CAP }, securityLevel);
+  const screenedRatings = await fetchRatings(client, { startTime: params.startTime, cap: DEFAULT_RATINGS_CAP }, securityLevel);
 
   const built = buildReport({
-    tickets: ticketsS.records,
-    events: eventsS.records,
-    ratings: ratingsS.records,
+    tickets: screenedTickets.records,
+    events: screenedEvents.records,
+    ratings: screenedRatings.records,
     rangeStartMs,
     rangeEndMs,
     config,
   });
-  const flagged = ticketsS.flagged || eventsS.flagged || ratingsS.flagged;
+  const flagged = screenedTickets.flagged || screenedEvents.flagged || screenedRatings.flagged;
   const entry = cache.save('zendesk_report', {
-    tickets: ticketsS.records,
-    ticket_metric_events: eventsS.records,
-    satisfaction_ratings: ratingsS.records,
+    tickets: screenedTickets.records,
+    ticket_metric_events: screenedEvents.records,
+    satisfaction_ratings: screenedRatings.records,
     report: built,
   });
   return {

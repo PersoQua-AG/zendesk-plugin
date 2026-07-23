@@ -44,7 +44,7 @@ describe('report (composite)', () => {
   it('aggregates across incremental + metric events + ratings and caches raw pulls + report', async () => {
     const client = routedClient();
     const cache = cacheStub();
-    const r = await report(client, cache, { startTime, endTime }, 'standard', DEFAULT_BUSINESS_HOURS);
+    const r = await report(client, cache, { startTime, endTime }, DEFAULT_BUSINESS_HOURS, 'standard');
 
     // incremental endpoints use the 10/min bucket.
     const calls = (client.request as ReturnType<typeof vi.fn>).mock.calls;
@@ -68,17 +68,17 @@ describe('report (composite)', () => {
   it('defaults endTime to the injected clock', async () => {
     const client = routedClient();
     const nowMs = Date.UTC(2026, 6, 31, 23, 59);
-    const r = await report(client, cacheStub(), { startTime }, 'standard', DEFAULT_BUSINESS_HOURS, nowMs);
+    const r = await report(client, cacheStub(), { startTime }, DEFAULT_BUSINESS_HOURS, 'standard', nowMs);
     expect(r.summary).toContain('Ticket volume');
   });
 
   it('rejects a non-positive start_time', async () => {
-    await expect(report(routedClient(), cacheStub(), { startTime: 0 }, 'standard', DEFAULT_BUSINESS_HOURS)).rejects.toThrow(/start_time/i);
+    await expect(report(routedClient(), cacheStub(), { startTime: 0 }, DEFAULT_BUSINESS_HOURS, 'standard')).rejects.toThrow(/start_time/i);
   });
 
   it('rejects an inverted range (end_time before start_time) with an actionable error', async () => {
     await expect(
-      report(routedClient(), cacheStub(), { startTime, endTime: startTime - 1 }, 'standard', DEFAULT_BUSINESS_HOURS),
+      report(routedClient(), cacheStub(), { startTime, endTime: startTime - 1 }, DEFAULT_BUSINESS_HOURS, 'standard'),
     ).rejects.toThrow(/end_time.*start_time/i);
   });
 });

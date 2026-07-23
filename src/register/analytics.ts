@@ -77,6 +77,6 @@ export function registerAnalyticsTools(server: McpServer, ctx: ToolContext): voi
       description: 'Composite analytics report over a date range: ticket volume, first-reply-time and resolution-time (calendar AND business-hours), SLA-breach count, and CSAT. Requires start_time (unix seconds); end_time defaults to now. Business-hours basis comes from timezone/work_hours/workdays config.',
       inputSchema: { startTime: startTimeSchema, endTime: startTimeSchema.optional() },
     },
-    async ({ startTime, endTime }) => okWithHandle(await report(httpClient, cache, { startTime, endTime }, securityLevel, reportConfig)),
+    async ({ startTime, endTime }) => okWithHandle(await report(httpClient, cache, { startTime, endTime }, reportConfig, securityLevel)),
   );
 }
