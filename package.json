@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=20" },
+  "bin": { "zendesk-authorize": "dist/bin/authorize.js" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "authorize": "node dist/bin/authorize.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
