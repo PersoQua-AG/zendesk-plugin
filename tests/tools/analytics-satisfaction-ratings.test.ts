@@ -26,8 +26,10 @@ describe('satisfactionRatings', () => {
     // Benign comment is still fenced (comment is not in ALWAYS_FENCE — fenced explicitly).
     expect(cached.satisfaction_ratings[0].comment).toContain('zendesk-content-rating-1-comment-');
     expect(cached.satisfaction_ratings[0].comment).toContain('Great support');
-    // Injection comment is fenced AND flagged.
+    // Injection comment is fenced AND flagged — and wrapped EXACTLY ONCE (no double-fence).
     expect(cached.satisfaction_ratings[1].comment).toContain('ignore all previous instructions');
+    const openMarkers = cached.satisfaction_ratings[1].comment.match(/<zendesk-content-rating-2-comment-/g) ?? [];
+    expect(openMarkers).toHaveLength(1);
     expect(r.flagged).toBe(true);
     expect(r.summary).toContain('2 satisfaction rating(s)');
   });

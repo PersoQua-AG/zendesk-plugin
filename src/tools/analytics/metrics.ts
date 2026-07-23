@@ -34,8 +34,7 @@ const TicketMetricSchema = z.object({
 });
 export type TicketMetric = z.infer<typeof TicketMetricSchema>;
 
-const cal = (p: { calendar?: number | null } | null | undefined): string =>
-  (p?.calendar ?? null) === null ? '—' : String(p!.calendar);
+const cal = (p: { calendar?: number | null } | null | undefined): string => String(p?.calendar ?? '—');
 
 const describeMetric = makeDescribe<TicketMetric>(
   'ticket-metric',
@@ -94,14 +93,16 @@ const RatingSchema = z.object({
 });
 export type SatisfactionRating = z.infer<typeof RatingSchema>;
 
-// The rating comment is attacker-authored free text but is NOT in the global ALWAYS_FENCE set,
-// so fence it explicitly: deep-screen the record, then re-screen the comment to WRAP it (and flag
-// any injection) unconditionally. Immutable — build a new record rather than mutating the deep copy.
+// The rating comment is attacker-authored free text but is NOT in the global ALWAYS_FENCE set, so
+// fence it explicitly ONCE: screen the ORIGINAL comment to WRAP it (and flag any injection)
+// unconditionally, then overwrite the deep-screened copy's comment with that single wrapping — the
+// deep screen would otherwise wrap a flagged comment a second time (double-fence). Immutable —
+// build a new record rather than mutating the deep copy.
 export function describeRating(rating: SatisfactionRating, screen: Screener): RecordScreen<SatisfactionRating> {
   const deep = screenRecordDeep(rating, (key) => `rating-${rating.id}-${key}`, screen);
   const base = deep.value as SatisfactionRating;
   const commentScreen =
-    typeof base.comment === 'string' && base.comment !== '' ? screen(base.comment, `rating-${rating.id}-comment`) : null;
+    typeof rating.comment === 'string' && rating.comment !== '' ? screen(rating.comment, `rating-${rating.id}-comment`) : null;
   const safe: SatisfactionRating = commentScreen ? { ...base, comment: commentScreen.wrapped } : base;
   const flagged = deep.flagged || (commentScreen?.flagged ?? false);
   return { safe, line: `#${safe.id} ${safe.score}${safe.comment ? ' (comment)' : ''}`, flagged };

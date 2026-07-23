@@ -42,14 +42,12 @@ export async function* paginateIncrementalCursor<T>(
   fetchPage: (params: { startTime?: number; cursor?: string }) => Promise<IncrementalCursorPage<T>>,
   startTime: number,
 ): AsyncGenerator<T[], void, void> {
-  let cursor: string | undefined;
-  let first = true;
+  let cursor: string | undefined; // undefined only on the first call → send start_time, then cursor
   for (let pages = 0; ; pages++) {
     if (pages >= MAX_INCREMENTAL_PAGES) {
       throw new Error(`Incremental cursor export exceeded the ${MAX_INCREMENTAL_PAGES}-page cap.`);
     }
-    const page = await fetchPage(first ? { startTime } : { cursor });
-    first = false;
+    const page = await fetchPage(cursor === undefined ? { startTime } : { cursor });
     yield page.records;
     if (page.end_of_stream) return;
     if (!page.after_cursor) {
@@ -100,7 +98,9 @@ function assertStartTime(startTime: number): void {
   }
 }
 
-export interface IncrementalCursorConfig<T extends { id: number }> {
+// Shared config for both incremental readers (cursor-mode and time-mode) — the fields are
+// identical; only the pagination shape behind them differs.
+export interface IncrementalReaderConfig<T extends { id: number }> {
   client: ZendeskHttpClient;
   path: string; // e.g. '/incremental/tickets/cursor.json'
   key: string; // envelope array key, e.g. 'tickets'
@@ -113,7 +113,7 @@ export interface IncrementalCursorConfig<T extends { id: number }> {
 }
 
 export async function fetchIncrementalCursor<T extends { id: number }>(
-  config: IncrementalCursorConfig<T>,
+  config: IncrementalReaderConfig<T>,
 ): Promise<ScreenedSummary<T>> {
   assertStartTime(config.startTime);
   const pageSchema = z
@@ -222,20 +222,8 @@ export async function incrementalUsers(
 
 // ---- Generic time reader (paginate time-mode + screen) ----
 
-export interface IncrementalTimeConfig<T extends { id: number }> {
-  client: ZendeskHttpClient;
-  path: string; // e.g. '/incremental/ticket_metric_events.json'
-  key: string; // envelope array key, e.g. 'ticket_metric_events'
-  schema: z.ZodType<T>;
-  describe: (record: T, screen: Screener) => RecordScreen<T>;
-  startTime: number;
-  cap: number;
-  securityLevel: SecurityLevel;
-  errorLabel: string;
-}
-
 export async function fetchIncrementalTime<T extends { id: number }>(
-  config: IncrementalTimeConfig<T>,
+  config: IncrementalReaderConfig<T>,
 ): Promise<ScreenedSummary<T>> {
   assertStartTime(config.startTime);
   const pageSchema = z
