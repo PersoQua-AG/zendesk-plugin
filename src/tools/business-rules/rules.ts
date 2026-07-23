@@ -163,7 +163,7 @@ function isAdminScopeDenial(message: string): boolean {
 // Business-rules writes require an admin role. The base client maps a 403 to a generic
 // ZendeskPermissionError; re-map a genuine scope∩role denial to an actionable, resource-specific
 // message (preserving the original as `cause`). Non-403s and plan/feature 403s pass through.
-const withAdminGuard: WriteGuard = async (action, thunk) => {
+export const withAdminGuard: WriteGuard = async (action, thunk) => {
   try {
     return await thunk();
   } catch (err) {
@@ -181,7 +181,7 @@ const withAdminGuard: WriteGuard = async (action, thunk) => {
 const RuleEnvelopeSchema = z.record(z.unknown());
 const RuleRecordSchema = z.object({ id: z.number() }).passthrough();
 
-async function createRule(
+export async function createRule(
   client: ZendeskHttpClient,
   cache: ResponseCache,
   config: RuleWriteConfig,

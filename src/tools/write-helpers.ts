@@ -112,7 +112,7 @@ export async function updateEntity<F extends object>(
   client: ZendeskHttpClient,
   cache: ResponseCache,
   config: UpdateEntityConfig,
-  id: number,
+  id: number | string,
   fields: F,
   securityLevel: SecurityLevel,
 ): Promise<{ summary: string; cacheHandle: string }> {
