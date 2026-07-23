@@ -194,3 +194,30 @@ export function createArticleTranslation(
     securityLevel,
   );
 }
+
+export interface TranslationUpdateFields {
+  title?: string;
+  body?: string;
+  draft?: boolean;
+}
+
+export function updateArticleTranslation(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { articleId: number; locale: string; fields: TranslationUpdateFields; markdown: boolean },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  const body = params.fields.body !== undefined ? renderBody(params.fields.body, params.markdown) : undefined;
+  const built = stripUndefined({ ...params.fields, body });
+  // The translation is keyed by locale in the path: PUT .../articles/{id}/translations/{locale}.
+  // updateEntity keys the PUT on its `id` argument (widened to string in Task 1), so the locale
+  // slots directly into the collection tail.
+  return updateEntity(
+    client,
+    cache,
+    { collection: `/help_center/articles/${params.articleId}/translations`, key: 'translation', toolName: 'zendesk_update_article_translation', resourceLabel: 'article translation', guard: withAdminGuard },
+    params.locale,
+    built,
+    securityLevel,
+  );
+}
