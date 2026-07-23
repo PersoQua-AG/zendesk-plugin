@@ -107,3 +107,27 @@ export function createSection(
     securityLevel,
   );
 }
+
+export interface CategoryCreateFields {
+  name?: string;
+  locale?: string;
+  description?: string;
+  position?: number;
+}
+
+export function createCategory(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { fields: CategoryCreateFields },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  const locale = params.fields.locale ?? DEFAULT_LOCALE;
+  const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale });
+  return createRule(
+    client,
+    cache,
+    { collection: '/help_center/categories', key: 'category', toolName: 'zendesk_create_category', resourceLabel: 'category', requiredFields: ['name', 'locale'] },
+    built,
+    securityLevel,
+  );
+}
