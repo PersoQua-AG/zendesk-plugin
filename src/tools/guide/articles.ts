@@ -89,3 +89,32 @@ export async function getArticle(
     flagged,
   };
 }
+
+const ArticleSearchSchema = z.object({ results: z.array(ArticleSchema) });
+
+export async function searchArticles(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { query: string; locale?: string; perPage?: number },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<ReadResult> {
+  if (params.query.trim() === '') throw new Error('search_articles requires a non-empty query.');
+  // Search is offset-style (not CBP). Fetch one defensively-capped page; per_page is clamped to the
+  // Zendesk per-page maximum so an oversized result set cannot push an unbounded array into cache.
+  const perPage = Math.min(params.perPage ?? MAX_PAGE_SIZE, MAX_PAGE_SIZE);
+  const parts = [`query=${encodeURIComponent(params.query)}`, `per_page=${perPage}`];
+  if (params.locale) parts.push(`locale=${encodeURIComponent(params.locale)}`);
+  const raw = await client.request<unknown>(`/help_center/articles/search.json?${parts.join('&')}`);
+  const parsed = ArticleSearchSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Unexpected /help_center/articles/search response shape.');
+  const capped = parsed.data.results.slice(0, perPage);
+  const screened = summariseScreened(capped, describeArticle, securityLevel);
+  const entry = cache.save('zendesk_search_articles', { results: screened.records });
+  // The query echoed in the summary is caller-authored (trusted), not attacker-controlled Zendesk
+  // content, so it is safe unscreened; the result lines render from the SCREENED records.
+  return {
+    summary: `${screened.records.length} article(s) matching "${params.query}":\n${screened.lines.join('\n')}${screened.warning}`,
+    cacheHandle: entry.handle,
+    flagged: screened.flagged,
+  };
+}
