@@ -19,14 +19,28 @@ terminal. Images cannot be generated in the build environment.)_
 
 ## Install
 
-Add the marketplace and install the plugin, then build it:
+From Claude Code, add the marketplace and install the plugin:
+
+```
+/plugin marketplace add PersoQua-AG/zendesk-plugin
+/plugin install zendesk@zendesk
+```
+
+`marketplace add` / `plugin install` clone only committed files and do **not**
+run a build, so the compiled `dist/` is committed to the repo (see note below).
+
+To work on the plugin from source instead:
 
 ```bash
 git clone https://github.com/PersoQua-AG/zendesk-plugin.git
 cd zendesk-plugin
-npm install
-npm run build
+npm install   # `prepare` runs the build automatically
 ```
+
+> **`dist/` is committed on purpose** so the marketplace install runs without a
+> build step. Whenever you change anything under `src/`, re-run `npm run build`
+> and commit the updated `dist/` — a stale or missing `dist/` means
+> `MODULE_NOT_FOUND` on a real install.
 
 ## Setup
 
@@ -59,23 +73,33 @@ When Claude Code installs the plugin it prompts for `userConfig`:
 ### 3. Authorize (one time)
 The one-time first-token flow runs a local browser callback, so it is a CLI
 step, not an in-chat action. From the plugin directory, with the same
-subdomain / client credentials exported:
+subdomain / client credentials **and the same `CLAUDE_PLUGIN_DATA`** the server
+uses exported:
 
 ```bash
 export ZENDESK_SUBDOMAIN=acme
 export ZENDESK_OAUTH_CLIENT_ID=...        # from step 1
 export ZENDESK_OAUTH_CLIENT_SECRET=...    # from step 1
+export CLAUDE_PLUGIN_DATA=...             # MUST match what the server uses (see below)
+export ZENDESK_OAUTH_CALLBACK_PORT=8976   # only if you overrode oauth_callback_port
 npm run authorize
 ```
 
 It prints an authorization URL — open it in your browser, approve, and the CLI
 captures the redirect, exchanges the code, and saves encrypted tokens
-(AES-256-GCM) under the plugin data directory. The plugin then refreshes the
-token automatically; you only re-run `authorize` if you revoke access or rotate
-the client secret.
+(AES-256-GCM) to the resolved `tokens.enc` path, which it prints. The plugin
+then refreshes the token automatically; you only re-run `authorize` if you
+revoke access or rotate the client secret.
 
-> The tokens are encrypted with a key derived from your client secret and match
-> the path the server reads, so the server picks them up with no extra steps.
+> **`CLAUDE_PLUGIN_DATA` must match.** The server receives `CLAUDE_PLUGIN_DATA`
+> from its `plugin.json` env and reads `tokens.enc` from `$CLAUDE_PLUGIN_DATA`.
+> The `authorize` CLI writes to the **same** path only if you export the same
+> value — otherwise it writes to the default `.zendesk-plugin-data/` and the
+> server reports "No authorization found". If you leave `CLAUDE_PLUGIN_DATA`
+> unset, the CLI prints a warning and the absolute path it used; make sure that
+> path is where the server looks. The tokens are encrypted with a key derived
+> from your client secret, so the same credentials + same path let the server
+> pick them up with no extra steps.
 
 ### 4. Confirm
 Ask Claude: **"Who am I in Zendesk?"** → runs `zendesk_get_me` and confirms auth.
