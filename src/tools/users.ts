@@ -6,6 +6,7 @@ import type { SecurityLevel } from '../security/screen.js';
 import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING } from './screening.js';
 import { SEARCH_HARD_CAP } from './search.js';
 import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
+import { collectOffset } from '../client/paginator.js';
 import { updateEntity } from './write-helpers.js';
 import type { ReadResult } from './result.js';
 
@@ -51,19 +52,14 @@ export async function searchUsers(
   const cap = Math.min(params.maxRecords ?? 100, SEARCH_HARD_CAP);
   const encoded = encodeURIComponent(params.query);
 
-  const users: User[] = [];
   let count = 0;
-  let page = 1;
-  while (users.length < cap) {
+  const capped = await collectOffset<User>(async (page) => {
     const raw = await client.request<unknown>(`/users/search.json?query=${encoded}&per_page=100&page=${page}`);
     const parsed = SearchUsersPageSchema.safeParse(raw);
     if (!parsed.success) throw new Error('Unexpected /users/search response shape.');
     count = parsed.data.count;
-    users.push(...parsed.data.users);
-    if (!parsed.data.next_page || parsed.data.users.length === 0) break;
-    page += 1;
-  }
-  const capped = users.slice(0, cap);
+    return { records: parsed.data.users, nextPage: parsed.data.next_page ?? null };
+  }, cap);
   const screened = summariseScreened(capped, describeUser, securityLevel);
   const entry = cache.save('zendesk_search_users', { users: screened.records, count });
   return {

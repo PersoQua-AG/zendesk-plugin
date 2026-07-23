@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { paginateCbp, collectCbp, cbpPageSchema, type CbpPage } from '../../src/client/paginator.js';
+import { paginateCbp, collectCbp, collectOffset, cbpPageSchema, type CbpPage } from '../../src/client/paginator.js';
 import { z } from 'zod';
 
 function page(records: number[], hasMore: boolean, afterCursor: string | null): CbpPage<number> {
@@ -46,6 +46,32 @@ describe('CBP paginator', () => {
     let n = 0;
     const fetchPage = async () => page([n], true, `cursor-${n++}`);
     await expect(collectCbp(fetchPage, Number.MAX_SAFE_INTEGER)).rejects.toThrow(/page cap/i);
+  });
+});
+
+describe('collectOffset', () => {
+  it('walks pages until next_page is null and flattens them', async () => {
+    const pages = [
+      { records: [1, 2], nextPage: 'p2' },
+      { records: [3], nextPage: null },
+    ];
+    let call = 0;
+    const fetchPage = async (page: number) => {
+      expect(page).toBe(call + 1);
+      return pages[call++];
+    };
+    expect(await collectOffset(fetchPage, 100)).toEqual([1, 2, 3]);
+  });
+
+  it('stops at the cap even when more pages exist', async () => {
+    const fetchPage = async () => ({ records: [1, 2, 3], nextPage: 'more' });
+    expect(await collectOffset(fetchPage, 2)).toEqual([1, 2]);
+  });
+
+  it('stops on an empty page', async () => {
+    let call = 0;
+    const fetchPage = async () => (call++ === 0 ? { records: [1], nextPage: 'p2' } : { records: [], nextPage: 'p3' });
+    expect(await collectOffset(fetchPage, 100)).toEqual([1]);
   });
 });
 

@@ -53,3 +53,21 @@ export async function collectCbp<T>(
   }
   return all.slice(0, cap);
 }
+
+// Offset-pagination twin of collectCbp for the /search and /users/search subsystems:
+// walk `?page=1,2,…` until a page reports no next_page (or comes back empty), capping the
+// accumulated set so an oversized maxRecords can never pull an unbounded result into memory.
+export async function collectOffset<T>(
+  fetchPage: (page: number) => Promise<{ records: T[]; nextPage: string | null }>,
+  cap: number,
+): Promise<T[]> {
+  const all: T[] = [];
+  let page = 1;
+  while (all.length < cap) {
+    const { records, nextPage } = await fetchPage(page);
+    all.push(...records);
+    if (!nextPage || records.length === 0) break;
+    page += 1;
+  }
+  return all.slice(0, cap);
+}

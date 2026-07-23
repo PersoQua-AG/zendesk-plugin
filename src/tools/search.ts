@@ -4,7 +4,7 @@ import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { screenRecordDeep, summariseScreened, type RecordScreen, type Screener } from './screening.js';
-import { collectCbp, type CbpPage } from '../client/paginator.js';
+import { collectCbp, collectOffset, type CbpPage } from '../client/paginator.js';
 import type { ReadResult } from './result.js';
 
 export const SEARCH_HARD_CAP = 1000; // Zendesk /search returns at most 1000 results.
@@ -35,19 +35,14 @@ export async function search(
   const query = params.type ? `type:${params.type} ${params.query}` : params.query;
   const encoded = encodeURIComponent(query);
 
-  const results: Array<Record<string, unknown>> = [];
   let count = 0;
-  let page = 1;
-  while (results.length < cap) {
+  const capped = await collectOffset<Record<string, unknown>>(async (page) => {
     const raw = await client.request<unknown>(`/search.json?query=${encoded}&per_page=100&page=${page}`);
     const parsed = SearchPageSchema.safeParse(raw);
     if (!parsed.success) throw new Error('Unexpected /search response shape.');
     count = parsed.data.count;
-    results.push(...parsed.data.results);
-    if (!parsed.data.next_page || parsed.data.results.length === 0) break;
-    page += 1;
-  }
-  const capped = results.slice(0, cap);
+    return { records: parsed.data.results, nextPage: parsed.data.next_page ?? null };
+  }, cap);
   const screened = summariseScreened(capped, describeResult, securityLevel);
   const entry = cache.save('zendesk_search', { results: screened.records, count });
   return {
