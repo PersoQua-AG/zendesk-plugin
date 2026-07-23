@@ -1,6 +1,15 @@
 import { createServer, type Server } from 'node:http';
+import { z } from 'zod';
 
 const DEFAULT_CALLBACK_TIMEOUT_MS = 300_000;
+
+// Zendesk's token endpoint is a trust boundary: a malformed body (e.g. missing
+// expires_in) must fail loudly here, not silently produce expiresAt=NaN downstream.
+const tokenResponseSchema = z.object({
+  access_token: z.string().min(1),
+  refresh_token: z.string().min(1),
+  expires_in: z.number().finite(),
+});
 
 export interface OAuthConfig {
   subdomain: string;
@@ -103,8 +112,17 @@ async function postToken(
   if (!response.ok) {
     throw new Error(`${errorLabel}: ${response.status} ${await response.text()}`);
   }
-  const parsed = (await response.json()) as { access_token: string; refresh_token: string; expires_in: number };
-  return { accessToken: parsed.access_token, refreshToken: parsed.refresh_token, expiresIn: parsed.expires_in };
+  const parsed = tokenResponseSchema.safeParse(await response.json());
+  if (!parsed.success) {
+    // Report which fields are wrong, never the raw body (it carries the tokens).
+    const fields = parsed.error.issues.map((i) => i.path.join('.')).join(', ');
+    throw new Error(`${errorLabel}: malformed token response (invalid/missing: ${fields})`);
+  }
+  return {
+    accessToken: parsed.data.access_token,
+    refreshToken: parsed.data.refresh_token,
+    expiresIn: parsed.data.expires_in,
+  };
 }
 
 export function exchangeCodeForTokens(

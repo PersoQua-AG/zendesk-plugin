@@ -95,6 +95,24 @@ describe('exchangeCodeForTokens', () => {
       exchangeCodeForTokens(config, 'bad-code', 'verifier-1', 'http://localhost:18976/callback', fakeFetch),
     ).rejects.toThrow(/400/);
   });
+
+  it('throws a clear error (not NaN downstream) when expires_in is missing', async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ access_token: 'at-1', refresh_token: 'rt-1' }), { status: 200 })) as typeof fetch;
+    await expect(
+      exchangeCodeForTokens(config, 'code', 'verifier-1', 'http://localhost:18976/callback', fakeFetch),
+    ).rejects.toThrow(/malformed token response.*expires_in/);
+  });
+
+  it('throws when expires_in is not a number', async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 'soon' }), {
+        status: 200,
+      })) as typeof fetch;
+    await expect(
+      exchangeCodeForTokens(config, 'code', 'verifier-1', 'http://localhost:18976/callback', fakeFetch),
+    ).rejects.toThrow(/malformed token response.*expires_in/);
+  });
 });
 
 describe('refreshAccessToken', () => {
@@ -110,5 +128,13 @@ describe('refreshAccessToken', () => {
 
     const result = await refreshAccessToken(config, 'rt-old', fakeFetch);
     expect(result).toEqual({ accessToken: 'at-new', refreshToken: 'rt-new', expiresIn: 3600 });
+  });
+
+  it('throws a clear error when the refreshed body omits expires_in', async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ access_token: 'at-new', refresh_token: 'rt-new' }), { status: 200 })) as typeof fetch;
+    await expect(refreshAccessToken(config, 'rt-old', fakeFetch)).rejects.toThrow(
+      /malformed token response.*expires_in/,
+    );
   });
 });
