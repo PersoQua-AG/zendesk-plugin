@@ -11,7 +11,8 @@ function cacheStub(): ResponseCache {
 describe('addComment', () => {
   it('PUTs an html_body comment (Markdown converted) defaulting to public', async () => {
     const client = { request: vi.fn().mockResolvedValue({ ticket: { id: 5 } }) } as unknown as ZendeskHttpClient;
-    const result = await addComment(client, cacheStub(), { ticketId: 5, body: 'Fixed in *v2*' });
+    // markdown is a resolved boolean supplied by the register layer (no hidden tool default).
+    const result = await addComment(client, cacheStub(), { ticketId: 5, body: 'Fixed in *v2*', markdown: true });
     const [path, init] = (client.request as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(path).toBe('/tickets/5.json');
     expect(init.method).toBe('PUT');

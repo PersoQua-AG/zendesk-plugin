@@ -116,7 +116,8 @@ export interface NewTicketInput {
   tags?: string[];
   groupId?: number;
   assigneeId?: number;
-  markdown?: boolean;
+  // Resolved boolean (register applies the markdown_conversion default); no hidden tool default.
+  markdown: boolean;
   public?: boolean;
 }
 
@@ -133,7 +134,7 @@ export async function createTicket(
 ): Promise<{ summary: string; cacheHandle: string }> {
   const ticket: Record<string, unknown> = {
     subject: params.subject,
-    comment: buildComment(params.comment, params.markdown ?? true, params.public ?? true),
+    comment: buildComment(params.comment, params.markdown, params.public ?? true),
   };
   if (params.requesterId !== undefined) ticket.requester_id = params.requesterId;
   if (params.priority) ticket.priority = params.priority;

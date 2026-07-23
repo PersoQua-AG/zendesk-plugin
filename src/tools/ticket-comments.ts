@@ -11,12 +11,14 @@ import type { ReadResult } from './result.js';
 export async function addComment(
   client: ZendeskHttpClient,
   cache: ResponseCache,
-  params: { ticketId: number; body: string; public?: boolean; markdown?: boolean },
+  // `markdown` is a resolved boolean (the register layer applies the markdown_conversion default);
+  // the tool holds no hidden default of its own, matching the Guide write path.
+  params: { ticketId: number; body: string; public?: boolean; markdown: boolean },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
   if (params.body.trim() === '') throw new Error('Comment body must not be empty.');
   const isPublic = params.public ?? true;
-  const comment = buildComment(params.body, params.markdown ?? true, isPublic);
+  const comment = buildComment(params.body, params.markdown, isPublic);
   const raw = await client.request<{ ticket: { id: number } }>(`/tickets/${params.ticketId}.json`, {
     method: 'PUT',
     body: JSON.stringify({ ticket: { comment } }),

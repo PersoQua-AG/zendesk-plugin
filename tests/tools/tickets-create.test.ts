@@ -17,6 +17,7 @@ describe('createTicket', () => {
       comment: 'Please **fix** this',
       priority: 'high',
       requesterId: 555,
+      markdown: true, // resolved boolean supplied by the register layer
     });
     const [path, init] = (client.request as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(path).toBe('/tickets.json');
