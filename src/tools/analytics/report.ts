@@ -6,9 +6,22 @@
 //     calendar (raw delta) and business (business-hours calculator).
 //   - SLA breaches: metric events with type === 'breach', grouped by metric (data source stated).
 //   - CSAT: good/bad counts + score% from satisfaction ratings.
+import { z } from 'zod';
 import { businessMinutesBetween, calendarMinutesBetween, type BusinessHoursConfig } from './business-hours.js';
-import { summariseCsat, type CsatSummary } from './metrics.js';
-import type { MetricEvent } from './incremental.js';
+import { summariseCsat, fetchRatings, DEFAULT_RATINGS_CAP, type CsatSummary } from './metrics.js';
+import {
+  fetchIncrementalCursor,
+  fetchIncrementalTime,
+  MetricEventSchema,
+  DEFAULT_EVENTS_CAP,
+  DEFAULT_INCREMENTAL_CAP,
+  type MetricEvent,
+} from './incremental.js';
+import type { ZendeskHttpClient } from '../../client/http-client.js';
+import type { ResponseCache } from '../../client/cache.js';
+import type { SecurityLevel } from '../../security/screen.js';
+import { makeDescribe, SCREEN_WARNING } from '../screening.js';
+import type { ReadResult } from '../result.js';
 
 export interface Interval {
   startMs: number;
@@ -146,4 +159,61 @@ export function renderReport(report: Report, startTime: number, endTime: number)
     breaches,
     `CSAT: ${csat}`,
   ].join('\n');
+}
+
+// ---- zendesk_report (composite) ----
+
+const ReportTicketSchema = z.object({ id: z.number(), subject: z.string().nullish(), created_at: z.string().nullish() });
+type ReportTicket = z.infer<typeof ReportTicketSchema>;
+
+// subject is in ALWAYS_FENCE → wrapped unconditionally at ingest.
+const describeReportTicket = makeDescribe<ReportTicket>('report-ticket', (t) => `#${t.id} ${t.subject ?? '(no subject)'}`);
+const describeReportEvent = makeDescribe<MetricEvent>('report-event', (e) => `#${e.id} ${e.metric}/${e.type}`);
+
+export async function report(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { startTime: number; endTime?: number; maxRecords?: number },
+  securityLevel: SecurityLevel = 'standard',
+  config: BusinessHoursConfig,
+  nowMs: number = Date.now(),
+): Promise<ReadResult> {
+  if (!Number.isInteger(params.startTime) || params.startTime <= 0) {
+    throw new Error('zendesk_report requires a positive unix-seconds start_time.');
+  }
+  const endTime = params.endTime ?? Math.floor(nowMs / 1000);
+  const rangeStartMs = params.startTime * 1000;
+  const rangeEndMs = endTime * 1000;
+
+  // All pulls screen at ingest via the reused fetch layer (identical to the standalone readers).
+  const ticketsS = await fetchIncrementalCursor<ReportTicket>({
+    client, path: '/incremental/tickets/cursor.json', key: 'tickets', schema: ReportTicketSchema,
+    describe: describeReportTicket, startTime: params.startTime, cap: DEFAULT_INCREMENTAL_CAP, securityLevel, errorLabel: '/incremental/tickets',
+  });
+  const eventsS = await fetchIncrementalTime<MetricEvent>({
+    client, path: '/incremental/ticket_metric_events.json', key: 'ticket_metric_events', schema: MetricEventSchema,
+    describe: describeReportEvent, startTime: params.startTime, cap: DEFAULT_EVENTS_CAP, securityLevel, errorLabel: '/incremental/ticket_metric_events',
+  });
+  const ratingsS = await fetchRatings(client, { startTime: params.startTime, cap: DEFAULT_RATINGS_CAP }, securityLevel);
+
+  const built = buildReport({
+    tickets: ticketsS.records,
+    events: eventsS.records,
+    ratings: ratingsS.records,
+    rangeStartMs,
+    rangeEndMs,
+    config,
+  });
+  const flagged = ticketsS.flagged || eventsS.flagged || ratingsS.flagged;
+  const entry = cache.save('zendesk_report', {
+    tickets: ticketsS.records,
+    ticket_metric_events: eventsS.records,
+    satisfaction_ratings: ratingsS.records,
+    report: built,
+  });
+  return {
+    summary: `${renderReport(built, params.startTime, endTime)}${flagged ? SCREEN_WARNING : ''}`,
+    cacheHandle: entry.handle,
+    flagged,
+  };
 }
