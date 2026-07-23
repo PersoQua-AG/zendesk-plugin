@@ -118,3 +118,30 @@ export async function searchArticles(
     flagged: screened.flagged,
   };
 }
+
+// User-authored article write fields. Typed precisely (no `any`); body is rendered to HTML before
+// delegation. createRule enforces the required set (title/locale/body) on the built payload.
+export interface ArticleCreateFields {
+  title?: string;
+  body?: string;
+  locale?: string;
+  draft?: boolean;
+}
+
+export function createArticle(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  params: { sectionId: number; fields: ArticleCreateFields; markdown: boolean },
+  securityLevel: SecurityLevel = 'standard',
+): Promise<{ summary: string; cacheHandle: string }> {
+  const locale = params.fields.locale ?? DEFAULT_LOCALE;
+  const body = params.fields.body !== undefined ? renderBody(params.fields.body, params.markdown) : undefined;
+  const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale, body });
+  return createRule(
+    client,
+    cache,
+    { collection: `/help_center/sections/${params.sectionId}/articles`, key: 'article', toolName: 'zendesk_create_article', resourceLabel: 'article', requiredFields: ['title', 'locale', 'body'] },
+    built,
+    securityLevel,
+  );
+}
