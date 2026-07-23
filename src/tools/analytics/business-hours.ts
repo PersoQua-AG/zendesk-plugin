@@ -34,6 +34,13 @@ interface LocalDate {
   weekday: number; // ISO 1=Mon … 7=Sun
 }
 
+// Operator config is misconfigurable at boot; degrade to a safe default rather than crash the
+// report, but never swallow silently. Warnings go to stderr (console.warn) — stdout is the MCP
+// stdio transport and must stay protocol-clean.
+function warnConfig(message: string): void {
+  console.warn(`[zendesk-plugin] ${message}`);
+}
+
 // The zone's offset from UTC (ms, positive = ahead) at a given instant, by formatting the instant
 // as wall-clock parts in the zone and diffing from a UTC-interpreted rebuild of those parts.
 function tzOffsetMs(timeZone: string, epochMs: number): number {
@@ -87,7 +94,7 @@ export function zonedTimeToUtc(
 
 // Next calendar day, in plain Y/M/D, using a UTC Date purely for month/year rollover arithmetic
 // (no zone involved — these are abstract calendar numbers fed back to zonedTimeToUtc).
-function nextDay(d: LocalDate): { year: number; month: number; day: number } {
+function nextDay(d: { year: number; month: number; day: number }): { year: number; month: number; day: number } {
   const next = new Date(Date.UTC(d.year, d.month - 1, d.day + 1));
   return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() };
 }
@@ -128,18 +135,38 @@ export function businessMinutesBetween(startMs: number, endMs: number, config: B
       const to = Math.min(endMs, dayClose);
       if (to > from) totalMs += to - from;
     }
-    cursor = nextDay({ ...cursor, weekday: iso });
+    cursor = nextDay(cursor);
   }
   return Math.round(totalMs / 60_000);
 }
 
-// Parse the business-hours config from environment (PRD §8). Malformed JSON degrades to defaults
-// rather than crashing server boot — the report still runs, just on the default window.
+// Parse the business-hours config from environment (PRD §8). Every field is fully validated here
+// — bad JSON, an unknown IANA zone, or a non-ordered window degrade to the default AND warn, so a
+// mistyped env var can never crash zendesk_report at runtime (it just runs on the default window).
 export function parseReportConfig(env: Record<string, string | undefined>): BusinessHoursConfig {
-  const timeZone = env.ZENDESK_TIMEZONE?.trim() || DEFAULT_BUSINESS_HOURS.timeZone;
+  const timeZone = parseTimeZone(env.ZENDESK_TIMEZONE);
   const workHours = parseWorkHours(env.ZENDESK_WORK_HOURS);
   const workdays = parseWorkdays(env.ZENDESK_WORKDAYS);
   return { timeZone, workHours, workdays };
+}
+
+// Probe the zone against the runtime's Intl database; an unknown name throws here, so a bad value
+// degrades to the default instead of surviving to throw a RangeError on every report.
+function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseTimeZone(raw: string | undefined): string {
+  const tz = raw?.trim();
+  if (!tz) return DEFAULT_BUSINESS_HOURS.timeZone;
+  if (isValidTimeZone(tz)) return tz;
+  warnConfig(`ZENDESK_TIMEZONE "${tz}" is not a valid IANA time zone — using ${DEFAULT_BUSINESS_HOURS.timeZone}.`);
+  return DEFAULT_BUSINESS_HOURS.timeZone;
 }
 
 function parseWorkHours(raw: string | undefined): WorkHours {
@@ -149,13 +176,18 @@ function parseWorkHours(raw: string | undefined): WorkHours {
     if (parsed && typeof parsed === 'object') {
       const { start, end } = parsed as Record<string, unknown>;
       if (typeof start === 'string' && typeof end === 'string') {
-        parseHm(start);
-        parseHm(end);
+        const open = parseHm(start); // throws on bad HH:MM → caught below → default
+        const close = parseHm(end);
+        if (close.hour * 60 + close.minute <= open.hour * 60 + open.minute) {
+          warnConfig(`ZENDESK_WORK_HOURS end "${end}" must be after start "${start}" — using ${DEFAULT_BUSINESS_HOURS.workHours.start}–${DEFAULT_BUSINESS_HOURS.workHours.end}.`);
+          return DEFAULT_BUSINESS_HOURS.workHours;
+        }
         return { start, end };
       }
     }
+    warnConfig(`ZENDESK_WORK_HOURS "${raw}" is not a {"start","end"} object — using the default window.`);
   } catch {
-    // fall through to default
+    warnConfig(`ZENDESK_WORK_HOURS "${raw}" is not valid JSON / HH:MM — using the default window.`);
   }
   return DEFAULT_BUSINESS_HOURS.workHours;
 }
@@ -168,8 +200,9 @@ function parseWorkdays(raw: string | undefined): number[] {
       const days = parsed.filter((n): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 7);
       if (days.length > 0) return days;
     }
+    warnConfig(`ZENDESK_WORKDAYS "${raw}" has no valid ISO weekdays (1–7) — using Mon–Fri.`);
   } catch {
-    // fall through to default
+    warnConfig(`ZENDESK_WORKDAYS "${raw}" is not valid JSON — using Mon–Fri.`);
   }
   return DEFAULT_BUSINESS_HOURS.workdays;
 }
