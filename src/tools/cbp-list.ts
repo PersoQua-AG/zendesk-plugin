@@ -29,7 +29,10 @@ export interface ListCbpConfig<T extends { id: number }> {
   handle: string; // cache tool name, e.g. 'zendesk_list_orgs'
   cap: number; // max records collected
   pageSize?: number; // per-page size (clamped to MAX_PAGE_SIZE)
-  label: (count: number) => string; // summary prefix; owns any irregular plural
+  label?: (count: number) => string; // per-record summary prefix; owns any irregular plural
+  // Count-only summary override for lists that discard per-record lines (comments/audits).
+  // Takes precedence over `label`; exactly one of the two must be supplied.
+  summary?: (count: number) => string;
   errorLabel: string; // shape-error subject, e.g. '/users/{id}/identities'
 }
 
@@ -53,8 +56,10 @@ export async function listCbp<T extends { id: number }>(config: ListCbpConfig<T>
   const capped = await collectCbp(fetchPage, config.cap);
   const screened = summariseScreened(capped, config.describe, config.securityLevel);
   const entry = config.cache.save(config.handle, { [config.key]: screened.records });
+  const n = screened.records.length;
+  const summary = config.summary ? config.summary(n) : `${config.label!(n)}:\n${screened.lines.join('\n')}`;
   return {
-    summary: `${config.label(screened.records.length)}:\n${screened.lines.join('\n')}${screened.warning}`,
+    summary: `${summary}${screened.warning}`,
     cacheHandle: entry.handle,
     flagged: screened.flagged,
   };

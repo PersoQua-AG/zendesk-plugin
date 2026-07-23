@@ -2,9 +2,9 @@
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
-import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
+import { makeScreener, screenRecordDeep, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
+import { listCbp } from './cbp-list.js';
 import { buildComment } from './tickets.js';
 import type { ReadResult } from './result.js';
 
@@ -38,8 +38,6 @@ const CommentSchema = z.object({
 });
 type Comment = z.infer<typeof CommentSchema>;
 
-const CommentsPageSchema = cbpPageSchema(CommentSchema, 'comments');
-
 function describeComment(c: Comment, screen: Screener): RecordScreen<Comment> {
   const body = screen(c.body ?? '', `comment-${c.id}`);
   return {
@@ -55,22 +53,17 @@ export async function listComments(
   params: { ticketId: number; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
-  const cap = params.maxRecords ?? 500;
-  const fetchPage = async (cursor: string | null): Promise<CbpPage<Comment>> => {
-    const parts = ['page[size]=100'];
-    if (cursor) parts.push(`page[after]=${encodeURIComponent(cursor)}`);
-    const raw = await client.request<unknown>(`/tickets/${params.ticketId}/comments.json?${parts.join('&')}`);
-    const parsed = CommentsPageSchema.safeParse(raw);
-    if (!parsed.success) throw new Error('Unexpected /tickets/{id}/comments response shape.');
-    return { records: parsed.data.comments, meta: parsed.data.meta, links: { next: parsed.data.links?.next ?? null } };
-  };
-
-  const capped = await collectCbp(fetchPage, cap);
-  const screened = summariseScreened(capped, describeComment, securityLevel);
-  const entry = cache.save('zendesk_list_comments', { comments: screened.records });
-  return {
-    summary: `${screened.records.length} comment(s) on ticket #${params.ticketId}${screened.warning}`,
-    cacheHandle: entry.handle,
-    flagged: screened.flagged,
-  };
+  return listCbp<Comment>({
+    client,
+    cache,
+    securityLevel,
+    path: `/tickets/${params.ticketId}/comments.json`,
+    key: 'comments',
+    schema: CommentSchema,
+    describe: describeComment,
+    handle: 'zendesk_list_comments',
+    cap: params.maxRecords ?? 500,
+    summary: (n) => `${n} comment(s) on ticket #${params.ticketId}`,
+    errorLabel: '/tickets/{id}/comments',
+  });
 }
