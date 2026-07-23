@@ -7,6 +7,7 @@
   "bin": { "zendesk-authorize": "dist/bin/authorize.js" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "authorize": "node dist/bin/authorize.js"
