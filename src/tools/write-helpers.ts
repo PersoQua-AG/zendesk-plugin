@@ -1,17 +1,22 @@
 // src/tools/write-helpers.ts
-// Shared write-side helpers for M4+ mutating tools. Two duplicated patterns are extracted here
-// so M5 (guide, write-heavy) can reuse them rather than re-clone the surface:
+// Shared write-side helpers for M4+ mutating tools. Three duplicated patterns are extracted here
+// so every domain (tickets, business-rules, guide) reuses them rather than re-clone the surface,
+// and so no domain owns a generic another domain must reach across a boundary to import:
 //   1. safeUpdateWithConflict — the optimistic-concurrency PUT (safe_update/updated_stamp →
 //      409 → re-fetch → screen → conflict result). Shared by ticket update and macro apply.
 //   2. updateEntity — the plain-PUT update tail (strip → empty-guard → PUT → parse-for-id →
-//      screen → cache → summary). Shared by user/org/rule updates.
-// Both screen inbound content BEFORE caching, so ingest screening stays enforced by construction.
+//      screen → cache → summary). Shared by user/org/rule/guide updates.
+//   3. createEntity — the generic POST-create tail (required-fields → strip → guard → POST →
+//      parse-for-id → screen → cache → summary). Twin of updateEntity, shared by rule + guide creates.
+// withAdminGuard (the shared admin-role 403 re-mapper) lives here too so it stays neutral rather
+// than domain-owned. All three screen inbound content BEFORE caching, so ingest screening stays
+// enforced by construction.
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
-import { ZendeskConflictError } from '../client/errors.js';
+import { ZendeskConflictError, ZendeskPermissionError } from '../client/errors.js';
 import { stripUndefined } from '../util/object.js';
 
 // The shared optimistic-concurrency mutation result. `applied` is the success arm; `conflict`
@@ -92,9 +97,33 @@ export async function safeUpdateWithConflict(
   }
 }
 
-// A guard wraps the PUT so a resource can re-map a permission error (rules pass withAdminGuard;
-// users/orgs pass nothing = run directly).
+// A guard wraps the write so a resource can re-map a permission error (rule/guide writes pass
+// withAdminGuard; users/orgs pass nothing = run directly).
 export type WriteGuard = <T>(action: string, thunk: () => Promise<T>) => Promise<T>;
+
+// A plan-gated or object-scoped 403 must keep its Zendesk detail; only a scope∩role/admin
+// denial is re-mapped to the actionable guidance below.
+function isAdminScopeDenial(message: string): boolean {
+  return !/\bplan\b|feature|not available|upgrade|subscription/i.test(message);
+}
+
+// Admin-gated writes (business rules, Guide) require an admin role. The base client maps a 403 to a
+// generic ZendeskPermissionError; re-map a genuine scope∩role denial to an actionable, resource-
+// specific message (preserving the original as `cause`). Non-403s and plan/feature 403s pass through.
+export const withAdminGuard: WriteGuard = async (action, thunk) => {
+  try {
+    return await thunk();
+  } catch (err) {
+    if (err instanceof ZendeskPermissionError && isAdminScopeDenial(err.message)) {
+      const relabelled = new ZendeskPermissionError(
+        `${action} requires an admin role — your token's scope ∩ role is insufficient. Re-authorize with an admin account or ask an admin to make this change.`,
+      );
+      relabelled.cause = err;
+      throw relabelled;
+    }
+    throw err;
+  }
+};
 
 export interface UpdateEntityConfig {
   collection: string; // e.g. '/users', '/triggers'
@@ -128,4 +157,39 @@ export async function updateEntity<F extends object>(
   const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `${config.toolName}-${id}-${key}`, makeScreener(securityLevel));
   const entry = cache.save(config.toolName, safe);
   return { summary: `Updated ${config.resourceLabel} #${id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+}
+
+export interface CreateEntityConfig {
+  collection: string; // POST target (without .json), e.g. '/triggers', '/help_center/categories'
+  key: string; // request/response envelope key, e.g. 'trigger', 'article'
+  toolName: string; // cache tool name, e.g. 'zendesk_create_trigger'
+  resourceLabel: string; // human label for guard/summary/errors, e.g. 'trigger', 'article'
+  requiredFields: string[]; // create-time required fields (parameterized per resource)
+  guard?: WriteGuard; // admin-gated resources pass withAdminGuard; unguarded resources omit it
+}
+
+// The generic POST-create tail — twin of updateEntity. passthrough keeps the full record for
+// screening/caching; only `id` is structurally required so the tail stays field-agnostic (the
+// precise field shape lives on callers). Screens the echo BEFORE caching, like every write helper.
+export async function createEntity<F extends object>(
+  client: ZendeskHttpClient,
+  cache: ResponseCache,
+  config: CreateEntityConfig,
+  fields: F,
+  securityLevel: SecurityLevel,
+): Promise<{ summary: string; cacheHandle: string }> {
+  for (const field of config.requiredFields) {
+    const value = (fields as Record<string, unknown>)[field];
+    if (typeof value !== 'string' || value.trim() === '') throw new Error(`create_${config.resourceLabel} requires a ${field}.`);
+  }
+  const body = stripUndefined(fields);
+  const run = () =>
+    client.request<unknown>(`${config.collection}.json`, { method: 'POST', body: JSON.stringify({ [config.key]: body }) });
+  const raw = config.guard ? await config.guard(`Creating a ${config.resourceLabel}`, run) : await run();
+  const parsed = z.object({ [config.key]: IdRecordSchema }).passthrough().safeParse(raw);
+  if (!parsed.success) throw new Error(`Unexpected ${config.collection} create response shape.`);
+  const record = parsed.data[config.key] as { id: number };
+  const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `${config.toolName}-${record.id}-${key}`, makeScreener(securityLevel));
+  const entry = cache.save(config.toolName, safe);
+  return { summary: `Created ${config.resourceLabel} #${record.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
 }

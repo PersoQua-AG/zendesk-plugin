@@ -1,7 +1,7 @@
 // src/register/guide.ts — Help Center / Guide: articles, translations, sections, categories.
 // Read + create/update only (no delete, per PRD §N1). Article/translation bodies convert
 // Markdown→HTML (per-call markdown flag defaulting to the global markdown_conversion). Guide
-// writes are admin-gated (403 → actionable ZendeskPermissionError inside createRule/updateEntity).
+// writes are admin-gated (403 → actionable ZendeskPermissionError via withAdminGuard).
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { okWithHandle } from '../tools/result.js';

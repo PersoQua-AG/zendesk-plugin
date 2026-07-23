@@ -1,7 +1,9 @@
 // tests/tools/guide-reuse-enablement.test.ts
+// createEntity + withAdminGuard live in the neutral write-helpers module (not a domain package),
+// so both business-rules and Guide reuse them without a cross-domain import edge. These pins keep
+// the generic create tail + admin guard usable for a guide-style entity from the neutral home.
 import { describe, it, expect, vi } from 'vitest';
-import { createRule, withAdminGuard } from '../../src/tools/business-rules/rules.js';
-import { updateEntity } from '../../src/tools/write-helpers.js';
+import { createEntity, updateEntity, withAdminGuard } from '../../src/tools/write-helpers.js';
 import { ZendeskPermissionError } from '../../src/client/errors.js';
 import type { ZendeskHttpClient } from '../../src/client/http-client.js';
 import type { ResponseCache } from '../../src/client/cache.js';
@@ -11,9 +13,9 @@ function cacheStub(): ResponseCache {
 }
 
 describe('reuse enablement', () => {
-  it('createRule is exported and usable for a guide-style (category) entity', async () => {
+  it('createEntity is exported from write-helpers and usable for a guide-style (category) entity', async () => {
     const client = { request: vi.fn().mockResolvedValue({ category: { id: 12, name: 'FAQ' } }) } as unknown as ZendeskHttpClient;
-    const r = await createRule(
+    const r = await createEntity(
       client,
       cacheStub(),
       { collection: '/help_center/categories', key: 'category', toolName: 'zendesk_create_category', resourceLabel: 'category', requiredFields: ['name', 'locale'] },
@@ -27,15 +29,15 @@ describe('reuse enablement', () => {
     expect(r.summary).toContain('Created category #12');
   });
 
-  it('createRule enforces a parameterized required field', async () => {
+  it('createEntity enforces a parameterized required field', async () => {
     const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
     await expect(
-      createRule(client, cacheStub(), { collection: '/help_center/categories', key: 'category', toolName: 'zendesk_create_category', resourceLabel: 'category', requiredFields: ['name', 'locale'] }, { name: 'FAQ' }, 'standard'),
+      createEntity(client, cacheStub(), { collection: '/help_center/categories', key: 'category', toolName: 'zendesk_create_category', resourceLabel: 'category', requiredFields: ['name', 'locale'] }, { name: 'FAQ' }, 'standard'),
     ).rejects.toThrow(/requires a locale/i);
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it('withAdminGuard is exported and re-maps a scope∩role 403', async () => {
+  it('withAdminGuard is exported from write-helpers and re-maps a scope∩role 403', async () => {
     await expect(
       withAdminGuard('Creating a category', () => {
         throw new ZendeskPermissionError('Permission denied (scope ∩ role insufficient):');

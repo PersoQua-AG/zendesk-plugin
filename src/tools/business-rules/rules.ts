@@ -8,11 +8,9 @@ import { z } from 'zod';
 import type { ZendeskHttpClient } from '../../client/http-client.js';
 import type { ResponseCache } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
-import { makeScreener, screenRecordDeep, summariseScreened, makeDescribe, SCREEN_WARNING } from '../screening.js';
+import { summariseScreened, makeDescribe } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from '../cbp-list.js';
-import { ZendeskPermissionError } from '../../client/errors.js';
-import { stripUndefined } from '../../util/object.js';
-import { updateEntity, type WriteGuard } from '../write-helpers.js';
+import { createEntity, updateEntity, withAdminGuard } from '../write-helpers.js';
 import type { ReadResult } from '../result.js';
 
 // Trigger/automation conditions & actions are structured config (field/operator/value).
@@ -146,64 +144,14 @@ export const slaWriteFieldsSchema = z.object({
 });
 export type SlaWriteFields = z.infer<typeof slaWriteFieldsSchema>;
 
+// Shared config for a rule's create + update (toolName differs per operation). requiredFields is
+// consumed by createEntity; updateEntity ignores it. Both are admin-gated (guard: withAdminGuard).
 interface RuleWriteConfig {
   collection: string; // e.g. '/triggers'
   key: string; // envelope key, e.g. 'trigger'
   toolName: string; // cache tool name, e.g. 'zendesk_create_trigger'
   resourceLabel: string; // human label, e.g. 'trigger'
-  requiredFields: string[]; // create-time required fields (parameterized so M5 can reuse)
-}
-
-// A plan-gated or object-scoped 403 must keep its Zendesk detail; only a scope∩role/admin
-// denial is re-mapped to the actionable guidance below.
-function isAdminScopeDenial(message: string): boolean {
-  return !/\bplan\b|feature|not available|upgrade|subscription/i.test(message);
-}
-
-// Business-rules writes require an admin role. The base client maps a 403 to a generic
-// ZendeskPermissionError; re-map a genuine scope∩role denial to an actionable, resource-specific
-// message (preserving the original as `cause`). Non-403s and plan/feature 403s pass through.
-export const withAdminGuard: WriteGuard = async (action, thunk) => {
-  try {
-    return await thunk();
-  } catch (err) {
-    if (err instanceof ZendeskPermissionError && isAdminScopeDenial(err.message)) {
-      const relabelled = new ZendeskPermissionError(
-        `${action} requires an admin role — your token's scope ∩ role is insufficient. Re-authorize with an admin account or ask an admin to make this change.`,
-      );
-      relabelled.cause = err;
-      throw relabelled;
-    }
-    throw err;
-  }
-};
-
-const RuleEnvelopeSchema = z.record(z.unknown());
-const RuleRecordSchema = z.object({ id: z.number() }).passthrough();
-
-export async function createRule(
-  client: ZendeskHttpClient,
-  cache: ResponseCache,
-  config: RuleWriteConfig,
-  fields: Record<string, unknown>,
-  securityLevel: SecurityLevel,
-): Promise<{ summary: string; cacheHandle: string }> {
-  // Required-field invariant is parameterized (not hardcoded to title) so M5 articles
-  // (title + locale + body) can reuse this generic.
-  for (const field of config.requiredFields) {
-    const value = fields[field];
-    if (typeof value !== 'string' || value.trim() === '') throw new Error(`create_${config.resourceLabel} requires a ${field}.`);
-  }
-  const body = stripUndefined(fields);
-  const raw = await withAdminGuard(`Creating a ${config.resourceLabel}`, () =>
-    client.request<unknown>(`${config.collection}.json`, { method: 'POST', body: JSON.stringify({ [config.key]: body }) }),
-  );
-  const parsed = RuleEnvelopeSchema.safeParse(raw);
-  const record = parsed.success ? RuleRecordSchema.safeParse(parsed.data[config.key]) : null;
-  if (!record || !record.success) throw new Error(`Unexpected ${config.collection} create response shape.`);
-  const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `${config.toolName}-${record.data.id}-${key}`, makeScreener(securityLevel));
-  const entry = cache.save(config.toolName, safe);
-  return { summary: `Created ${config.resourceLabel} #${record.data.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+  requiredFields: string[]; // create-time required fields
 }
 
 const TRIGGER_WRITE: Omit<RuleWriteConfig, 'toolName'> = { collection: '/triggers', key: 'trigger', resourceLabel: 'trigger', requiredFields: ['title'] };
@@ -214,7 +162,7 @@ export function createTrigger(
   params: { fields: RuleWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
-  return createRule(client, cache, { ...TRIGGER_WRITE, toolName: 'zendesk_create_trigger' }, params.fields, securityLevel);
+  return createEntity(client, cache, { ...TRIGGER_WRITE, toolName: 'zendesk_create_trigger', guard: withAdminGuard }, params.fields, securityLevel);
 }
 
 export function updateTrigger(
@@ -234,7 +182,7 @@ export function createAutomation(
   params: { fields: RuleWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
-  return createRule(client, cache, { ...AUTOMATION_WRITE, toolName: 'zendesk_create_automation' }, params.fields, securityLevel);
+  return createEntity(client, cache, { ...AUTOMATION_WRITE, toolName: 'zendesk_create_automation', guard: withAdminGuard }, params.fields, securityLevel);
 }
 
 export function updateAutomation(
@@ -258,7 +206,7 @@ export function createSla(
   params: { fields: SlaWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
-  return createRule(client, cache, { ...SLA_WRITE, toolName: 'zendesk_create_sla' }, params.fields, securityLevel);
+  return createEntity(client, cache, { ...SLA_WRITE, toolName: 'zendesk_create_sla', guard: withAdminGuard }, params.fields, securityLevel);
 }
 
 export function updateSla(

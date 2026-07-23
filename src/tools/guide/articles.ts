@@ -2,7 +2,7 @@
 // M5 Guide — articles + article translations. Read + create/update only (NO delete, per PRD §N1).
 // Article/translation `body` is HTML in Zendesk; write tools convert Markdown→HTML (markdown flag,
 // default from markdown_conversion) unless markdown:false (raw HTML passthrough). Creates reuse the
-// M4 generic createRule (admin-gated by construction); updates reuse updateEntity. Every inbound
+// neutral generic createEntity (admin-gated via withAdminGuard); updates reuse updateEntity. Every inbound
 // record is screened at ingest by construction (title/body fenced; the rest passes through the
 // field-agnostic deep screen).
 import { z } from 'zod';
@@ -13,8 +13,7 @@ import { makeScreener, screenRecordDeep, summariseScreened, makeDescribe, SCREEN
 import { listCbp, DEFAULT_LIST_CAP, MAX_PAGE_SIZE } from '../cbp-list.js';
 import { markdownToHtml } from '../../util/markdown.js';
 import { stripUndefined } from '../../util/object.js';
-import { createRule, withAdminGuard } from '../business-rules/rules.js';
-import { updateEntity } from '../write-helpers.js';
+import { createEntity, updateEntity, withAdminGuard } from '../write-helpers.js';
 import type { ReadResult } from '../result.js';
 
 // EN + DE are the confirmed first-class Guide locales (PRD §12 item 6). DEFAULT_LOCALE is applied
@@ -120,7 +119,7 @@ export async function searchArticles(
 }
 
 // User-authored article write fields. Typed precisely (no `any`); body is rendered to HTML before
-// delegation. createRule enforces the required set (title/locale/body) on the built payload.
+// delegation. createEntity enforces the required set (title/locale/body) on the built payload.
 export interface ArticleCreateFields {
   title?: string;
   body?: string;
@@ -137,10 +136,10 @@ export function createArticle(
   const locale = params.fields.locale ?? DEFAULT_LOCALE;
   const body = params.fields.body !== undefined ? renderBody(params.fields.body, params.markdown) : undefined;
   const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale, body });
-  return createRule(
+  return createEntity(
     client,
     cache,
-    { collection: `/help_center/sections/${params.sectionId}/articles`, key: 'article', toolName: 'zendesk_create_article', resourceLabel: 'article', requiredFields: ['title', 'locale', 'body'] },
+    { collection: `/help_center/sections/${params.sectionId}/articles`, key: 'article', toolName: 'zendesk_create_article', resourceLabel: 'article', requiredFields: ['title', 'locale', 'body'], guard: withAdminGuard },
     built,
     securityLevel,
   );
@@ -186,10 +185,10 @@ export function createArticleTranslation(
   const locale = params.fields.locale ?? DEFAULT_LOCALE;
   const body = params.fields.body !== undefined ? renderBody(params.fields.body, params.markdown) : undefined;
   const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale, body });
-  return createRule(
+  return createEntity(
     client,
     cache,
-    { collection: `/help_center/articles/${params.articleId}/translations`, key: 'translation', toolName: 'zendesk_create_article_translation', resourceLabel: 'article translation', requiredFields: ['locale', 'title', 'body'] },
+    { collection: `/help_center/articles/${params.articleId}/translations`, key: 'translation', toolName: 'zendesk_create_article_translation', resourceLabel: 'article translation', requiredFields: ['locale', 'title', 'body'], guard: withAdminGuard },
     built,
     securityLevel,
   );

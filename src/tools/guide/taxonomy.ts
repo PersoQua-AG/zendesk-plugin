@@ -1,6 +1,6 @@
 // src/tools/guide/taxonomy.ts
 // M5 Guide — taxonomy: sections + categories. Read (list) + create only (NO delete, per PRD §N1).
-// Creates reuse the M4 generic createRule (admin-gated by construction) with name+locale required.
+// Creates reuse the neutral generic createEntity (admin-gated via withAdminGuard) with name+locale required.
 // Every inbound record is screened at ingest by construction (name/description fenced; the rest
 // passes through the field-agnostic deep screen).
 import { z } from 'zod';
@@ -10,7 +10,7 @@ import type { SecurityLevel } from '../../security/screen.js';
 import { makeDescribe } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from '../cbp-list.js';
 import { stripUndefined } from '../../util/object.js';
-import { createRule } from '../business-rules/rules.js';
+import { createEntity, withAdminGuard } from '../write-helpers.js';
 import { DEFAULT_LOCALE } from './articles.js';
 import type { ReadResult } from '../result.js';
 
@@ -99,10 +99,10 @@ export function createSection(
 ): Promise<{ summary: string; cacheHandle: string }> {
   const locale = params.fields.locale ?? DEFAULT_LOCALE;
   const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale });
-  return createRule(
+  return createEntity(
     client,
     cache,
-    { collection: `/help_center/categories/${params.categoryId}/sections`, key: 'section', toolName: 'zendesk_create_section', resourceLabel: 'section', requiredFields: ['name', 'locale'] },
+    { collection: `/help_center/categories/${params.categoryId}/sections`, key: 'section', toolName: 'zendesk_create_section', resourceLabel: 'section', requiredFields: ['name', 'locale'], guard: withAdminGuard },
     built,
     securityLevel,
   );
@@ -123,10 +123,10 @@ export function createCategory(
 ): Promise<{ summary: string; cacheHandle: string }> {
   const locale = params.fields.locale ?? DEFAULT_LOCALE;
   const built: Record<string, unknown> = stripUndefined({ ...params.fields, locale });
-  return createRule(
+  return createEntity(
     client,
     cache,
-    { collection: '/help_center/categories', key: 'category', toolName: 'zendesk_create_category', resourceLabel: 'category', requiredFields: ['name', 'locale'] },
+    { collection: '/help_center/categories', key: 'category', toolName: 'zendesk_create_category', resourceLabel: 'category', requiredFields: ['name', 'locale'], guard: withAdminGuard },
     built,
     securityLevel,
   );
