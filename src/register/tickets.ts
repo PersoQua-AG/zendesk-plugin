@@ -23,6 +23,20 @@ const ticketUpdateFieldsSchema = z.object({
   custom_fields: z.array(z.object({ id: z.number(), value: z.unknown() })).optional(),
 });
 
+// Per-record schema for bulk create: the shared update field surface plus the create-only
+// fields (subject required, a comment), so bulk-create validation is symmetric with the
+// single-create/-update tools instead of forwarding arbitrary objects to create_many. The only
+// escape valve is a custom field's `value`, which is genuinely open-typed.
+const bulkCreateTicketSchema = ticketUpdateFieldsSchema.extend({
+  subject: z.string().min(1),
+  comment: z.object({
+    body: z.string().min(1).optional(),
+    html_body: z.string().min(1).optional(),
+    public: z.boolean().optional(),
+  }),
+  requester_id: z.number().int().positive().optional(),
+});
+
 export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
   const { httpClient, cache, securityLevel, markdownDefault } = ctx;
 
@@ -111,7 +125,7 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
 
   server.registerTool(
     'zendesk_create_tickets_bulk',
-    { description: 'Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table).', inputSchema: { tickets: z.array(z.record(z.unknown())).min(1).max(100) } },
+    { description: 'Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table).', inputSchema: { tickets: z.array(bulkCreateTicketSchema).min(1).max(100) } },
     async ({ tickets }) => {
       const r = await createTicketsBulk(httpClient, cache, { tickets }, {}, securityLevel);
       return toText(`${r.summary} failures=${JSON.stringify(r.failures)}\n(cache: ${r.cacheHandle})`);
