@@ -84,12 +84,13 @@ export async function getUser(
   const safe = value as { user: User };
   const entry = cache.save('zendesk_get_user', safe);
   const warning = flagged ? SCREEN_WARNING : '';
-  // `name` is always fenced in the cached copy, so `safe.user.name` is the full wrapped
-  // envelope — too noisy for a one-line summary. Show a short safe indicator instead: the
-  // plain name when nothing was flagged, `[flagged]` otherwise. The cache keeps the fence.
-  const displayName = flagged ? '[flagged]' : parsed.data.user.name ?? '(no name)';
+  // Every string is fenced in the cached copy, so the one-line summary reads the plain values
+  // from the RAW record (the cache keeps the fence). `name` collapses to `[flagged]` when any
+  // field tripped a detector, else the plain name; email/role are short structured identifiers.
+  const u = parsed.data.user;
+  const displayName = flagged ? '[flagged]' : u.name ?? '(no name)';
   return {
-    summary: `User #${safe.user.id} ${displayName} <${safe.user.email ?? 'no-email'}> [${safe.user.role ?? 'end-user'}]${warning}`,
+    summary: `User #${safe.user.id} ${displayName} <${u.email ?? 'no-email'}> [${u.role ?? 'end-user'}]${warning}`,
     cacheHandle: entry.handle,
     flagged,
   };

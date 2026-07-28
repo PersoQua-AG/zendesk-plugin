@@ -31,9 +31,10 @@ describe('listTriggers', () => {
     expect((client.request as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain('/triggers.json');
     const [toolName, cached] = (cache.save as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(toolName).toBe('zendesk_list_triggers');
-    // Structured condition config (status/operator) passes through unchanged...
-    expect(cached.triggers[0].conditions.all[0].operator).toBe('is');
-    // ...but the injection inside a free-text action value is neutralized on ingest.
+    // New invariant: every non-empty string is fenced (no per-field allowlist), so even the
+    // structured condition operator is wrapped in the cached copy...
+    expect(cached.triggers[0].conditions.all[0].operator).toContain('zendesk-content-trigger-1-operator-');
+    // ...as is the injection inside a free-text action value (still flagged for the warning).
     expect(cached.triggers[0].actions[0].value[1]).toContain('zendesk-content-trigger-1-value-');
     expect(result.flagged).toBe(true);
     expect(result.summary).toContain('1 trigger(s)');

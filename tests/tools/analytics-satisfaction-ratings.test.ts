@@ -53,7 +53,11 @@ describe('fetchRatings', () => {
     } as unknown as ZendeskHttpClient;
     const s = await fetchRatings(client, { cap: 100 }, 'standard');
     expect(s.records).toHaveLength(1);
-    expect(s.records[0].score).toBe('good');
+    // The screened copy fences every string (score included); the report aggregates over the
+    // RAW batch, where score stays parseable.
+    expect(s.records[0].score).toContain('zendesk-content-rating-9-score-');
+    expect(s.raw).toHaveLength(1);
+    expect(s.raw[0].score).toBe('good');
   });
 });
 

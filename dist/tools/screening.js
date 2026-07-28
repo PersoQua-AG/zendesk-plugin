@@ -13,11 +13,6 @@ export function makeScreener(level) {
         return { wrapped, flagged };
     };
 }
-// Known always-untrusted free-text keys — attacker-controllable prose that is fenced
-// unconditionally wherever it appears. Any OTHER string is fenced only when it trips an
-// injection detector (see screenRecordDeep), so novel/unlisted fields carrying a payload
-// are still neutralized without fencing benign metadata (ids, statuses, types).
-const ALWAYS_FENCE = new Set(['subject', 'description', 'body', 'value', 'html_body', 'name', 'title']);
 // Cap recursion so a pathologically nested inbound payload cannot blow the call stack.
 // Inputs are already size-capped; legitimate Zendesk records nest far shallower than this.
 const MAX_INGEST_DEPTH = 100;
@@ -30,10 +25,14 @@ export function screenRecordDeep(value, labelFor, screen, key, depth = 0) {
     if (depth > MAX_INGEST_DEPTH)
         throw new Error('screenRecordDeep: input nesting exceeds safe depth.');
     if (typeof value === 'string') {
-        if (value === '' || key === undefined)
+        if (value === '')
             return { value, flagged: false };
-        const { wrapped, flagged } = screen(value, labelFor(key));
-        return { value: ALWAYS_FENCE.has(key) || flagged ? wrapped : value, flagged };
+        // Every non-empty untrusted string is wrapped in the session-nonce fence, so
+        // detection-evasion (a payload that dodges the pattern set) is never fence-evasion.
+        // `flagged` still reflects detected patterns (drives the warning) but no longer gates
+        // wrapping. `off` passes through (the screener returns the text unwrapped).
+        const { wrapped, flagged } = screen(value, labelFor(key ?? 'value'));
+        return { value: wrapped, flagged };
     }
     if (Array.isArray(value)) {
         let flagged = false;
@@ -76,6 +75,7 @@ export function summariseScreened(records, describe, level) {
     const flagged = screened.some((s) => s.flagged);
     return {
         records: screened.map((s) => s.safe),
+        raw: records,
         lines: screened.map((s) => s.line),
         flagged,
         warning: flagged ? SCREEN_WARNING : '',

@@ -45,21 +45,25 @@ export function runQuery(data, query) {
     return extractPath(data, query);
 }
 // Replay-boundary screen: the field-agnostic guarantee that NOTHING inbound reaches the
-// model unscreened, independent of ingest field coverage. Every string is run through
-// screenContent — which redacts any forged envelope delimiter in its INPUT and re-wraps
-// flagged content in a fresh, unforgeable per-call nonce fence. There is deliberately NO
-// "already fenced" fast-path: a substring an attacker can embed (e.g. `zendesk-content-`)
-// must never let untrusted text skip screening. Re-screening a genuinely-fenced string is
-// safe — its old delimiters are redacted and it is re-fenced. Numbers/booleans/ids pass
-// through untouched so structured extraction (ids_only, numeric dot-paths) stays usable.
+// model unscreened, independent of ingest field coverage. EVERY non-empty string is run
+// through screenContent and wrapped in a fresh, unforgeable per-call nonce fence — wrapping
+// does not depend on detection, so a payload that evades the pattern set (e.g. a token
+// inserted mid-phrase) is still fenced. screenContent also redacts any forged envelope
+// delimiter in its INPUT. There is deliberately NO "already fenced" fast-path: a substring an
+// attacker can embed (e.g. `zendesk-content-`) must never let untrusted text skip screening;
+// re-screening a genuinely-fenced string is safe (old delimiters redacted, re-fenced).
+// Numbers/booleans/ids pass through untouched so structured extraction (ids_only, numeric
+// dot-paths) stays usable.
 export function screenReplay(value, level, depth = 0) {
     if (level === 'off')
         return { value, flagged: false };
     if (depth > MAX_REPLAY_DEPTH)
         throw new Error('screenReplay: input nesting exceeds safe depth.');
     if (typeof value === 'string') {
+        if (value === '')
+            return { value, flagged: false };
         const { wrapped, flagged } = screenContent(value, 'query-replay', level);
-        return flagged ? { value: wrapped, flagged: true } : { value, flagged: false };
+        return { value: wrapped, flagged };
     }
     if (Array.isArray(value)) {
         let flagged = false;
