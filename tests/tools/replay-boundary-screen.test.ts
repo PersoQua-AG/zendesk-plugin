@@ -45,7 +45,7 @@ describe('field-agnostic ingest screening', () => {
     expect(r.flagged).toBe(true);
   });
 
-  it('leaves benign non-prose metadata (type) readable', async () => {
+  it('fences even benign non-prose metadata (type) but leaves numeric ids readable', async () => {
     const cache = tmpCache();
     const client = {
       request: vi.fn().mockResolvedValue({
@@ -56,7 +56,9 @@ describe('field-agnostic ingest screening', () => {
     } as unknown as ZendeskHttpClient;
 
     const r = await getTicketAudits(client, cache, { ticketId: 5 });
-    expect(runQuery(cache.load(r.cacheHandle), 'audits[0].events[0].type')).toBe('Comment');
+    // New invariant: every non-empty string is wrapped (no per-field allowlist); numbers stay readable.
+    expect(runQuery(cache.load(r.cacheHandle), 'audits[0].id')).toBe(5);
+    expect(runQuery(cache.load(r.cacheHandle), 'audits[0].events[0].type') as string).toContain('zendesk-content-audit-5-type-');
   });
 
   it('neutralizes a brand-NEW unlisted search result field', async () => {
@@ -86,18 +88,27 @@ describe('screenReplay (replay-boundary guarantee)', () => {
     expect((value as { n: number }).n).toBe(42); // numbers pass through untouched
   });
 
-  it('passes benign strings, numbers, and booleans through untouched', () => {
+  it('fences every non-empty string while passing numbers and booleans through untouched', () => {
     const input = { status: 'open', id: 7, active: true, tags: ['vip', 'eu'] };
     const { value, flagged } = screenReplay(input, 'standard');
+    // Benign strings are fenced too (detection-evasion is not fence-evasion); flagged stays false.
     expect(flagged).toBe(false);
-    expect(value).toEqual(input);
+    const out = value as { status: string; id: number; active: boolean; tags: string[] };
+    expect(out.status).toContain('zendesk-content-query-replay-');
+    expect(out.tags[0]).toContain('zendesk-content-query-replay-');
+    expect(out.id).toBe(7); // numbers untouched
+    expect(out.active).toBe(true); // booleans untouched
   });
 
-  it('leaves a benign already-fenced string byte-identical', () => {
+  it('re-fences even a benign already-fenced string (no byte-identical fast-path)', () => {
     const fenced = '<zendesk-content-ticket-1-subject-abc123>\nplease review the invoice\n</zendesk-content-ticket-1-subject-abc123>';
     const { value, flagged } = screenReplay(fenced, 'standard');
-    expect(value).toBe(fenced);
+    // A fence wrapper is never proof of safety: the old delimiters are redacted and the content
+    // re-fenced under a fresh query-replay nonce. Benign content → flagged false.
     expect(flagged).toBe(false);
+    expect(value).not.toBe(fenced);
+    expect(value as string).toContain('zendesk-content-query-replay-');
+    expect(value as string).toContain('[redacted-delimiter]');
   });
 
   it('re-neutralizes an already-fenced string that wraps a payload (byte-identical passthrough was the fragile assumption)', () => {
