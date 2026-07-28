@@ -1,10 +1,12 @@
 export class RateLimiter {
+    requestsPerMinute; // the configured account bucket size, for wiring inspection
     intervalMs;
     now;
     sleepFn;
     nextAvailableAt;
     retryAfterUntil = 0;
     constructor(options) {
+        this.requestsPerMinute = options.requestsPerMinute;
         this.intervalMs = 60_000 / options.requestsPerMinute;
         this.now = options.now ?? Date.now;
         this.sleepFn = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));

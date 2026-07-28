@@ -5,6 +5,7 @@ export interface RateLimiterOptions {
 }
 
 export class RateLimiter {
+  readonly requestsPerMinute: number; // the configured account bucket size, for wiring inspection
   private readonly intervalMs: number;
   private readonly now: () => number;
   private readonly sleepFn: (ms: number) => Promise<void>;
@@ -12,6 +13,7 @@ export class RateLimiter {
   private retryAfterUntil = 0;
 
   constructor(options: RateLimiterOptions) {
+    this.requestsPerMinute = options.requestsPerMinute;
     this.intervalMs = 60_000 / options.requestsPerMinute;
     this.now = options.now ?? Date.now;
     this.sleepFn = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
