@@ -21,7 +21,7 @@ function baseDeps(overrides: Partial<AuthorizeDeps> = {}): { deps: AuthorizeDeps
   const lines: string[] = [];
   const deps: AuthorizeDeps = {
     config,
-    dataDir,
+    tokensPath: `${dataDir}/tokens.enc`,
     generateVerifier: () => 'fixed-verifier',
     generateState: () => 'fixed-state',
     now: () => 1_000_000,

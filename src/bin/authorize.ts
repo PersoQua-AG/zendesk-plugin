@@ -4,7 +4,7 @@ import { resolveAuthConfig } from '../auth/config.js';
 import { authorize } from '../auth/authorize.js';
 
 async function main(): Promise<void> {
-  const { config, dataDir, tokensPath } = resolveAuthConfig(process.env);
+  const { config, tokensPath } = resolveAuthConfig(process.env);
   const absoluteTokensPath = resolve(tokensPath);
 
   // The server reads CLAUDE_PLUGIN_DATA from plugin.json env; this bin is run by
@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   }
   process.stdout.write(`Tokens will be written to: ${absoluteTokensPath}\n`);
 
-  await authorize({ config, dataDir });
+  await authorize({ config, tokensPath });
 }
 
 main().catch((err: unknown) => {

@@ -11,8 +11,6 @@ const MeResponse = z.object({
   }),
 });
 
-export type ZendeskUser = z.infer<typeof MeResponse>['user'];
-
 export async function getMe(
   client: ZendeskHttpClient,
   cache: ResponseCache,
