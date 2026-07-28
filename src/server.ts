@@ -16,6 +16,13 @@ import { registerBusinessRulesTools } from './register/business-rules.js';
 import { registerGuideTools } from './register/guide.js';
 import { registerAnalyticsTools } from './register/analytics.js';
 import { parseReportConfig } from './tools/analytics/business-hours.js';
+import { argv } from 'node:process';
+import { pathToFileURL } from 'node:url';
+
+// Account-wide rate buckets (PRD §5 infra 1): everything shares 400/min; incremental export is
+// special-cased to 10/min.
+export const DEFAULT_RATE_LIMIT_RPM = 400;
+export const INCREMENTAL_RATE_LIMIT_RPM = 10;
 
 function parseSecurityLevel(raw: string | undefined): SecurityLevel {
   return raw === 'strict' || raw === 'off' ? raw : 'standard';
@@ -26,29 +33,45 @@ function parseMarkdownDefault(raw: string | undefined): boolean {
   return raw !== 'false';
 }
 
-const { config: oauthConfig, dataDir, tokensPath } = resolveAuthConfig(process.env);
-const { subdomain, clientSecret } = oauthConfig;
-const securityLevel = parseSecurityLevel(process.env.ZENDESK_SECURITY_LEVEL);
-const markdownDefault = parseMarkdownDefault(process.env.ZENDESK_MARKDOWN_CONVERSION);
+export interface CreatedServer {
+  server: McpServer;
+  ctx: ToolContext;
+  rateLimiter: RateLimiter;
+  incrementalRateLimiter: RateLimiter;
+}
 
-const tokenStore = new TokenStore(tokensPath, clientSecret);
-const authManager = new AuthManager(tokenStore, oauthConfig);
-const rateLimiter = new RateLimiter({ requestsPerMinute: 400 });
-// Incremental export is special-cased to 10 req/min globally (PRD §5 infra 1).
-const incrementalRateLimiter = new RateLimiter({ requestsPerMinute: 10 });
-const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter });
-const cache = new ResponseCache(`${dataDir}/cache`);
+// Build and fully wire the MCP server (auth, rate buckets, cache, ctx, all tool registration)
+// without connecting a transport — so the wiring is importable and testable. Reads env from the
+// argument (defaults to process.env) so a test can inject a fixture environment.
+export function createServer(env: NodeJS.ProcessEnv = process.env): CreatedServer {
+  const { config: oauthConfig, dataDir, tokensPath } = resolveAuthConfig(env);
+  const { subdomain, clientSecret } = oauthConfig;
+  const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
+  const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
 
-const server = new McpServer({ name: 'zendesk', version: '0.1.0' });
+  const tokenStore = new TokenStore(tokensPath, clientSecret);
+  const authManager = new AuthManager(tokenStore, oauthConfig);
+  const rateLimiter = new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
+  const incrementalRateLimiter = new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
+  const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter });
+  const cache = new ResponseCache(`${dataDir}/cache`);
 
-const ctx: ToolContext = { httpClient, cache, securityLevel, markdownDefault, reportConfig: parseReportConfig(process.env) };
-registerCoreTools(server, ctx);
-registerTicketTools(server, ctx);
-registerSearchTools(server, ctx);
-registerDirectoryTools(server, ctx);
-registerBusinessRulesTools(server, ctx);
-registerGuideTools(server, ctx);
-registerAnalyticsTools(server, ctx);
+  const server = new McpServer({ name: 'zendesk', version: '0.1.0' });
+  const ctx: ToolContext = { httpClient, cache, securityLevel, markdownDefault, reportConfig: parseReportConfig(env) };
+  registerCoreTools(server, ctx);
+  registerTicketTools(server, ctx);
+  registerSearchTools(server, ctx);
+  registerDirectoryTools(server, ctx);
+  registerBusinessRulesTools(server, ctx);
+  registerGuideTools(server, ctx);
+  registerAnalyticsTools(server, ctx);
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+  return { server, ctx, rateLimiter, incrementalRateLimiter };
+}
+
+// Connect stdio only when run as the process entrypoint (node dist/server.js), so importing this
+// module for tests does not attempt to open a transport.
+if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) {
+  const { server } = createServer();
+  await server.connect(new StdioServerTransport());
+}
