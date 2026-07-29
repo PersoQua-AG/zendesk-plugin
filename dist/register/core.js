@@ -6,7 +6,7 @@ import { SCREEN_WARNING } from '../tools/screening.js';
 export function registerCoreTools(server, ctx) {
     const { httpClient, cache, securityLevel } = ctx;
     server.registerTool('zendesk_get_me', { description: 'Return the authenticated Zendesk user and role — use to verify auth is working.' }, async () => {
-        const r = await getMe(httpClient, cache);
+        const r = await getMe(httpClient, cache, securityLevel);
         return okWithHandle(r);
     });
     server.registerTool('zendesk_query', {

@@ -10,13 +10,15 @@ async function runJob(client, cache, toolName, path, payload, method, poll, secu
         ...poll,
     });
     // Defense in depth: job-status results carry inbound per-record error text — screen at
-    // ingest so the cached payload is safe at rest (booleans/ids pass through untouched).
+    // ingest so the CACHED payload is safe at rest. `failures` is surfaced to the model, so it
+    // is built from the SCREENED copy: numeric ids/success flags pass through untouched (control),
+    // while every error string comes back fenced. Only counts/status are read from RAW `final`.
     const { value, flagged } = screenRecordDeep(final, (key) => `${toolName}-${key}`, makeScreener(securityLevel));
-    const safe = value;
-    const entry = cache.save(toolName, safe);
-    const failures = (safe.results ?? []).filter((r) => !r.success);
-    const summary = `Job ${safe.status}: ${(safe.results ?? []).length} record(s), ${failures.length} failed.${flagged ? SCREEN_WARNING : ''}`;
-    return { summary, cacheHandle: entry.handle, jobStatus: safe.status, failures };
+    const screened = value;
+    const entry = cache.save(toolName, screened);
+    const failures = (screened.results ?? []).filter((r) => !r.success);
+    const summary = `Job ${final.status}: ${(final.results ?? []).length} record(s), ${failures.length} failed.${flagged ? SCREEN_WARNING : ''}`;
+    return { summary, cacheHandle: entry.handle, jobStatus: final.status, failures };
 }
 export async function createTicketsBulk(client, cache, params, poll = {}, securityLevel = 'standard') {
     if (params.tickets.length === 0)

@@ -13,10 +13,13 @@ describe('makeDescribe', () => {
     expect(line).toBe('#42');
   });
 
-  it('reports flagged=false and passes benign text through for a clean record', () => {
-    const describe = makeDescribe<{ id: number; label?: string }>('widget', (w) => `#${w.id} ${w.label ?? ''}`);
+  it('fences even benign text (all non-empty strings are wrapped) while flagged stays false', () => {
+    const describe = makeDescribe<{ id: number; label?: string }>('widget', (w) => `#${w.id}`);
     const { safe, flagged } = describe({ id: 1, label: 'fine' }, screen);
+    // Detection-evasion is not fence-evasion: benign text is fenced too; flagged reflects only
+    // whether a pattern matched (the warning signal), and no longer gates wrapping.
     expect(flagged).toBe(false);
-    expect((safe as { label: string }).label).toBe('fine');
+    expect((safe as { label: string }).label).toContain('zendesk-content-widget-1-label-');
+    expect((safe as { label: string }).label).toContain('fine');
   });
 });

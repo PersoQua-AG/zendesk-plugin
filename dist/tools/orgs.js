@@ -42,11 +42,11 @@ export async function getOrg(client, cache, params, securityLevel = 'standard') 
     const safe = value;
     const entry = cache.save('zendesk_get_org', safe);
     const warning = flagged ? SCREEN_WARNING : '';
-    // `name` is always fenced in the cache; show a short safe indicator in the summary rather
-    // than the raw wrapped envelope (see getUser). The cached payload keeps the fenced value.
-    const displayName = flagged ? '[flagged]' : parsed.data.organization.name ?? '(no name)';
+    // `name` is attacker-controllable free text — render it from the FENCED `safe` copy, never
+    // raw. id is numeric (control).
+    const org = safe.organization;
     return {
-        summary: `Organization #${safe.organization.id} ${displayName}${warning}`,
+        summary: `Organization #${org.id} ${org.name ?? '(no name)'}${warning}`,
         cacheHandle: entry.handle,
         flagged,
     };

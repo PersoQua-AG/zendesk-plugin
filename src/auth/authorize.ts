@@ -11,7 +11,9 @@ import { TokenStore } from './token-store.js';
 
 export interface AuthorizeDeps {
   config: OAuthConfig;
-  dataDir: string;
+  // The resolved token file path from resolveAuthConfig — the single source of truth the server
+  // also reads, so the two never derive divergent locations.
+  tokensPath: string;
   waitForCode?: (port: number, state: string) => Promise<AuthorizationResult>;
   exchange?: typeof exchangeCodeForTokens;
   generateVerifier?: () => string;
@@ -26,7 +28,7 @@ export interface AuthorizeDeps {
 export async function authorize(deps: AuthorizeDeps): Promise<void> {
   const {
     config,
-    dataDir,
+    tokensPath,
     waitForCode = waitForAuthorizationCode,
     exchange = exchangeCodeForTokens,
     generateVerifier = generateCodeVerifier,
@@ -47,7 +49,7 @@ export async function authorize(deps: AuthorizeDeps): Promise<void> {
   const result = await waitForCode(config.callbackPort, state);
   const tokens = await exchange(config, result.code, verifier, result.redirectUri);
 
-  const store = new TokenStore(`${dataDir}/tokens.enc`, config.clientSecret);
+  const store = new TokenStore(tokensPath, config.clientSecret);
   store.save({
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,

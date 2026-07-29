@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { resolveAuthConfig } from '../auth/config.js';
 import { authorize } from '../auth/authorize.js';
 async function main() {
-    const { config, dataDir, tokensPath } = resolveAuthConfig(process.env);
+    const { config, tokensPath } = resolveAuthConfig(process.env);
     const absoluteTokensPath = resolve(tokensPath);
     // The server reads CLAUDE_PLUGIN_DATA from plugin.json env; this bin is run by
     // hand. If it is unset here, the bin writes tokens.enc to a DIFFERENT dataDir
@@ -15,7 +15,7 @@ async function main() {
             'before authorizing, or the server will report "No authorization found".\n');
     }
     process.stdout.write(`Tokens will be written to: ${absoluteTokensPath}\n`);
-    await authorize({ config, dataDir });
+    await authorize({ config, tokensPath });
 }
 main().catch((err) => {
     const message = err instanceof Error ? err.message : String(err);

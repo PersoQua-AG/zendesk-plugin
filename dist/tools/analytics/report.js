@@ -1,6 +1,7 @@
 // src/tools/analytics/report.ts
-// Composite analytics report. This section is PURE (network-free): aggregation over
-// already-screened records. The tool wrapper (Task 10) fetches + caches around it.
+// Composite analytics report. This section is PURE (network-free): aggregation over the RAW
+// pre-screen records (fencing would turn semantic strings into unparseable envelopes). The tool
+// wrapper (Task 10) fetches, aggregates over raw, and caches the SCREENED copies around it.
 //   - volume: tickets created within the range.
 //   - first-reply / resolution time: activate→fulfill metric-event intervals, reported BOTH
 //     calendar (raw delta) and business (business-hours calculator).
@@ -132,6 +133,8 @@ export function buildReport(input) {
 }
 export function renderReport(report, startTime, endTime) {
     const dur = (s) => `avg ${s.avgMinutes}m · p50 ${s.p50Minutes}m · min ${s.minMinutes}m · max ${s.maxMinutes}m (n=${s.count})`;
+    // `m` is a Zendesk-internal SLA metric name (first_reply_time, resolution_time, …) set by the
+    // server, not requester free text — safe to print raw; `n` is a count.
     const breachLines = Object.entries(report.slaBreaches).map(([m, n]) => `  - ${m}: ${n}`);
     const breaches = breachLines.length > 0 ? breachLines.join('\n') : '  - none';
     const csat = report.csat.scorePct === null ? 'no rated responses' : `${report.csat.scorePct}% (${report.csat.good} good / ${report.csat.bad} bad)`;
@@ -172,10 +175,13 @@ export async function report(client, cache, params, config, securityLevel = 'sta
         describe: describeReportEvent, startTime: params.startTime, cap: DEFAULT_EVENTS_CAP, securityLevel, errorLabel: '/incremental/ticket_metric_events',
     });
     const screenedRatings = await fetchRatings(client, { startTime: params.startTime, cap: DEFAULT_RATINGS_CAP }, securityLevel);
+    // Aggregate over the RAW (pre-screen) records: fencing wraps every string, so the screened
+    // copies' created_at / metric / type / score would be unparseable envelopes. The CACHE below
+    // still stores the screened copies, so the payload at rest stays safe.
     const built = buildReport({
-        tickets: screenedTickets.records,
-        events: screenedEvents.records,
-        ratings: screenedRatings.records,
+        tickets: screenedTickets.raw,
+        events: screenedEvents.raw,
+        ratings: screenedRatings.raw,
         rangeStartMs,
         rangeEndMs,
         config,
