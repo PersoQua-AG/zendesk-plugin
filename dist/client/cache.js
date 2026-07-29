@@ -11,7 +11,6 @@ export class ResponseCache {
     resolvedDir;
     ttlMs;
     maxBytes;
-    now;
     constructor(cacheDir, options = {}) {
         this.cacheDir = cacheDir;
         if (!existsSync(cacheDir))
@@ -19,7 +18,6 @@ export class ResponseCache {
         this.resolvedDir = resolve(cacheDir);
         this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
         this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-        this.now = options.now ?? Date.now;
     }
     save(toolName, data) {
         const handle = `${toolName}-${randomBytes(6).toString('hex')}`;
@@ -38,7 +36,7 @@ export class ResponseCache {
         return JSON.parse(readFileSync(path, 'utf8'));
     }
     isExpired(path) {
-        return this.now() - statSync(path).mtimeMs > this.ttlMs;
+        return Date.now() - statSync(path).mtimeMs > this.ttlMs;
     }
     // One sweep per write: drop expired entries, then evict oldest-first until the total on-disk
     // size is back under the cap. Cheap because a single MCP session holds few, small payloads.
@@ -49,7 +47,7 @@ export class ResponseCache {
                 continue;
             const path = join(this.cacheDir, name);
             const stat = statSync(path);
-            if (this.now() - stat.mtimeMs > this.ttlMs) {
+            if (Date.now() - stat.mtimeMs > this.ttlMs) {
                 rmSync(path, { force: true });
                 continue;
             }

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createServer, DEFAULT_RATE_LIMIT_RPM, INCREMENTAL_RATE_LIMIT_RPM } from '../src/server.js';
+import { createServer } from '../src/server.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -25,9 +25,7 @@ function fixtureEnv(): NodeJS.ProcessEnv {
 describe('createServer wiring', () => {
   it('wires the 400/10 rate buckets, standard security default, and reportConfig', () => {
     const { rateLimiter, incrementalRateLimiter, ctx } = createServer(fixtureEnv());
-    expect(rateLimiter.requestsPerMinute).toBe(DEFAULT_RATE_LIMIT_RPM);
     expect(rateLimiter.requestsPerMinute).toBe(400);
-    expect(incrementalRateLimiter.requestsPerMinute).toBe(INCREMENTAL_RATE_LIMIT_RPM);
     expect(incrementalRateLimiter.requestsPerMinute).toBe(10);
     expect(ctx.securityLevel).toBe('standard');
     expect(ctx.reportConfig).toBeDefined();

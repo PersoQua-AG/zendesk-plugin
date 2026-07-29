@@ -183,6 +183,8 @@ export function buildReport(input: ReportInput): Report {
 
 export function renderReport(report: Report, startTime: number, endTime: number): string {
   const dur = (s: DurationStats): string => `avg ${s.avgMinutes}m · p50 ${s.p50Minutes}m · min ${s.minMinutes}m · max ${s.maxMinutes}m (n=${s.count})`;
+  // `m` is a Zendesk-internal SLA metric name (first_reply_time, resolution_time, …) set by the
+  // server, not requester free text — safe to print raw; `n` is a count.
   const breachLines = Object.entries(report.slaBreaches).map(([m, n]) => `  - ${m}: ${n}`);
   const breaches = breachLines.length > 0 ? breachLines.join('\n') : '  - none';
   const csat = report.csat.scorePct === null ? 'no rated responses' : `${report.csat.scorePct}% (${report.csat.good} good / ${report.csat.bad} bad)`;
