@@ -17,21 +17,18 @@ export interface CacheEntry {
 export interface ResponseCacheOptions {
   ttlMs?: number;
   maxBytes?: number;
-  now?: () => number;
 }
 
 export class ResponseCache {
   private readonly resolvedDir: string;
   private readonly ttlMs: number;
   private readonly maxBytes: number;
-  private readonly now: () => number;
 
   constructor(private readonly cacheDir: string, options: ResponseCacheOptions = {}) {
     if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true });
     this.resolvedDir = resolve(cacheDir);
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-    this.now = options.now ?? Date.now;
   }
 
   save(toolName: string, data: unknown): CacheEntry {
@@ -53,7 +50,7 @@ export class ResponseCache {
   }
 
   private isExpired(path: string): boolean {
-    return this.now() - statSync(path).mtimeMs > this.ttlMs;
+    return Date.now() - statSync(path).mtimeMs > this.ttlMs;
   }
 
   // One sweep per write: drop expired entries, then evict oldest-first until the total on-disk
@@ -64,7 +61,7 @@ export class ResponseCache {
       if (!name.endsWith('.json')) continue;
       const path = join(this.cacheDir, name);
       const stat = statSync(path);
-      if (this.now() - stat.mtimeMs > this.ttlMs) {
+      if (Date.now() - stat.mtimeMs > this.ttlMs) {
         rmSync(path, { force: true });
         continue;
       }

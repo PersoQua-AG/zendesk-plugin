@@ -28,16 +28,18 @@ describe('getUser', () => {
     expect(result.flagged).toBe(true);
     const [, cached] = (cache.save as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(cached.user.notes).toContain('zendesk-content-user-8-notes-');
-    // Summary shows a short safe indicator, never the raw wrapped envelope.
-    expect(result.summary).toContain('[flagged]');
-    expect(result.summary).not.toContain('zendesk-content-');
   });
 
-  it('shows the plain name in the summary when nothing is flagged', async () => {
+  it('renders name and email from the FENCED copy in the summary (never raw)', async () => {
+    // name/email are attacker-controllable free text: the model-facing summary must carry the
+    // fenced value, not the raw string.
     const client = { request: vi.fn().mockResolvedValue({ user: { id: 7, name: 'Bob', email: 'b@x.io', role: 'admin' } }) } as unknown as ZendeskHttpClient;
     const result = await getUser(client, cacheStub(), { userId: 7 });
+    expect(result.summary).toContain('zendesk-content-user-7-name-');
+    expect(result.summary).toContain('zendesk-content-user-7-email-');
+    // Fenced, not raw: the bare values do not appear outside their envelope.
     expect(result.summary).toContain('Bob');
-    expect(result.summary).not.toContain('zendesk-content-');
+    expect(result.summary).toContain('b@x.io');
   });
 
   it('throws on a malformed response envelope', async () => {

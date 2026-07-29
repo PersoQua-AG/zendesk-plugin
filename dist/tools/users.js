@@ -62,13 +62,11 @@ export async function getUser(client, cache, params, securityLevel = 'standard')
     const safe = value;
     const entry = cache.save('zendesk_get_user', safe);
     const warning = flagged ? SCREEN_WARNING : '';
-    // Every string is fenced in the cached copy, so the one-line summary reads the plain values
-    // from the RAW record (the cache keeps the fence). `name` collapses to `[flagged]` when any
-    // field tripped a detector, else the plain name; email/role are short structured identifiers.
-    const u = parsed.data.user;
-    const displayName = flagged ? '[flagged]' : u.name ?? '(no name)';
+    // name/email are attacker-controllable free text — render them from the FENCED `safe.user`,
+    // never raw. role is a server-controlled enum, so it may read raw. id is numeric (control).
+    const u = safe.user;
     return {
-        summary: `User #${safe.user.id} ${displayName} <${u.email ?? 'no-email'}> [${u.role ?? 'end-user'}]${warning}`,
+        summary: `User #${u.id} ${u.name ?? '(no name)'} <${u.email ?? 'no-email'}> [${u.role ?? 'end-user'}]${warning}`,
         cacheHandle: entry.handle,
         flagged,
     };
