@@ -14,7 +14,7 @@ export function registerCoreTools(server: McpServer, ctx: ToolContext): void {
     'zendesk_get_me',
     { description: 'Return the authenticated Zendesk user and role — use to verify auth is working.' },
     async () => {
-      const r = await getMe(httpClient, cache);
+      const r = await getMe(httpClient, cache, securityLevel);
       return okWithHandle(r);
     },
   );
