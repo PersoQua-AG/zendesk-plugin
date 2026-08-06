@@ -33,11 +33,13 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
     return this.clients;
   }
 
-  async authorize(_client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
+  async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
+    // Refuse an authorize without PKCE — never forward an empty challenge to Zendesk (M4).
+    if (!params.codeChallenge) throw new Error('code_challenge is required (PKCE).');
     const state = params.state ?? randomBytes(16).toString('hex');
-    // Stash the downstream redirect + PKCE challenge keyed by state (single-use, TTL) so the
+    // Stash the downstream redirect keyed by state and bound to this client (single-use, TTL) so the
     // Zendesk callback can complete the exchange and the state is verified as anti-CSRF.
-    this.issued.pendingRedirect(state, params.redirectUri);
+    this.issued.pendingRedirect(client.client_id, state, params.redirectUri);
     res.redirect(buildAuthorizationUrl(this.config, params.codeChallenge, state, this.callbackUrl));
   }
 

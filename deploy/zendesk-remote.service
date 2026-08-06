@@ -22,6 +22,9 @@ RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
+# ProtectSystem=strict makes the FS read-only except these paths. CLAUDE_PLUGIN_DATA (in the
+# EnvironmentFile) MUST resolve under a ReadWritePaths entry or token/audit/cache writes fail with
+# EROFS. Keep this list in sync with CLAUDE_PLUGIN_DATA (L5).
 ReadWritePaths=/var/lib/zendesk-connector
 
 [Install]

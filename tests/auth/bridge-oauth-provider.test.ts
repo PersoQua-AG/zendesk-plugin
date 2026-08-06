@@ -92,8 +92,21 @@ describe('ZendeskBridgeOAuthProvider', () => {
 
   it('refuses an unknown OAuth state (CSRF discipline)', () => {
     const { issued } = build();
-    issued.pendingRedirect('good-state', 'https://claude.ai/cb');
+    issued.pendingRedirect('claude.ai', 'good-state', 'https://claude.ai/cb');
     expect(() => issued.consumePendingRedirect('forged-state')).toThrow(/CSRF/i);
     expect(issued.consumePendingRedirect('good-state')).toEqual({ redirectUri: 'https://claude.ai/cb' });
+  });
+
+  it('refuses authorize without a PKCE code_challenge (M4)', async () => {
+    const { provider } = build();
+    const res = { redirect: vi.fn() } as unknown as Response;
+    const params = { state: 's-1', redirectUri: 'https://claude.ai/cb' } as AuthorizationParams;
+    await expect(provider.authorize(client, params, res)).rejects.toThrow(/code_challenge/i);
+  });
+
+  it('rejects a duplicate (client_id, state) pending authorize (M4)', () => {
+    const { issued } = build();
+    issued.pendingRedirect('claude.ai', 'dup-state', 'https://claude.ai/cb');
+    expect(() => issued.pendingRedirect('claude.ai', 'dup-state', 'https://claude.ai/cb')).toThrow(/CSRF|colliding/i);
   });
 });

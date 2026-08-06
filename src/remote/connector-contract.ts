@@ -22,6 +22,9 @@ function requirePublicBaseUrl(): string {
 
 // Minimal in-memory Dynamic Client Registration store (RFC 7591). If the Owner spike shows
 // claude.ai uses a pre-registered client_id instead, seed a single client here — no downstream edit.
+// Hard cap on the open DCR store so unauthenticated /register cannot grow it without bound (H1).
+const MAX_CLIENTS = 1000;
+
 class InMemoryClientsStore implements OAuthRegisteredClientsStore {
   private readonly clients = new Map<string, OAuthClientInformationFull>();
 
@@ -30,6 +33,7 @@ class InMemoryClientsStore implements OAuthRegisteredClientsStore {
   }
 
   registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): OAuthClientInformationFull {
+    if (this.clients.size >= MAX_CLIENTS) throw new Error('Client registration limit reached.');
     // The register handler injects client_id when clientIdGeneration is on; generate one if absent.
     const existingId = (client as Partial<OAuthClientInformationFull>).client_id;
     const clientId = existingId ?? randomUUID();

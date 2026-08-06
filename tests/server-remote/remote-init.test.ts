@@ -24,7 +24,7 @@ function fixtureEnv(): { env: NodeJS.ProcessEnv; issued: IssuedTokenStore } {
     ZENDESK_SUBDOMAIN: 'acme',
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
-    REMOTE_TOKEN_ENC_KEY: 'enc-key-123',
+    REMOTE_TOKEN_ENC_KEY: '0+k4qZ+4xicM8rKBVMRYFikJpkLODNCh33wHb08pJyU=',
     CLAUDE_PLUGIN_DATA: dataDir,
   };
   const issued = new IssuedTokenStore(join(dataDir, 'issued'), 'secret-xyz');
@@ -85,6 +85,12 @@ describe('remote entrypoint', () => {
 
     buildRemoteApp(env, { audit: new WriteAuditLog(auditPath) });
     expect(readFileSync(auditPath, 'utf8').trim()).toBe(''); // pruned by the startup sweep
+  });
+
+  it('refuses to boot with a weak REMOTE_TOKEN_ENC_KEY and boots with a strong one (M3)', () => {
+    const { env } = fixtureEnv();
+    expect(() => buildRemoteApp({ ...env, REMOTE_TOKEN_ENC_KEY: 'too-short' })).toThrow(/too weak/i);
+    expect(() => buildRemoteApp(env)).not.toThrow(); // fixtureEnv key is 32 base64 bytes
   });
 
   it('rejects a non-initialize frame without a session id with 4xx and survives', async () => {

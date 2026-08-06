@@ -132,6 +132,8 @@ export class SessionManager {
         });
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
+            // DNS-rebinding protection, gated on a configured public URL so local/test hosts still work (L1).
+            ...this.dnsRebindingGuard(),
             onsessioninitialized: (id) => {
                 this.sessions.set(id, { transport, identity });
             },
@@ -143,6 +145,14 @@ export class SessionManager {
         await server.connect(transport);
         this.wireAudit(transport, identity);
         await transport.handleRequest(req, res, req.body);
+    }
+    // Only enforce Host/Origin checks when REMOTE_PUBLIC_URL is set (production); local/test clients
+    // reach the app by 127.0.0.1/localhost and must not be locked out (L1).
+    dnsRebindingGuard() {
+        const publicUrl = this.env.REMOTE_PUBLIC_URL;
+        if (!publicUrl)
+            return {};
+        return { enableDnsRebindingProtection: true, allowedHosts: [new URL(publicUrl).host] };
     }
     // Wrap the transport's message hooks AFTER connect (server already installed them) so we observe
     // both directions without replacing tool dispatch — no tool-file edit.
