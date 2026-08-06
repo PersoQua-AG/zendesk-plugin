@@ -1,5 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { TokenStore } from './token-store.js';
 
 // Opaque access tokens we issue to claude.ai live for one session window; if the process restarts,
@@ -9,7 +10,6 @@ const DEFAULT_TTL_MS = 3_600_000;
 
 interface Pending {
   redirectUri: string;
-  codeChallenge: string;
   expiresAt: number;
 }
 
@@ -32,18 +32,21 @@ export class IssuedTokenStore {
     return opaque;
   }
 
-  // Throws (→ mapped to 401) for an unknown or expired token — never returns a partial identity.
+  // Throws InvalidTokenError (the SDK type requireBearerAuth maps to 401) for an unknown or expired
+  // token, so claude.ai gets a clean re-auth signal — never a 500. Never returns a partial identity.
   // expiresAt is epoch-ms (the AuthManager stores the identity in the accessToken field).
   identityFor(token: string): { identity: string; expiresAt: number } {
     const rec = this.fileFor(token).load();
-    if (!rec) throw new Error('Unknown access token — re-authorize the Zendesk connector.');
-    if (Date.now() >= rec.expiresAt) throw new Error('Access token expired — re-authorize the Zendesk connector.');
+    // Messages are surfaced verbatim in the WWW-Authenticate header, which is latin1-only — keep them
+    // ASCII (no em dash) or setHeader throws and the clean 401 degrades back into a 500.
+    if (!rec) throw new InvalidTokenError('Unknown access token - re-authorize the Zendesk connector.');
+    if (Date.now() >= rec.expiresAt) throw new InvalidTokenError('Access token expired - re-authorize the Zendesk connector.');
     return { identity: rec.accessToken, expiresAt: rec.expiresAt };
   }
 
-  pendingRedirect(state: string, redirectUri: string, codeChallenge: string): void {
+  pendingRedirect(state: string, redirectUri: string): void {
     this.evictExpired(); // bound the map: never-consumed (abandoned) authorize states must not accrue.
-    this.pending.set(state, { redirectUri, codeChallenge, expiresAt: Date.now() + this.ttlMs });
+    this.pending.set(state, { redirectUri, expiresAt: Date.now() + this.ttlMs });
   }
 
   private evictExpired(): void {
@@ -54,11 +57,11 @@ export class IssuedTokenStore {
   }
 
   // Single-use: an unknown, reused, or expired state is refused as possible CSRF.
-  consumePendingRedirect(state: string): { redirectUri: string; codeChallenge: string } {
+  consumePendingRedirect(state: string): { redirectUri: string } {
     const p = this.pending.get(state);
     this.pending.delete(state);
     if (!p || Date.now() >= p.expiresAt) throw new Error('OAuth state mismatch or expired — possible CSRF.');
-    return { redirectUri: p.redirectUri, codeChallenge: p.codeChallenge };
+    return { redirectUri: p.redirectUri };
   }
 
   private fileFor(opaque: string): TokenStore {

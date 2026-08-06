@@ -33,7 +33,7 @@ export class ZendeskBridgeOAuthProvider {
         const state = params.state ?? randomBytes(16).toString('hex');
         // Stash the downstream redirect + PKCE challenge keyed by state (single-use, TTL) so the
         // Zendesk callback can complete the exchange and the state is verified as anti-CSRF.
-        this.issued.pendingRedirect(state, params.redirectUri, params.codeChallenge);
+        this.issued.pendingRedirect(state, params.redirectUri);
         res.redirect(buildAuthorizationUrl(this.config, params.codeChallenge, state, this.callbackUrl));
     }
     async challengeForAuthorizationCode() {

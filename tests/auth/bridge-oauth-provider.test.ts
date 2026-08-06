@@ -92,8 +92,8 @@ describe('ZendeskBridgeOAuthProvider', () => {
 
   it('refuses an unknown OAuth state (CSRF discipline)', () => {
     const { issued } = build();
-    issued.pendingRedirect('good-state', 'https://claude.ai/cb', 'chal');
+    issued.pendingRedirect('good-state', 'https://claude.ai/cb');
     expect(() => issued.consumePendingRedirect('forged-state')).toThrow(/CSRF/i);
-    expect(issued.consumePendingRedirect('good-state')).toEqual({ redirectUri: 'https://claude.ai/cb', codeChallenge: 'chal' });
+    expect(issued.consumePendingRedirect('good-state')).toEqual({ redirectUri: 'https://claude.ai/cb' });
   });
 });

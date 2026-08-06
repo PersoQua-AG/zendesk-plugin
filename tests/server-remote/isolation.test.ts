@@ -100,6 +100,7 @@ async function bootTwoIdentity(zdTokens: Record<string, string>): Promise<{
   base: string;
   issued: IssuedTokenStore;
   zdBearers: string[];
+  dataDir: string;
 }> {
   const dataDir = tmp();
   const env: NodeJS.ProcessEnv = {
@@ -127,7 +128,7 @@ async function bootTwoIdentity(zdTokens: Record<string, string>): Promise<{
   servers.push(server);
   await new Promise<void>((r) => server.once('listening', () => r()));
   const { port } = server.address() as AddressInfo;
-  return { base: `http://127.0.0.1:${port}`, issued, zdBearers };
+  return { base: `http://127.0.0.1:${port}`, issued, zdBearers, dataDir };
 }
 
 describe('cross-identity session hijack (REQ security)', () => {
@@ -171,5 +172,75 @@ describe('cross-identity session hijack (REQ security)', () => {
     expect(zdBearers).not.toContain('Bearer ZD-TOKEN-B');
 
     await clientA.close();
+  });
+
+  // The hijack vector is not method-specific: GET (SSE stream) and DELETE (session teardown) must be
+  // rejected on the same identity-binding check as POST, or B could read A's stream or kill A's session.
+  it('rejects B driving A session id on GET and DELETE too', async () => {
+    const { base, issued } = await bootTwoIdentity({ 'zendesk:A': 'ZD-TOKEN-A', 'zendesk:B': 'ZD-TOKEN-B' });
+    const tokenA = issued.mint('zendesk:A');
+    const tokenB = issued.mint('zendesk:B');
+
+    const transportA = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${tokenA}` } },
+    });
+    const clientA = new Client({ name: 'iso-A', version: '0.0.0' });
+    await clientA.connect(transportA);
+    const sidA = transportA.sessionId as string;
+    expect(sidA).toBeTruthy();
+
+    const hijack = (method: string): Promise<globalThis.Response> =>
+      fetch(`${base}/mcp`, {
+        method,
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          Authorization: `Bearer ${tokenB}`,
+          'mcp-session-id': sidA,
+        },
+      });
+
+    expect((await hijack('GET')).status).toBe(403);
+    expect((await hijack('DELETE')).status).toBe(403);
+
+    await clientA.close();
+  });
+
+  it('returns 401 for an unknown bearer (not 500)', async () => {
+    const { base } = await bootTwoIdentity({ 'zendesk:A': 'ZD-TOKEN-A' });
+    const unknownToken = 'deadbeef'.repeat(8); // never minted → no token file
+
+    const res = await fetch(`${base}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'application/json, text/event-stream', Authorization: `Bearer ${unknownToken}` },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 for an expired issued token (not 500)', async () => {
+    const { base, dataDir } = await bootTwoIdentity({ 'zendesk:A': 'ZD-TOKEN-A' });
+    // Mint an already-expired token into the SAME issued dir the server reads (negative TTL), so the
+    // server's store loads the file and sees it past expiry — the hourly-expiry lifecycle case.
+    const expired = new IssuedTokenStore(join(dataDir, 'issued'), 'enc-key-123', -1000).mint('zendesk:A');
+
+    const res = await fetch(`${base}/mcp`, {
+      method: 'GET',
+      headers: { Accept: 'application/json, text/event-stream', Authorization: `Bearer ${expired}` },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 404 for a valid bearer on an unknown session (fail-closed)', async () => {
+    const { base, issued } = await bootTwoIdentity({ 'zendesk:A': 'ZD-TOKEN-A' });
+    const tokenA = issued.mint('zendesk:A');
+
+    const res = await fetch(`${base}/mcp`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json, text/event-stream',
+        Authorization: `Bearer ${tokenA}`,
+        'mcp-session-id': 'never-opened-session-id',
+      },
+    });
+    expect(res.status).toBe(404);
   });
 });

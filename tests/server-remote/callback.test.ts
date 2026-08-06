@@ -38,7 +38,7 @@ const DOWNSTREAM = 'https://claude.ai/cb';
 describe('upstream /callback (REQ anti-CSRF state)', () => {
   it('consumes a valid state once and redirects the code back to the downstream client', async () => {
     const { base, issued } = await boot();
-    issued.pendingRedirect('state-123', DOWNSTREAM, 'chal');
+    issued.pendingRedirect('state-123', DOWNSTREAM);
 
     const res = await fetch(`${base}/callback?code=zcode&state=state-123`, { redirect: 'manual' });
     expect(res.status).toBeGreaterThanOrEqual(300);

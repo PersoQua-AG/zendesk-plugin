@@ -1,5 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { TokenStore } from './token-store.js';
 // Opaque access tokens we issue to claude.ai live for one session window; if the process restarts,
 // claude.ai simply re-authorizes (the durable, restart-surviving state is the per-user Zendesk
@@ -24,19 +25,22 @@ export class IssuedTokenStore {
         this.fileFor(opaque).save({ accessToken: identity, refreshToken: '', expiresAt: Date.now() + this.ttlMs });
         return opaque;
     }
-    // Throws (→ mapped to 401) for an unknown or expired token — never returns a partial identity.
+    // Throws InvalidTokenError (the SDK type requireBearerAuth maps to 401) for an unknown or expired
+    // token, so claude.ai gets a clean re-auth signal — never a 500. Never returns a partial identity.
     // expiresAt is epoch-ms (the AuthManager stores the identity in the accessToken field).
     identityFor(token) {
         const rec = this.fileFor(token).load();
+        // Messages are surfaced verbatim in the WWW-Authenticate header, which is latin1-only — keep them
+        // ASCII (no em dash) or setHeader throws and the clean 401 degrades back into a 500.
         if (!rec)
-            throw new Error('Unknown access token — re-authorize the Zendesk connector.');
+            throw new InvalidTokenError('Unknown access token - re-authorize the Zendesk connector.');
         if (Date.now() >= rec.expiresAt)
-            throw new Error('Access token expired — re-authorize the Zendesk connector.');
+            throw new InvalidTokenError('Access token expired - re-authorize the Zendesk connector.');
         return { identity: rec.accessToken, expiresAt: rec.expiresAt };
     }
-    pendingRedirect(state, redirectUri, codeChallenge) {
+    pendingRedirect(state, redirectUri) {
         this.evictExpired(); // bound the map: never-consumed (abandoned) authorize states must not accrue.
-        this.pending.set(state, { redirectUri, codeChallenge, expiresAt: Date.now() + this.ttlMs });
+        this.pending.set(state, { redirectUri, expiresAt: Date.now() + this.ttlMs });
     }
     evictExpired() {
         const now = Date.now();
@@ -51,7 +55,7 @@ export class IssuedTokenStore {
         this.pending.delete(state);
         if (!p || Date.now() >= p.expiresAt)
             throw new Error('OAuth state mismatch or expired — possible CSRF.');
-        return { redirectUri: p.redirectUri, codeChallenge: p.codeChallenge };
+        return { redirectUri: p.redirectUri };
     }
     fileFor(opaque) {
         const name = createHash('sha256').update(opaque).digest('hex');

@@ -1,6 +1,7 @@
 import express from 'express';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
+import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { resolveAuthConfig } from '../auth/config.js';
 import { RateLimiter } from '../client/rate-limiter.js';
 import { DEFAULT_RATE_LIMIT_RPM, INCREMENTAL_RATE_LIMIT_RPM } from '../server.js';
@@ -84,7 +85,9 @@ export function buildRemoteApp(env = process.env, deps = {}) {
 // Surface a 400 without ever logging the request body (REQ-1 negative: no body content in logs).
 // The logged line uses the actionable auth/session copy, never a stack trace.
 function fail(res, err) {
-    log({ msg: `mcp request error: ${describeAuthError(err)}`, outcome: 'error' });
+    // A missing/invalid identity is a re-auth signal (401); any other request error stays a fail-closed 400.
+    const status = err instanceof InvalidTokenError ? 401 : 400;
+    log({ msg: `mcp request error: ${describeAuthError(err)}`, outcome: String(status) });
     if (!res.headersSent)
-        res.status(400).end();
+        res.status(status).end();
 }

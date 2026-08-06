@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createServer } from '../server.js';
 import { ResponseCache } from '../client/cache.js';
@@ -166,7 +167,8 @@ function sessionId(req) {
 function identityOf(req) {
     const identity = req.auth?.extra?.identity;
     if (typeof identity !== 'string' || identity.length === 0) {
-        throw new Error('Authenticated session is missing a Zendesk identity.');
+        // Fail-closed → 401 (same re-auth signal as an unknown/expired token) via the SDK-mapped type.
+        throw new InvalidTokenError('Authenticated session is missing a Zendesk identity.');
     }
     return identity;
 }
