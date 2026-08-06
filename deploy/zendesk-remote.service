@@ -1,0 +1,26 @@
+# systemd alternative to docker-compose for the M9 remote connector (D2). Put TLS in front via a
+# separate reverse proxy (nginx/Caddy). REQUIRES (ops-gated): EU VM, Node 20, secrets in an
+# EnvironmentFile with mode 0600, and a persistent data dir.
+[Unit]
+Description=Zendesk Remote MCP Connector (M9)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zendesk
+WorkingDirectory=/opt/zendesk-connector
+# Secrets (ZENDESK_OAUTH_CLIENT_SECRET, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_SUBDOMAIN,
+# REMOTE_PUBLIC_URL, CLAUDE_PLUGIN_DATA, PORT) live here, provisioned by ops — never in the repo.
+EnvironmentFile=/etc/zendesk-connector/connector.env
+ExecStart=/usr/bin/node dist/bin/remote.js
+Restart=always
+RestartSec=5
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/zendesk-connector
+
+[Install]
+WantedBy=multi-user.target

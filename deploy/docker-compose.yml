@@ -1,0 +1,41 @@
+# M9 remote connector — app + TLS-terminating reverse proxy. EU-region host only (D2/D3).
+# REQUIRES (ops-gated): EU VM, DNS for a stable public hostname, and secrets provisioned via the
+# host secrets manager — NEVER baked into the image or committed. Deploy is intentionally NOT run
+# from this repo.
+services:
+  connector:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: always
+    environment:
+      # Injected from the host secrets manager at deploy time (do not hardcode):
+      - ZENDESK_SUBDOMAIN=${ZENDESK_SUBDOMAIN}
+      - ZENDESK_OAUTH_CLIENT_ID=${ZENDESK_OAUTH_CLIENT_ID}
+      - ZENDESK_OAUTH_CLIENT_SECRET=${ZENDESK_OAUTH_CLIENT_SECRET}
+      - REMOTE_PUBLIC_URL=${REMOTE_PUBLIC_URL}
+      - CLAUDE_PLUGIN_DATA=/data
+      - PORT=8080
+    volumes:
+      # Persist per-user encrypted tokens, issued tokens, audit log, and cache across restarts
+      # (REQ-9 restart resilience). EU-region volume only.
+      - connector-data:/data
+    expose:
+      - "8080"
+
+  # TLS terminates here (>=1.2). Point Caddy at the connector and provision a real cert for the
+  # public hostname claude.ai reaches. Config lives on the ops host, not in this repo.
+  proxy:
+    image: caddy:2
+    restart: always
+    depends_on:
+      - connector
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+
+volumes:
+  connector-data:
+  caddy-data:
