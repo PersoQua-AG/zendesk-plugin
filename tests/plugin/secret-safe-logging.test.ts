@@ -16,7 +16,9 @@ const STDOUT_WRITE = /console\.(log|info|debug)\s*\(|process\.stdout/;
 // stderr is safe for the stdio protocol, but only the CLI and the report config
 // parser (config-degradation warnings) are permitted to use it; every other
 // server-loaded module must stay silent so nothing can leak.
-const STDERR_ALLOWLIST = ['bin/', 'auth/authorize.ts', 'tools/analytics/business-hours.ts'];
+// remote/logger.ts is the single sanctioned stderr writer on the remote path — it redacts
+// bearer tokens/secrets before writing, and callers pass ids/outcomes, never PII bodies.
+const STDERR_ALLOWLIST = ['bin/', 'auth/authorize.ts', 'tools/analytics/business-hours.ts', 'remote/logger.ts'];
 const STDERR_WRITE = /console\.(warn|error|trace|dir|table|group|count|assert)\s*\(|process\.stderr/;
 
 function srcFiles(): string[] {
