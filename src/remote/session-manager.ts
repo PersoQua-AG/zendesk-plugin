@@ -13,7 +13,9 @@ import { log } from './logger.js';
 
 // Mutating tools worth an audit trail (REQ-10). Reads are intentionally not audited.
 const WRITE_TOOL = /^zendesk_(update|create|apply|add|upsert|import|bulk|attach|delete|remove|set)/;
-const TARGET_KEYS = ['id', 'ticket_id', 'user_id', 'organization_id', 'article_id'] as const;
+const TARGET_KEYS = [
+  'id', 'ticketId', 'ticket_id', 'userId', 'user_id', 'organizationId', 'organization_id', 'articleId', 'article_id',
+] as const;
 
 type ReqWithAuth = IncomingMessage & { auth?: AuthInfo; body?: unknown };
 
