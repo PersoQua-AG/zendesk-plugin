@@ -7,6 +7,7 @@ import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
 import { ResponseCache } from './client/cache.js';
 import type { SecurityLevel } from './security/screen.js';
+import type { TokenProvider } from './client/token-provider.js';
 import type { ToolContext } from './register/context.js';
 import { registerCoreTools } from './register/core.js';
 import { registerTicketTools } from './register/tickets.js';
@@ -40,21 +41,30 @@ export interface CreatedServer {
   incrementalRateLimiter: RateLimiter;
 }
 
+// Optional injection seam (M9): the remote path supplies a per-user TokenProvider, shared
+// account-wide rate buckets, and a per-user cache. Every field defaults to today's stdio
+// single-identity construction, so createServer() with no deps is byte-identical.
+export interface ServerDeps {
+  authManager?: TokenProvider;
+  rateLimiter?: RateLimiter;
+  incrementalRateLimiter?: RateLimiter;
+  cache?: ResponseCache;
+}
+
 // Build and fully wire the MCP server (auth, rate buckets, cache, ctx, all tool registration)
 // without connecting a transport — so the wiring is importable and testable. Reads env from the
 // argument (defaults to process.env) so a test can inject a fixture environment.
-export function createServer(env: NodeJS.ProcessEnv = process.env): CreatedServer {
+export function createServer(env: NodeJS.ProcessEnv = process.env, deps: ServerDeps = {}): CreatedServer {
   const { config: oauthConfig, dataDir, tokensPath } = resolveAuthConfig(env);
   const { subdomain, clientSecret } = oauthConfig;
   const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
   const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
 
-  const tokenStore = new TokenStore(tokensPath, clientSecret);
-  const authManager = new AuthManager(tokenStore, oauthConfig);
-  const rateLimiter = new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
-  const incrementalRateLimiter = new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
+  const authManager = deps.authManager ?? new AuthManager(new TokenStore(tokensPath, clientSecret), oauthConfig);
+  const rateLimiter = deps.rateLimiter ?? new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
+  const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
   const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter });
-  const cache = new ResponseCache(`${dataDir}/cache`);
+  const cache = deps.cache ?? new ResponseCache(`${dataDir}/cache`);
 
   const server = new McpServer({ name: 'zendesk', version: '0.1.0' });
   const ctx: ToolContext = { httpClient, cache, securityLevel, markdownDefault, reportConfig: parseReportConfig(env) };
