@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { buildRemoteApp } from '../../src/remote/remote-server.js';
 import { IssuedTokenStore } from '../../src/auth/issued-token-store.js';
-import { CONNECTOR } from '../../src/remote/connector-contract.js';
+import { InMemoryClientsStore } from '../../src/remote/connector-contract.js';
 
 const KEY = '0+k4qZ+4xicM8rKBVMRYFikJpkLODNCh33wHb08pJyU=';
 const dirs: string[] = [];
@@ -49,8 +49,27 @@ describe('HTTP rate limiting (H1)', () => {
     expect(sawLimited).toBe(true);
   });
 
+  // Behind the reverse proxy, two distinct clients (distinct X-Forwarded-For) must get SEPARATE
+  // buckets — one client's flood must not 429 another. Fails without app.set('trust proxy') because
+  // req.ip would be the proxy IP for both, collapsing them into one global bucket.
+  it('buckets per client IP behind the proxy — one flood does not 429 another', async () => {
+    const base = await boot();
+    const hammer = async (ip: string): Promise<number> => {
+      let status = 0;
+      for (let i = 0; i < 65; i += 1) {
+        status = (await fetch(`${base}/token`, { method: 'POST', headers: { 'X-Forwarded-For': ip } })).status;
+        if (status === 429) break;
+      }
+      return status;
+    };
+    expect(await hammer('203.0.113.1')).toBe(429); // first client exhausts its own bucket
+    const other = await fetch(`${base}/token`, { method: 'POST', headers: { 'X-Forwarded-For': '203.0.113.2' } });
+    expect(other.status).not.toBe(429); // separate bucket — unaffected by the first client's flood
+  });
+
   it('caps the DCR clients store past its hard limit', () => {
-    const store = CONNECTOR.clientsStore();
+    // Fresh store per test — do NOT fill the process-wide singleton (order-coupling).
+    const store = new InMemoryClientsStore();
     let threw = false;
     for (let i = 0; i < 1001; i += 1) {
       try {

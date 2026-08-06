@@ -33,13 +33,13 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
     return this.clients;
   }
 
-  async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
+  async authorize(_client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
     // Refuse an authorize without PKCE — never forward an empty challenge to Zendesk (M4).
     if (!params.codeChallenge) throw new Error('code_challenge is required (PKCE).');
     const state = params.state ?? randomBytes(16).toString('hex');
-    // Stash the downstream redirect keyed by state and bound to this client (single-use, TTL) so the
-    // Zendesk callback can complete the exchange and the state is verified as anti-CSRF.
-    this.issued.pendingRedirect(client.client_id, state, params.redirectUri);
+    // Stash the downstream redirect keyed by state (single-use, TTL) so the Zendesk callback can
+    // complete the exchange and the state is verified as anti-CSRF.
+    this.issued.pendingRedirect(state, params.redirectUri);
     res.redirect(buildAuthorizationUrl(this.config, params.codeChallenge, state, this.callbackUrl));
   }
 
@@ -50,7 +50,7 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
   }
 
   async exchangeAuthorizationCode(
-    _client: OAuthClientInformationFull,
+    client: OAuthClientInformationFull,
     code: string,
     codeVerifier?: string,
     _redirectUri?: string,
@@ -64,7 +64,7 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
       refreshToken: tokens.refreshToken,
       expiresAt: Date.now() + tokens.expiresIn * 1000,
     });
-    return { access_token: this.issued.mint(identity), token_type: 'Bearer', expires_in: 3600 };
+    return { access_token: this.issued.mint(identity, client.client_id), token_type: 'Bearer', expires_in: 3600 };
   }
 
   async exchangeRefreshToken(): Promise<OAuthTokens> {
@@ -74,8 +74,8 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const { identity, expiresAt } = this.issued.identityFor(token); // throws → 401 for unknown/expired
+    const { identity, clientId, expiresAt } = this.issued.identityFor(token); // throws → 401 for unknown/expired
     // AuthInfo.expiresAt is epoch-seconds; the store keeps epoch-ms.
-    return { token, clientId: 'claude.ai', scopes: this.config.scopes, expiresAt: Math.floor(expiresAt / 1000), extra: { identity } };
+    return { token, clientId, scopes: this.config.scopes, expiresAt: Math.floor(expiresAt / 1000), extra: { identity } };
   }
 }

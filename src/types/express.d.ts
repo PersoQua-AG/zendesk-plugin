@@ -21,6 +21,7 @@ declare module 'express' {
   export type RequestHandler = (req: Request, res: Response, next: NextFunction) => void | Promise<void>;
 
   export interface Application {
+    set(setting: string, val: unknown): Application;
     use(...handlers: (RequestHandler | unknown)[]): Application;
     get(path: string, ...handlers: RequestHandler[]): Application;
     post(path: string, ...handlers: RequestHandler[]): Application;

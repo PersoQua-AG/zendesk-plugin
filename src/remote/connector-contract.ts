@@ -25,7 +25,7 @@ function requirePublicBaseUrl(): string {
 // Hard cap on the open DCR store so unauthenticated /register cannot grow it without bound (H1).
 const MAX_CLIENTS = 1000;
 
-class InMemoryClientsStore implements OAuthRegisteredClientsStore {
+export class InMemoryClientsStore implements OAuthRegisteredClientsStore {
   private readonly clients = new Map<string, OAuthClientInformationFull>();
 
   getClient(clientId: string): OAuthClientInformationFull | undefined {

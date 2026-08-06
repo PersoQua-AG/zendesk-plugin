@@ -80,6 +80,7 @@ describe('ZendeskBridgeOAuthProvider', () => {
 
     const info = await provider.verifyAccessToken(tokens.access_token);
     expect(info.extra?.identity).toBe('zendesk:777');
+    expect(info.clientId).toBe('claude.ai'); // the real DCR client id from the exchange, not a literal
     expect(info.scopes).toEqual(['read', 'write']);
     // Zendesk tokens landed in the per-user store, keyed by identity.
     await expect(resolver.forIdentity('zendesk:777').getAccessToken()).resolves.toBe('zd-at');
@@ -92,7 +93,7 @@ describe('ZendeskBridgeOAuthProvider', () => {
 
   it('refuses an unknown OAuth state (CSRF discipline)', () => {
     const { issued } = build();
-    issued.pendingRedirect('claude.ai', 'good-state', 'https://claude.ai/cb');
+    issued.pendingRedirect('good-state', 'https://claude.ai/cb');
     expect(() => issued.consumePendingRedirect('forged-state')).toThrow(/CSRF/i);
     expect(issued.consumePendingRedirect('good-state')).toEqual({ redirectUri: 'https://claude.ai/cb' });
   });
@@ -104,9 +105,9 @@ describe('ZendeskBridgeOAuthProvider', () => {
     await expect(provider.authorize(client, params, res)).rejects.toThrow(/code_challenge/i);
   });
 
-  it('rejects a duplicate (client_id, state) pending authorize (M4)', () => {
+  it('rejects a duplicate live pending authorize state (single-use CSRF discipline)', () => {
     const { issued } = build();
-    issued.pendingRedirect('claude.ai', 'dup-state', 'https://claude.ai/cb');
-    expect(() => issued.pendingRedirect('claude.ai', 'dup-state', 'https://claude.ai/cb')).toThrow(/CSRF|colliding/i);
+    issued.pendingRedirect('dup-state', 'https://claude.ai/cb');
+    expect(() => issued.pendingRedirect('dup-state', 'https://claude.ai/cb')).toThrow(/CSRF|colliding/i);
   });
 });

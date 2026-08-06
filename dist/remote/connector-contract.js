@@ -18,7 +18,7 @@ function requirePublicBaseUrl() {
 // claude.ai uses a pre-registered client_id instead, seed a single client here — no downstream edit.
 // Hard cap on the open DCR store so unauthenticated /register cannot grow it without bound (H1).
 const MAX_CLIENTS = 1000;
-class InMemoryClientsStore {
+export class InMemoryClientsStore {
     clients = new Map();
     getClient(clientId) {
         return this.clients.get(clientId);

@@ -21,7 +21,7 @@ function count(dir: string): number {
 }
 
 describe('IssuedTokenStore.prune (H2)', () => {
-  it('unlinks expired files, keeps valid ones, skips corrupt ones', () => {
+  it('unlinks expired files, keeps valid ones, removes corrupt ones', () => {
     const dir = issuedDir();
     // Expired: negative TTL → expiresAt in the past.
     new IssuedTokenStore(dir, SECRET, -1_000).mint('zendesk:expired');
@@ -35,13 +35,13 @@ describe('IssuedTokenStore.prune (H2)', () => {
     valid.prune();
 
     const remaining = readdirSync(dir).filter((n) => n.endsWith('.enc'));
-    expect(remaining).toContain('garbage.enc'); // corrupt skipped, never fatal
-    expect(remaining).toHaveLength(2); // expired unlinked, valid + corrupt remain
+    expect(remaining).not.toContain('garbage.enc'); // corrupt is unrecoverable → unlinked (H2)
+    expect(remaining).toHaveLength(1); // only the valid token survives
   });
 
-  it('rejects a duplicate live (client_id, state) pending authorize', () => {
+  it('rejects a duplicate live pending authorize state (single-use CSRF discipline)', () => {
     const store = new IssuedTokenStore(issuedDir(), SECRET);
-    store.pendingRedirect('claude.ai', 'st', 'https://claude.ai/cb');
-    expect(() => store.pendingRedirect('claude.ai', 'st', 'https://claude.ai/cb')).toThrow(/CSRF|colliding/i);
+    store.pendingRedirect('st', 'https://claude.ai/cb');
+    expect(() => store.pendingRedirect('st', 'https://claude.ai/cb')).toThrow(/CSRF|colliding/i);
   });
 });

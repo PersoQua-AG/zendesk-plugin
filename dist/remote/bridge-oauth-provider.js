@@ -29,14 +29,14 @@ export class ZendeskBridgeOAuthProvider {
     get clientsStore() {
         return this.clients;
     }
-    async authorize(client, params, res) {
+    async authorize(_client, params, res) {
         // Refuse an authorize without PKCE — never forward an empty challenge to Zendesk (M4).
         if (!params.codeChallenge)
             throw new Error('code_challenge is required (PKCE).');
         const state = params.state ?? randomBytes(16).toString('hex');
-        // Stash the downstream redirect keyed by state and bound to this client (single-use, TTL) so the
-        // Zendesk callback can complete the exchange and the state is verified as anti-CSRF.
-        this.issued.pendingRedirect(client.client_id, state, params.redirectUri);
+        // Stash the downstream redirect keyed by state (single-use, TTL) so the Zendesk callback can
+        // complete the exchange and the state is verified as anti-CSRF.
+        this.issued.pendingRedirect(state, params.redirectUri);
         res.redirect(buildAuthorizationUrl(this.config, params.codeChallenge, state, this.callbackUrl));
     }
     async challengeForAuthorizationCode() {
@@ -44,7 +44,7 @@ export class ZendeskBridgeOAuthProvider {
         // calls this. Fail loudly if the contract changes rather than silently accept a code.
         throw new Error('local PKCE validation is delegated to Zendesk (skipLocalPkceValidation).');
     }
-    async exchangeAuthorizationCode(_client, code, codeVerifier, _redirectUri) {
+    async exchangeAuthorizationCode(client, code, codeVerifier, _redirectUri) {
         // Exchange with the SAME public redirect_uri used at authorize — NOT the downstream client's
         // redirect (Zendesk validates redirect_uri equality across the two legs).
         const tokens = await exchangeCodeForTokens(this.config, code, codeVerifier ?? '', this.callbackUrl, this.fetchImpl);
@@ -54,7 +54,7 @@ export class ZendeskBridgeOAuthProvider {
             refreshToken: tokens.refreshToken,
             expiresAt: Date.now() + tokens.expiresIn * 1000,
         });
-        return { access_token: this.issued.mint(identity), token_type: 'Bearer', expires_in: 3600 };
+        return { access_token: this.issued.mint(identity, client.client_id), token_type: 'Bearer', expires_in: 3600 };
     }
     async exchangeRefreshToken() {
         // Downstream (claude.ai) refresh re-runs authorize; Zendesk-side refresh is transparent via the
@@ -62,8 +62,8 @@ export class ZendeskBridgeOAuthProvider {
         throw new Error('downstream refresh handled by session re-auth — see connector-contract.ts.');
     }
     async verifyAccessToken(token) {
-        const { identity, expiresAt } = this.issued.identityFor(token); // throws → 401 for unknown/expired
+        const { identity, clientId, expiresAt } = this.issued.identityFor(token); // throws → 401 for unknown/expired
         // AuthInfo.expiresAt is epoch-seconds; the store keeps epoch-ms.
-        return { token, clientId: 'claude.ai', scopes: this.config.scopes, expiresAt: Math.floor(expiresAt / 1000), extra: { identity } };
+        return { token, clientId, scopes: this.config.scopes, expiresAt: Math.floor(expiresAt / 1000), extra: { identity } };
     }
 }

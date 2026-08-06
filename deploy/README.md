@@ -61,30 +61,23 @@ with `EROFS`. If you move the data dir, update `ReadWritePaths` to match.
 ## Rate limiting & abuse controls (H1)
 
 The unauthenticated OAuth/DCR surface (`/register`, `/authorize`, `/token`, `/callback`) and `/mcp`
-sit behind a per-IP HTTP rate limiter (`express-rate-limit`, resolved transitively via the MCP SDK —
-no new direct dependency). The JSON body limit is 256kb (JSON-RPC/OAuth payloads are small). The
-in-memory pending-authorize map and the DCR clients store are both hard-capped. `/callback` only
-302s to an https host on the allowlist (`REMOTE_ALLOWED_REDIRECT_HOSTS`, default `claude.ai`).
+sit behind a per-IP HTTP rate limiter (`express-rate-limit`). The app sets `trust proxy`
+(`TRUST_PROXY_HOPS`, default 1) so behind the reverse proxy `req.ip` is the real client and buckets
+are per-client, not one global bucket. The JSON body limit is 256kb (JSON-RPC/OAuth payloads are
+small). The in-memory pending-authorize map and the DCR clients store are both hard-capped.
+`/callback` only 302s to an https host on the allowlist (`REMOTE_ALLOWED_REDIRECT_HOSTS`, default
+`claude.ai`).
 
 ## Security follow-ups before broad / untrusted onboarding
 
-- **M2 — per-identity fair-share rate limiter (DEFERRED).** The account-wide Zendesk budget is shared
-  across all connector users; a single authenticated tenant can still exhaust it. For the internal
-  pilot (few trusted users) the compensating control is trusted users + 429 monitoring + the H1
-  per-IP HTTP limiter. Add a weighted fair-queue (per-identity sub-buckets under the account cap,
-  no tool change) **before onboarding untrusted or many tenants.**
+- **M2 / A8 — per-identity fair-share rate limiter (DEFERRED).** The Zendesk `400/min` + `10/min`
+  (incremental) buckets are account-wide (shared `RateLimiter` singletons), so a single authenticated
+  tenant can still exhaust them under many concurrent users. Compensating controls for the pilot:
+  trusted users, the H1 per-IP HTTP limiter, and the client's `Retry-After` self-heal on 429. Monitor
+  the 429 rate; add a weighted fair-queue (per-identity sub-buckets under the account cap, no tool
+  change) **before onboarding untrusted or many tenants.**
 - **L2 (per-identity cache-map bound), L3 (downstream scope narrowing), L4 (audit `targetId` stored
   cleartext — by design, it is not PII) — accepted as-is** for the pilot.
-
-## Rate limits (A8)
-
-The Zendesk `400/min` and `10/min` (incremental) buckets are **account-wide** and shared across all
-connector users (shared `RateLimiter` singletons). Under many concurrent GUI users this can 429.
-
-- The client already self-heals on 429 via `Retry-After`, so transient bursts recover automatically.
-- **Monitor the 429 rate.** If 429s become frequent, add a weighted fair-queue in front of the
-  shared limiter (per-identity sub-buckets under the account cap) — a P2 follow-up that needs **no
-  tool change**.
 
 ## Connector registration (REQ-3, Owner-gated)
 

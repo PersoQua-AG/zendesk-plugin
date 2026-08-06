@@ -13,7 +13,6 @@ const DEFAULT_TTL_MS = 3_600_000;
 const MAX_PENDING = 10_000;
 
 interface Pending {
-  clientId: string;
   redirectUri: string;
   expiresAt: number;
 }
@@ -31,9 +30,12 @@ export class IssuedTokenStore {
     private readonly ttlMs: number = DEFAULT_TTL_MS,
   ) {}
 
-  mint(identity: string): string {
+  // clientId (the real DCR client id from the token exchange) rides in the otherwise-unused
+  // refreshToken slot so verifyAccessToken can surface the true issuing client in AuthInfo for
+  // audit — never a hardcoded literal (M4-minor). Direct test mints omit it.
+  mint(identity: string, clientId = ''): string {
     const opaque = randomBytes(32).toString('hex');
-    this.fileFor(opaque).save({ accessToken: identity, refreshToken: '', expiresAt: Date.now() + this.ttlMs });
+    this.fileFor(opaque).save({ accessToken: identity, refreshToken: clientId, expiresAt: Date.now() + this.ttlMs });
     return opaque;
   }
 
@@ -49,7 +51,13 @@ export class IssuedTokenStore {
         const rec = new TokenStore(path, this.encryptionSecret).load();
         if (!rec || now >= rec.expiresAt) unlinkSync(path);
       } catch {
-        // Torn/corrupt file (e.g. crash mid-write): skip, never abort the sweep.
+        // Torn/corrupt file (e.g. crash mid-write): unrecoverable → unlink so it can't accumulate to
+        // disk-full under a flood (H2). Best-effort; a concurrent sweep may have removed it already.
+        try {
+          unlinkSync(path);
+        } catch {
+          /* already gone */
+        }
       }
     }
   }
@@ -57,20 +65,20 @@ export class IssuedTokenStore {
   // Throws InvalidTokenError (the SDK type requireBearerAuth maps to 401) for an unknown or expired
   // token, so claude.ai gets a clean re-auth signal — never a 500. Never returns a partial identity.
   // expiresAt is epoch-ms (the AuthManager stores the identity in the accessToken field).
-  identityFor(token: string): { identity: string; expiresAt: number } {
+  identityFor(token: string): { identity: string; clientId: string; expiresAt: number } {
     const rec = this.fileFor(token).load();
     // Messages are surfaced verbatim in the WWW-Authenticate header, which is latin1-only — keep them
     // ASCII (no em dash) or setHeader throws and the clean 401 degrades back into a 500.
     if (!rec) throw new InvalidTokenError('Unknown access token - re-authorize the Zendesk connector.');
     if (Date.now() >= rec.expiresAt) throw new InvalidTokenError('Access token expired - re-authorize the Zendesk connector.');
-    return { identity: rec.accessToken, expiresAt: rec.expiresAt };
+    return { identity: rec.accessToken, clientId: rec.refreshToken, expiresAt: rec.expiresAt };
   }
 
-  // Keyed by state, with the client_id recorded so the pending record is bound to the client that
-  // opened it (M4). We key by state (not the composite (client_id, state)) because the upstream
-  // callback carries only state back — a 128-bit state is unguessable, and any live-state reuse is
-  // refused below as CSRF/collision rather than silently overwritten.
-  pendingRedirect(clientId: string, state: string, redirectUri: string): void {
+  // Single-use anti-CSRF state → downstream-redirect map. NOT client-bound: the upstream Zendesk
+  // callback carries no client identity, so binding to the authorizing client cannot be enforced
+  // there. What IS enforced: a 128-bit unguessable state, single-use consume, and refusal of any
+  // live-state reuse as CSRF/collision (rather than a silent overwrite).
+  pendingRedirect(state: string, redirectUri: string): void {
     this.evictExpired(); // bound the map: never-consumed (abandoned) authorize states must not accrue.
     const existing = this.pending.get(state);
     if (existing && Date.now() < existing.expiresAt) {
@@ -80,7 +88,7 @@ export class IssuedTokenStore {
       const oldest = this.pending.keys().next().value; // insertion order → oldest first
       if (oldest !== undefined) this.pending.delete(oldest);
     }
-    this.pending.set(state, { clientId, redirectUri, expiresAt: Date.now() + this.ttlMs });
+    this.pending.set(state, { redirectUri, expiresAt: Date.now() + this.ttlMs });
   }
 
   private evictExpired(): void {

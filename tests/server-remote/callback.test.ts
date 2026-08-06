@@ -38,7 +38,7 @@ const DOWNSTREAM = 'https://claude.ai/cb';
 describe('upstream /callback (REQ anti-CSRF state)', () => {
   it('consumes a valid state once and redirects the code back to the downstream client', async () => {
     const { base, issued } = await boot();
-    issued.pendingRedirect('claude.ai', 'state-123', DOWNSTREAM);
+    issued.pendingRedirect('state-123', DOWNSTREAM);
 
     const res = await fetch(`${base}/callback?code=zcode&state=state-123`, { redirect: 'manual' });
     expect(res.status).toBeGreaterThanOrEqual(300);
@@ -67,7 +67,7 @@ describe('upstream /callback (REQ anti-CSRF state)', () => {
 
   it('refuses to redirect to an off-allowlist redirect_uri (open-redirect guard, M1)', async () => {
     const { base, issued } = await boot();
-    issued.pendingRedirect('claude.ai', 'evil-state', 'https://evil.example.com/steal');
+    issued.pendingRedirect('evil-state', 'https://evil.example.com/steal');
     const res = await fetch(`${base}/callback?code=zcode&state=evil-state`, { redirect: 'manual' });
     expect(res.status).toBe(403);
   });

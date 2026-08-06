@@ -80,6 +80,12 @@ export function buildRemoteApp(env = process.env, deps = {}) {
     const sessions = new SessionManager(env, { resolver, rateLimiter, incrementalRateLimiter, dataDir, audit, fetchImpl: deps.fetchImpl });
     const provider = new ZendeskBridgeOAuthProvider(config, resolver, issued, CONNECTOR.clientsStore(), deps.fetchImpl ?? fetch, CONNECTOR.callbackUrl);
     const app = express();
+    // Behind the mandated reverse proxy (Caddy/nginx) the socket IP is the proxy's, so without this
+    // req.ip collapses every client into ONE express-rate-limit bucket (H1's per-IP protection fails —
+    // one client's flood 429s all tenants) and v8 throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR. Trust the
+    // proxy hop(s) so req.ip is the real client. Default 1 hop; TRUST_PROXY_HOPS widens multi-hop setups.
+    const hops = Number(env.TRUST_PROXY_HOPS ?? 1);
+    app.set('trust proxy', Number.isInteger(hops) && hops >= 0 ? hops : 1);
     app.use(express.json({ limit: BODY_LIMIT }));
     // HTTP-layer per-IP rate limits in front of the unauthenticated OAuth/DCR surface and /mcp (H1).
     const limit = (max) => rateLimit({ windowMs: RATE_WINDOW_MS, limit: max, standardHeaders: true, legacyHeaders: false });

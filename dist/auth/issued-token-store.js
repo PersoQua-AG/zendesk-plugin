@@ -24,9 +24,12 @@ export class IssuedTokenStore {
         this.encryptionSecret = encryptionSecret;
         this.ttlMs = ttlMs;
     }
-    mint(identity) {
+    // clientId (the real DCR client id from the token exchange) rides in the otherwise-unused
+    // refreshToken slot so verifyAccessToken can surface the true issuing client in AuthInfo for
+    // audit — never a hardcoded literal (M4-minor). Direct test mints omit it.
+    mint(identity, clientId = '') {
         const opaque = randomBytes(32).toString('hex');
-        this.fileFor(opaque).save({ accessToken: identity, refreshToken: '', expiresAt: Date.now() + this.ttlMs });
+        this.fileFor(opaque).save({ accessToken: identity, refreshToken: clientId, expiresAt: Date.now() + this.ttlMs });
         return opaque;
     }
     // Unlink issued-token files whose decrypted expiresAt is past, so hourly re-auth can't grow the
@@ -45,7 +48,14 @@ export class IssuedTokenStore {
                     unlinkSync(path);
             }
             catch {
-                // Torn/corrupt file (e.g. crash mid-write): skip, never abort the sweep.
+                // Torn/corrupt file (e.g. crash mid-write): unrecoverable → unlink so it can't accumulate to
+                // disk-full under a flood (H2). Best-effort; a concurrent sweep may have removed it already.
+                try {
+                    unlinkSync(path);
+                }
+                catch {
+                    /* already gone */
+                }
             }
         }
     }
@@ -60,13 +70,13 @@ export class IssuedTokenStore {
             throw new InvalidTokenError('Unknown access token - re-authorize the Zendesk connector.');
         if (Date.now() >= rec.expiresAt)
             throw new InvalidTokenError('Access token expired - re-authorize the Zendesk connector.');
-        return { identity: rec.accessToken, expiresAt: rec.expiresAt };
+        return { identity: rec.accessToken, clientId: rec.refreshToken, expiresAt: rec.expiresAt };
     }
-    // Keyed by state, with the client_id recorded so the pending record is bound to the client that
-    // opened it (M4). We key by state (not the composite (client_id, state)) because the upstream
-    // callback carries only state back — a 128-bit state is unguessable, and any live-state reuse is
-    // refused below as CSRF/collision rather than silently overwritten.
-    pendingRedirect(clientId, state, redirectUri) {
+    // Single-use anti-CSRF state → downstream-redirect map. NOT client-bound: the upstream Zendesk
+    // callback carries no client identity, so binding to the authorizing client cannot be enforced
+    // there. What IS enforced: a 128-bit unguessable state, single-use consume, and refusal of any
+    // live-state reuse as CSRF/collision (rather than a silent overwrite).
+    pendingRedirect(state, redirectUri) {
         this.evictExpired(); // bound the map: never-consumed (abandoned) authorize states must not accrue.
         const existing = this.pending.get(state);
         if (existing && Date.now() < existing.expiresAt) {
@@ -77,7 +87,7 @@ export class IssuedTokenStore {
             if (oldest !== undefined)
                 this.pending.delete(oldest);
         }
-        this.pending.set(state, { clientId, redirectUri, expiresAt: Date.now() + this.ttlMs });
+        this.pending.set(state, { redirectUri, expiresAt: Date.now() + this.ttlMs });
     }
     evictExpired() {
         const now = Date.now();
