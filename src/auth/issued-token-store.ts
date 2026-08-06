@@ -33,11 +33,12 @@ export class IssuedTokenStore {
   }
 
   // Throws (→ mapped to 401) for an unknown or expired token — never returns a partial identity.
-  identityFor(token: string): string {
+  // expiresAt is epoch-ms (the AuthManager stores the identity in the accessToken field).
+  identityFor(token: string): { identity: string; expiresAt: number } {
     const rec = this.fileFor(token).load();
     if (!rec) throw new Error('Unknown access token — re-authorize the Zendesk connector.');
     if (Date.now() >= rec.expiresAt) throw new Error('Access token expired — re-authorize the Zendesk connector.');
-    return rec.accessToken;
+    return { identity: rec.accessToken, expiresAt: rec.expiresAt };
   }
 
   pendingRedirect(state: string, redirectUri: string, codeChallenge: string): void {

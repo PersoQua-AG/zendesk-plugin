@@ -23,6 +23,8 @@ export interface SessionDeps {
   incrementalRateLimiter: RateLimiter;
   dataDir: string;
   audit: WriteAuditLog;
+  // Test seam only: a mocked Zendesk fetch forwarded into each per-session http client.
+  fetchImpl?: typeof fetch;
 }
 
 // Per-user cache dir = isolation by construction: cache.ts confines every handle to its own dir,
@@ -130,6 +132,7 @@ export class SessionManager {
       rateLimiter: this.deps.rateLimiter,
       incrementalRateLimiter: this.deps.incrementalRateLimiter,
       cache,
+      fetchImpl: this.deps.fetchImpl,
     });
     const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),

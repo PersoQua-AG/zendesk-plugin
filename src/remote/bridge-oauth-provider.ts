@@ -67,7 +67,8 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const identity = this.issued.identityFor(token); // throws → 401 for unknown/expired
-    return { token, clientId: 'claude.ai', scopes: this.config.scopes, extra: { identity } };
+    const { identity, expiresAt } = this.issued.identityFor(token); // throws → 401 for unknown/expired
+    // AuthInfo.expiresAt is epoch-seconds; the store keeps epoch-ms.
+    return { token, clientId: 'claude.ai', scopes: this.config.scopes, expiresAt: Math.floor(expiresAt / 1000), extra: { identity } };
   }
 }

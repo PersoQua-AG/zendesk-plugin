@@ -4,13 +4,17 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=20" },
-  "bin": { "zendesk-authorize": "dist/bin/authorize.js" },
+  "bin": {
+    "zendesk-authorize": "dist/bin/authorize.js",
+    "zendesk-remote": "dist/bin/remote.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepare": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "authorize": "node dist/bin/authorize.js"
+    "authorize": "node dist/bin/authorize.js",
+    "start:remote": "node dist/bin/remote.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

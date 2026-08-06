@@ -49,6 +49,9 @@ export interface ServerDeps {
   rateLimiter?: RateLimiter;
   incrementalRateLimiter?: RateLimiter;
   cache?: ResponseCache;
+  // Test seam only: a mocked Zendesk fetch for the per-session http client. Default (stdio and
+  // prod) leaves it unset → the client uses the global fetch, byte-identical to today.
+  fetchImpl?: typeof fetch;
 }
 
 // Build and fully wire the MCP server (auth, rate buckets, cache, ctx, all tool registration)
@@ -63,7 +66,7 @@ export function createServer(env: NodeJS.ProcessEnv = process.env, deps: ServerD
   const authManager = deps.authManager ?? new AuthManager(new TokenStore(tokensPath, clientSecret), oauthConfig);
   const rateLimiter = deps.rateLimiter ?? new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
   const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
-  const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter });
+  const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
   const cache = deps.cache ?? new ResponseCache(`${dataDir}/cache`);
 
   const server = new McpServer({ name: 'zendesk', version: '0.1.0' });
