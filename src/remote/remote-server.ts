@@ -11,6 +11,7 @@ import { ZendeskBridgeOAuthProvider } from './bridge-oauth-provider.js';
 import { SessionManager } from './session-manager.js';
 import { WriteAuditLog } from './audit-log.js';
 import { CONNECTOR } from './connector-contract.js';
+import { describeAuthError } from './error-messages.js';
 import { log } from './logger.js';
 
 const BODY_LIMIT = '4mb';
@@ -72,8 +73,8 @@ export function buildRemoteApp(env: NodeJS.ProcessEnv = process.env, deps: Remot
 }
 
 // Surface a 400 without ever logging the request body (REQ-1 negative: no body content in logs).
+// The logged line uses the actionable auth/session copy, never a stack trace.
 function fail(res: Response, err: unknown): void {
-  const msg = err instanceof Error ? err.message : 'request error';
-  log({ msg: `mcp request error: ${msg}`, outcome: 'error' });
+  log({ msg: `mcp request error: ${describeAuthError(err)}`, outcome: 'error' });
   if (!res.headersSent) res.status(400).end();
 }

@@ -27,6 +27,7 @@ export interface RemoteHarness {
 export async function startRemote(
   fetchImpl: typeof fetch,
   identity = 'zendesk:1',
+  seedToken = true,
 ): Promise<RemoteHarness> {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-remote-int-'));
   const env: NodeJS.ProcessEnv = {
@@ -38,7 +39,10 @@ export async function startRemote(
   const config: OAuthConfig = { subdomain: 'acme', clientId: 'client-abc', clientSecret: SECRET, callbackPort: 8976, scopes: ['read', 'write'] };
   const resolver = new IdentityAuthResolver(new IdentityTokenStore(join(dataDir, 'users'), SECRET), config);
   // Seed a valid, unexpired Zendesk token so the per-user AuthManager serves it without refresh.
-  resolver.persist(identity, { accessToken: 'zd-access', refreshToken: 'zd-refresh', expiresAt: Date.now() + 3_600_000 });
+  // seedToken=false leaves the identity unauthorized (simulates not-yet-authorized / revoked).
+  if (seedToken) {
+    resolver.persist(identity, { accessToken: 'zd-access', refreshToken: 'zd-refresh', expiresAt: Date.now() + 3_600_000 });
+  }
   const issued = new IssuedTokenStore(join(dataDir, 'issued'), SECRET);
   const auditPath = join(dataDir, 'audit', 'write-audit.jsonl');
   const audit = new WriteAuditLog(auditPath);
