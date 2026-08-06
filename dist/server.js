@@ -30,17 +30,16 @@ function parseMarkdownDefault(raw) {
 // Build and fully wire the MCP server (auth, rate buckets, cache, ctx, all tool registration)
 // without connecting a transport — so the wiring is importable and testable. Reads env from the
 // argument (defaults to process.env) so a test can inject a fixture environment.
-export function createServer(env = process.env) {
+export function createServer(env = process.env, deps = {}) {
     const { config: oauthConfig, dataDir, tokensPath } = resolveAuthConfig(env);
     const { subdomain, clientSecret } = oauthConfig;
     const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
     const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
-    const tokenStore = new TokenStore(tokensPath, clientSecret);
-    const authManager = new AuthManager(tokenStore, oauthConfig);
-    const rateLimiter = new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
-    const incrementalRateLimiter = new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
-    const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter });
-    const cache = new ResponseCache(`${dataDir}/cache`);
+    const authManager = deps.authManager ?? new AuthManager(new TokenStore(tokensPath, clientSecret), oauthConfig);
+    const rateLimiter = deps.rateLimiter ?? new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
+    const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
+    const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
+    const cache = deps.cache ?? new ResponseCache(`${dataDir}/cache`);
     const server = new McpServer({ name: 'zendesk', version: '0.1.0' });
     const ctx = { httpClient, cache, securityLevel, markdownDefault, reportConfig: parseReportConfig(env) };
     registerCoreTools(server, ctx);
