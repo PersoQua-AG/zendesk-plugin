@@ -24,6 +24,9 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
     private readonly issued: IssuedTokenStore,
     private readonly clients: OAuthRegisteredClientsStore,
     private readonly fetchImpl: typeof fetch = fetch,
+    // Server's PUBLIC upstream redirect_uri — MUST be byte-identical at authorize and at exchange
+    // or Zendesk rejects the token request (redirect_uri mismatch).
+    private readonly callbackUrl: string = '',
   ) {}
 
   get clientsStore(): OAuthRegisteredClientsStore {
@@ -35,7 +38,7 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
     // Stash the downstream redirect + PKCE challenge keyed by state (single-use, TTL) so the
     // Zendesk callback can complete the exchange and the state is verified as anti-CSRF.
     this.issued.pendingRedirect(state, params.redirectUri, params.codeChallenge);
-    res.redirect(buildAuthorizationUrl(this.config, params.codeChallenge, state));
+    res.redirect(buildAuthorizationUrl(this.config, params.codeChallenge, state, this.callbackUrl));
   }
 
   async challengeForAuthorizationCode(): Promise<string> {
@@ -48,9 +51,11 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
     _client: OAuthClientInformationFull,
     code: string,
     codeVerifier?: string,
-    redirectUri?: string,
+    _redirectUri?: string,
   ): Promise<OAuthTokens> {
-    const tokens = await exchangeCodeForTokens(this.config, code, codeVerifier ?? '', redirectUri ?? '', this.fetchImpl);
+    // Exchange with the SAME public redirect_uri used at authorize — NOT the downstream client's
+    // redirect (Zendesk validates redirect_uri equality across the two legs).
+    const tokens = await exchangeCodeForTokens(this.config, code, codeVerifier ?? '', this.callbackUrl, this.fetchImpl);
     const identity = await fetchZendeskIdentity(this.config.subdomain, tokens.accessToken, this.fetchImpl);
     this.resolver.persist(identity, {
       accessToken: tokens.accessToken,

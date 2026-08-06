@@ -13,13 +13,18 @@ export class ZendeskBridgeOAuthProvider {
     issued;
     clients;
     fetchImpl;
+    callbackUrl;
     skipLocalPkceValidation = true;
-    constructor(config, resolver, issued, clients, fetchImpl = fetch) {
+    constructor(config, resolver, issued, clients, fetchImpl = fetch, 
+    // Server's PUBLIC upstream redirect_uri — MUST be byte-identical at authorize and at exchange
+    // or Zendesk rejects the token request (redirect_uri mismatch).
+    callbackUrl = '') {
         this.config = config;
         this.resolver = resolver;
         this.issued = issued;
         this.clients = clients;
         this.fetchImpl = fetchImpl;
+        this.callbackUrl = callbackUrl;
     }
     get clientsStore() {
         return this.clients;
@@ -29,15 +34,17 @@ export class ZendeskBridgeOAuthProvider {
         // Stash the downstream redirect + PKCE challenge keyed by state (single-use, TTL) so the
         // Zendesk callback can complete the exchange and the state is verified as anti-CSRF.
         this.issued.pendingRedirect(state, params.redirectUri, params.codeChallenge);
-        res.redirect(buildAuthorizationUrl(this.config, params.codeChallenge, state));
+        res.redirect(buildAuthorizationUrl(this.config, params.codeChallenge, state, this.callbackUrl));
     }
     async challengeForAuthorizationCode() {
         // PKCE is validated upstream by Zendesk (skipLocalPkceValidation = true), so the SDK never
         // calls this. Fail loudly if the contract changes rather than silently accept a code.
         throw new Error('local PKCE validation is delegated to Zendesk (skipLocalPkceValidation).');
     }
-    async exchangeAuthorizationCode(_client, code, codeVerifier, redirectUri) {
-        const tokens = await exchangeCodeForTokens(this.config, code, codeVerifier ?? '', redirectUri ?? '', this.fetchImpl);
+    async exchangeAuthorizationCode(_client, code, codeVerifier, _redirectUri) {
+        // Exchange with the SAME public redirect_uri used at authorize — NOT the downstream client's
+        // redirect (Zendesk validates redirect_uri equality across the two legs).
+        const tokens = await exchangeCodeForTokens(this.config, code, codeVerifier ?? '', this.callbackUrl, this.fetchImpl);
         const identity = await fetchZendeskIdentity(this.config.subdomain, tokens.accessToken, this.fetchImpl);
         this.resolver.persist(identity, {
             accessToken: tokens.accessToken,

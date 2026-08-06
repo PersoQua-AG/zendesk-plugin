@@ -13,6 +13,8 @@ services:
       - ZENDESK_SUBDOMAIN=${ZENDESK_SUBDOMAIN}
       - ZENDESK_OAUTH_CLIENT_ID=${ZENDESK_OAUTH_CLIENT_ID}
       - ZENDESK_OAUTH_CLIENT_SECRET=${ZENDESK_OAUTH_CLIENT_SECRET}
+      # Data-encryption key for the token stores — DISTINCT from the OAuth secret, rotated separately.
+      - REMOTE_TOKEN_ENC_KEY=${REMOTE_TOKEN_ENC_KEY}
       - REMOTE_PUBLIC_URL=${REMOTE_PUBLIC_URL}
       - CLAUDE_PLUGIN_DATA=/data
       - PORT=8080

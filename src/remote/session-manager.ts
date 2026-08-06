@@ -32,7 +32,7 @@ export interface SessionDeps {
 // Per-user cache dir = isolation by construction: cache.ts confines every handle to its own dir,
 // so one identity's handles are unreachable from another's cache.
 export function sessionCacheDir(dataDir: string, identity: string): string {
-  const hash = createHash('sha256').update(`zendesk-user:${identity}`).digest('hex').slice(0, 16);
+  const hash = createHash('sha256').update(`zendesk-user:${identity}`).digest('hex');
   return join(dataDir, 'cache', hash);
 }
 
@@ -96,7 +96,7 @@ export function createAuditObserver(audit: WriteAuditLog, identity: string) {
 // authenticated identity's TokenProvider + a per-user cache dir; rate limiters are shared
 // (account-wide budget). The 64 tools never learn any of this.
 export class SessionManager {
-  private readonly sessions = new Map<string, StreamableHTTPServerTransport>();
+  private readonly sessions = new Map<string, { transport: StreamableHTTPServerTransport; identity: string }>();
 
   constructor(
     private readonly env: NodeJS.ProcessEnv,
@@ -105,8 +105,8 @@ export class SessionManager {
 
   async handlePost(req: ReqWithAuth, res: ServerResponse): Promise<void> {
     const sid = sessionId(req);
-    const existing = sid ? this.sessions.get(sid) : undefined;
-    if (existing) return existing.handleRequest(req, res, req.body);
+    const bound = sid ? this.sessions.get(sid) : undefined;
+    if (bound) return this.routeTo(bound, req, res);
     if (!sid && isInitializeRequest(req.body)) return this.openSession(req, res);
     reject(res, 400, 'No valid session; initialize first.');
   }
@@ -121,9 +121,23 @@ export class SessionManager {
 
   private async routeExisting(req: ReqWithAuth, res: ServerResponse): Promise<void> {
     const sid = sessionId(req);
-    const existing = sid ? this.sessions.get(sid) : undefined;
-    if (!existing) return reject(res, 404, 'Unknown session.');
-    return existing.handleRequest(req, res, req.body);
+    const bound = sid ? this.sessions.get(sid) : undefined;
+    if (!bound) return reject(res, 404, 'Unknown session.');
+    return this.routeTo(bound, req, res);
+  }
+
+  // Fail-closed session-identity binding: a session may only be driven by the SAME authenticated
+  // identity that opened it. Routing on the session id alone would let user B's valid bearer drive
+  // user A's session — and thus A's Zendesk token. Verify before touching the session's transport.
+  private routeTo(
+    bound: { transport: StreamableHTTPServerTransport; identity: string },
+    req: ReqWithAuth,
+    res: ServerResponse,
+  ): Promise<void> | void {
+    if (identityOf(req) !== bound.identity) {
+      return reject(res, 403, 'Session belongs to a different identity.');
+    }
+    return bound.transport.handleRequest(req, res, req.body);
   }
 
   private async openSession(req: ReqWithAuth, res: ServerResponse): Promise<void> {
@@ -139,7 +153,7 @@ export class SessionManager {
     const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id: string) => {
-        this.sessions.set(id, transport);
+        this.sessions.set(id, { transport, identity });
       },
     });
     transport.onclose = () => {

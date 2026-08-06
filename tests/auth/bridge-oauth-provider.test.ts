@@ -26,15 +26,18 @@ const config: OAuthConfig = {
 };
 
 const client = { client_id: 'claude.ai' } as OAuthClientInformationFull;
+const CALLBACK_URL = 'https://connector.example.eu/callback';
 
 function build() {
   const dir = mkdtempSync(join(tmpdir(), 'zd-bridge-'));
   dirs.push(dir);
   const resolver = new IdentityAuthResolver(new IdentityTokenStore(join(dir, 'users'), config.clientSecret), config);
   const issued = new IssuedTokenStore(join(dir, 'issued'), config.clientSecret);
-  const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+  let tokenExchangeRedirect: string | undefined;
+  const fetchImpl = vi.fn(async (url: string | URL | Request, init: RequestInit = {}) => {
     const u = String(url);
     if (u.includes('/oauth/tokens')) {
+      tokenExchangeRedirect = (JSON.parse(String(init.body)) as { redirect_uri?: string }).redirect_uri;
       return new Response(JSON.stringify({ access_token: 'zd-at', refresh_token: 'zd-rt', expires_in: 3600 }), { status: 200 });
     }
     if (u.includes('/users/me.json')) {
@@ -42,8 +45,8 @@ function build() {
     }
     return new Response('nope', { status: 404 });
   }) as unknown as typeof fetch;
-  const provider = new ZendeskBridgeOAuthProvider(config, resolver, issued, CONNECTOR.clientsStore(), fetchImpl);
-  return { provider, resolver, issued };
+  const provider = new ZendeskBridgeOAuthProvider(config, resolver, issued, CONNECTOR.clientsStore(), fetchImpl, CALLBACK_URL);
+  return { provider, resolver, issued, tokenExchangeRedirect: () => tokenExchangeRedirect };
 }
 
 describe('ZendeskBridgeOAuthProvider', () => {
@@ -60,15 +63,20 @@ describe('ZendeskBridgeOAuthProvider', () => {
     expect(url.searchParams.get('code_challenge')).toBe('chal-abc');
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');
     expect(url.searchParams.get('state')).toBe('s-123');
+    // Authorize leg advertises the PUBLIC callback, NOT localhost.
+    expect(url.searchParams.get('redirect_uri')).toBe(CALLBACK_URL);
   });
 
   it('exchanges a code for Zendesk tokens, persists them per-identity, and mints an opaque token', async () => {
-    const { provider, resolver } = build();
+    const { provider, resolver, tokenExchangeRedirect } = build();
+    // The downstream redirect_uri the SDK passes must be IGNORED for the Zendesk exchange.
     const tokens = await provider.exchangeAuthorizationCode(client, 'zcode', 'verifier', 'https://claude.ai/cb');
 
     expect(tokens.token_type).toBe('Bearer');
     expect(tokens.access_token).toMatch(/^[0-9a-f]{64}$/); // opaque, not the Zendesk token
     expect(tokens.access_token).not.toBe('zd-at');
+    // Token leg uses the SAME public callback as the authorize leg (Zendesk enforces equality).
+    expect(tokenExchangeRedirect()).toBe(CALLBACK_URL);
 
     const info = await provider.verifyAccessToken(tokens.access_token);
     expect(info.extra?.identity).toBe('zendesk:777');

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { buildRemoteApp } from '../../src/remote/remote-server.js';
 import { IssuedTokenStore } from '../../src/auth/issued-token-store.js';
+import { WriteAuditLog, RETENTION_MS } from '../../src/remote/audit-log.js';
 
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -23,6 +24,7 @@ function fixtureEnv(): { env: NodeJS.ProcessEnv; issued: IssuedTokenStore } {
     ZENDESK_SUBDOMAIN: 'acme',
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
+    REMOTE_TOKEN_ENC_KEY: 'enc-key-123',
     CLAUDE_PLUGIN_DATA: dataDir,
   };
   const issued = new IssuedTokenStore(join(dataDir, 'issued'), 'secret-xyz');
@@ -72,6 +74,17 @@ describe('remote entrypoint', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
     });
     expect(res.status).toBe(401);
+  });
+
+  it('enforces audit retention at startup (expired line pruned)', () => {
+    const { env } = fixtureEnv();
+    const auditPath = join(env.CLAUDE_PLUGIN_DATA as string, 'audit', 'write-audit.jsonl');
+    mkdirSync(join(env.CLAUDE_PLUGIN_DATA as string, 'audit'), { recursive: true });
+    const expired = JSON.stringify({ ts: Date.now() - RETENTION_MS - 1, identityHash: 'h', tool: 't', targetId: '1', outcome: 'applied' });
+    writeFileSync(auditPath, `${expired}\n`);
+
+    buildRemoteApp(env, { audit: new WriteAuditLog(auditPath) });
+    expect(readFileSync(auditPath, 'utf8').trim()).toBe(''); // pruned by the startup sweep
   });
 
   it('rejects a non-initialize frame without a session id with 4xx and survives', async () => {

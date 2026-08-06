@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WriteAuditLog, RETENTION_MS } from '../../src/remote/audit-log.js';
@@ -46,5 +46,19 @@ describe('WriteAuditLog', () => {
 
     audit.prune(Date.now() + RETENTION_MS + 1); // past window → dropped
     expect(lines(path)).toHaveLength(0);
+  });
+
+  it('skips a torn JSONL line without throwing, keeps a fresh line, drops an expired one', () => {
+    const path = auditPath();
+    const audit = new WriteAuditLog(path);
+    const fresh = JSON.stringify({ ts: Date.now(), identityHash: 'h', tool: 'zendesk_update_ticket', targetId: '1', outcome: 'applied' });
+    const expired = JSON.stringify({ ts: Date.now() - RETENTION_MS - 1, identityHash: 'h', tool: 'zendesk_update_ticket', targetId: '2', outcome: 'applied' });
+    // A crash mid-append leaves a torn (non-JSON) line.
+    writeFileSync(path, `${fresh}\n${expired}\n{"ts":123,"tool":"tor`);
+
+    expect(() => audit.prune()).not.toThrow();
+    const kept = lines(path);
+    expect(kept).toHaveLength(1);
+    expect(JSON.parse(kept[0])).toMatchObject({ targetId: '1' }); // only the fresh line survives
   });
 });

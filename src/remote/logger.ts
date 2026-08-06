@@ -5,10 +5,7 @@
 const REDACT = /(bearer\s+[\w.\-]+)|([A-Za-z0-9_\-]{24,})/gi;
 
 export interface LogFields {
-  requestId?: string;
-  tool?: string;
   outcome?: string;
-  latencyMs?: number;
   msg: string;
 }
 

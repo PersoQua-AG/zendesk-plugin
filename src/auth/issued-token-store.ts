@@ -42,7 +42,15 @@ export class IssuedTokenStore {
   }
 
   pendingRedirect(state: string, redirectUri: string, codeChallenge: string): void {
+    this.evictExpired(); // bound the map: never-consumed (abandoned) authorize states must not accrue.
     this.pending.set(state, { redirectUri, codeChallenge, expiresAt: Date.now() + this.ttlMs });
+  }
+
+  private evictExpired(): void {
+    const now = Date.now();
+    for (const [state, p] of this.pending) {
+      if (now >= p.expiresAt) this.pending.delete(state);
+    }
   }
 
   // Single-use: an unknown, reused, or expired state is refused as possible CSRF.

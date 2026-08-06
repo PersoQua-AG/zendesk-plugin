@@ -13,7 +13,7 @@ const TARGET_KEYS = [
 // Per-user cache dir = isolation by construction: cache.ts confines every handle to its own dir,
 // so one identity's handles are unreachable from another's cache.
 export function sessionCacheDir(dataDir, identity) {
-    const hash = createHash('sha256').update(`zendesk-user:${identity}`).digest('hex').slice(0, 16);
+    const hash = createHash('sha256').update(`zendesk-user:${identity}`).digest('hex');
     return join(dataDir, 'cache', hash);
 }
 function targetIdOf(args) {
@@ -90,9 +90,9 @@ export class SessionManager {
     }
     async handlePost(req, res) {
         const sid = sessionId(req);
-        const existing = sid ? this.sessions.get(sid) : undefined;
-        if (existing)
-            return existing.handleRequest(req, res, req.body);
+        const bound = sid ? this.sessions.get(sid) : undefined;
+        if (bound)
+            return this.routeTo(bound, req, res);
         if (!sid && isInitializeRequest(req.body))
             return this.openSession(req, res);
         reject(res, 400, 'No valid session; initialize first.');
@@ -105,10 +105,19 @@ export class SessionManager {
     }
     async routeExisting(req, res) {
         const sid = sessionId(req);
-        const existing = sid ? this.sessions.get(sid) : undefined;
-        if (!existing)
+        const bound = sid ? this.sessions.get(sid) : undefined;
+        if (!bound)
             return reject(res, 404, 'Unknown session.');
-        return existing.handleRequest(req, res, req.body);
+        return this.routeTo(bound, req, res);
+    }
+    // Fail-closed session-identity binding: a session may only be driven by the SAME authenticated
+    // identity that opened it. Routing on the session id alone would let user B's valid bearer drive
+    // user A's session — and thus A's Zendesk token. Verify before touching the session's transport.
+    routeTo(bound, req, res) {
+        if (identityOf(req) !== bound.identity) {
+            return reject(res, 403, 'Session belongs to a different identity.');
+        }
+        return bound.transport.handleRequest(req, res, req.body);
     }
     async openSession(req, res) {
         const identity = identityOf(req);
@@ -123,7 +132,7 @@ export class SessionManager {
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (id) => {
-                this.sessions.set(id, transport);
+                this.sessions.set(id, { transport, identity });
             },
         });
         transport.onclose = () => {

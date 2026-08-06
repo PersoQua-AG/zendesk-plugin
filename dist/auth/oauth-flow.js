@@ -11,10 +11,12 @@ const tokenResponseSchema = z.object({
 function redirectUri(port) {
     return `http://localhost:${port}/callback`;
 }
-export function buildAuthorizationUrl(config, codeChallenge, state) {
+// redirectUriOverride lets the remote bridge point Zendesk at its PUBLIC /callback; stdio callers
+// omit it and keep the localhost loopback redirect unchanged.
+export function buildAuthorizationUrl(config, codeChallenge, state, redirectUriOverride) {
     const url = new URL(`https://${config.subdomain}.zendesk.com/oauth/authorizations/new`);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('redirect_uri', redirectUri(config.callbackPort));
+    url.searchParams.set('redirect_uri', redirectUriOverride ?? redirectUri(config.callbackPort));
     url.searchParams.set('client_id', config.clientId);
     url.searchParams.set('scope', config.scopes.join(' '));
     url.searchParams.set('state', state);

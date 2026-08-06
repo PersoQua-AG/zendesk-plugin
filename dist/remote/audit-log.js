@@ -24,10 +24,20 @@ export class WriteAuditLog {
         const kept = readFileSync(this.filePath, 'utf8')
             .split('\n')
             .filter(Boolean)
-            .filter((line) => now - JSON.parse(line).ts <= RETENTION_MS);
+            // A crash mid-append can leave one torn JSONL line; skip it rather than abort the whole prune.
+            .filter((line) => now - this.tsOf(line) <= RETENTION_MS);
         writeFileSync(this.filePath, kept.length ? kept.join('\n') + '\n' : '', { mode: 0o600 });
     }
+    // A corrupt line reads as ts=0 → older than any window → pruned (dropped), never fatal.
+    tsOf(line) {
+        try {
+            return JSON.parse(line).ts;
+        }
+        catch {
+            return 0;
+        }
+    }
     hash(identity) {
-        return createHash('sha256').update(`zendesk-user:${identity}`).digest('hex').slice(0, 16);
+        return createHash('sha256').update(`zendesk-user:${identity}`).digest('hex');
     }
 }

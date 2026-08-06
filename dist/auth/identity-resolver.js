@@ -23,6 +23,8 @@ export class IdentityAuthResolver {
         this.stores.storeFor(identity).save(tokens);
         this.cache.delete(identity); // force a fresh AuthManager to pick up the new tokens
     }
+    // GDPR erasure primitive (D3/A7): drops the identity's encrypted token file + cached manager.
+    // Exercised by identity-resolver.test.ts and referenced by deploy/README's erasure procedure.
     revoke(identity) {
         this.stores.storeFor(identity).clear();
         this.cache.delete(identity);

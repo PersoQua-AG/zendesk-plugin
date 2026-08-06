@@ -16,9 +16,13 @@ connector. The stdio Claude Code plugin is unchanged and continues to ship.
   applicant PII).
 - **Public HTTPS, TLS >= 1.2**, stable hostname reachable from claude.ai's network. TLS terminates
   at the reverse proxy (Caddy in `docker-compose.yml`, or nginx/Caddy in front of the systemd unit).
-- **Secrets from a secrets manager, never in the image or repo:** `ZENDESK_OAUTH_CLIENT_SECRET`
-  (also the server-held encryption key for the token stores), `ZENDESK_OAUTH_CLIENT_ID`,
-  `ZENDESK_SUBDOMAIN`, and `REMOTE_PUBLIC_URL` (the public https base URL).
+- **Secrets from a secrets manager, never in the image or repo:** `ZENDESK_OAUTH_CLIENT_SECRET`,
+  `ZENDESK_OAUTH_CLIENT_ID`, `ZENDESK_SUBDOMAIN`, `REMOTE_PUBLIC_URL` (the public https base URL),
+  and `REMOTE_TOKEN_ENC_KEY`.
+- **`REMOTE_TOKEN_ENC_KEY` is the data-encryption key** for the per-user (`users/*.enc`) and issued
+  (`issued/*.enc`) token stores — REQUIRED, fail-closed if absent. It is DISTINCT from
+  `ZENDESK_OAUTH_CLIENT_SECRET` and rotated independently: rotating the OAuth client secret must not
+  brick the encrypted token files, and the OAuth secret must never double as the decrypt-all key.
 - **Persistent `CLAUDE_PLUGIN_DATA` volume** so `users/*.enc` (per-user Zendesk tokens),
   `issued/*.enc`, `audit/write-audit.jsonl`, and `cache/` survive restarts (REQ-9). No re-auth
   storm on deploy.
@@ -41,8 +45,9 @@ Front it with nginx/Caddy for TLS.
 
 ## Retention (D3/A7)
 
-- **Write-audit log:** 90-day retention. `WriteAuditLog.prune()` drops older entries; run it at
-  startup and on a daily timer (cron/systemd timer calling a small prune invocation).
+- **Write-audit log:** 90-day retention, enforced IN-PROCESS. The server prunes on startup and on an
+  unref'd daily timer — no cron job or manual command required. A torn JSONL line (crash mid-append)
+  is skipped, not fatal.
 - **Per-user tokens:** kept until the user revokes/re-authorizes. GDPR erasure = delete that
   identity's `users/<hash>.enc` (`IdentityAuthResolver.revoke`).
 

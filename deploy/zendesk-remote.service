@@ -11,7 +11,9 @@ Type=simple
 User=zendesk
 WorkingDirectory=/opt/zendesk-connector
 # Secrets (ZENDESK_OAUTH_CLIENT_SECRET, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_SUBDOMAIN,
-# REMOTE_PUBLIC_URL, CLAUDE_PLUGIN_DATA, PORT) live here, provisioned by ops — never in the repo.
+# REMOTE_TOKEN_ENC_KEY, REMOTE_PUBLIC_URL, CLAUDE_PLUGIN_DATA, PORT) live here, provisioned by ops
+# — never in the repo. REMOTE_TOKEN_ENC_KEY is the token-store encryption key, distinct from the
+# OAuth client secret and rotated independently.
 EnvironmentFile=/etc/zendesk-connector/connector.env
 ExecStart=/usr/bin/node dist/bin/remote.js
 Restart=always
