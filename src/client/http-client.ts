@@ -1,12 +1,14 @@
 import type { RateLimiter } from './rate-limiter.js';
-import type { AuthManager } from '../auth/auth-manager.js';
+import type { TokenProvider } from './token-provider.js';
 import { mapErrorResponse, parseRetryAfter } from './errors.js';
 
 const MAX_RATE_LIMIT_RETRIES = 3;
 
 export interface ZendeskHttpClientOptions {
   subdomain: string;
-  authManager: AuthManager;
+  // AuthManager is a TokenProvider, so all existing call sites remain assignable; per-user
+  // resolution injects a different TokenProvider per session (M9).
+  authManager: TokenProvider;
   rateLimiter: RateLimiter;
   // Optional lower bucket for /incremental/* endpoints (10 req/min global, PRD §5 infra 1).
   // Absent → the 'incremental' rateClass falls back to the default limiter.
