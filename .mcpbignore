@@ -1,0 +1,24 @@
+# What the packed Desktop Extension does NOT need. The bundle runs `dist/server.js`, so sources,
+# tests and CI material are dead weight inside it.
+#
+# Runtime modules are deliberately NOT excluded: @modelcontextprotocol/sdk, express,
+# express-rate-limit and zod ship inside the bundle, because the extension is self-contained.
+src/
+tests/
+vitest.config.ts
+tsconfig.json
+.github/
+docs/
+deploy/
+.worktrees/
+
+# The Claude Code plugin layer (marketplace manifest, skills, slash commands, subagent) is loaded by
+# Claude Code from the repo, never by a Desktop Extension host.
+.claude-plugin/
+skills/
+commands/
+agents/
+
+# Internal repo files with no role inside the bundle.
+HANDOVER.md
+scripts/

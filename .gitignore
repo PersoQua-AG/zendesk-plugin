@@ -3,4 +3,7 @@ node_modules/
 .zendesk-plugin-data/
 .DS_Store
 
+# The packed Desktop Extension bundle is a build artifact, produced by `npm run pack`.
+*.mcpb
+
 .worktrees/

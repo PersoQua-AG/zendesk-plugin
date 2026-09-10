@@ -1,0 +1,100 @@
+{
+  "manifest_version": "0.3",
+  "name": "zendesk",
+  "display_name": "Zendesk Support Integration",
+  "version": "0.1.0",
+  "description": "Manage Zendesk tickets, users, organizations, business rules, and Help Center content from Claude.",
+  "long_description": "A full-spectrum Zendesk integration: Support/Tickets, Users & Organizations, Business Rules (views, macros, triggers, automations, SLAs), Help Center/Guide, and analytics over ticket metrics and incremental exports. Read/write, with no destructive operations. Inbound Zendesk content is screened for prompt injection. Authorize in-app with the zendesk_login tool.",
+  "author": {
+    "name": "Persoqua",
+    "email": "r.pfisterer@persoqua.de",
+    "url": "https://github.com/PersoQua-AG"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PersoQua-AG/zendesk-plugin"
+  },
+  "homepage": "https://github.com/PersoQua-AG/zendesk-plugin",
+  "documentation": "https://github.com/PersoQua-AG/zendesk-plugin#readme",
+  "license": "MIT",
+  "keywords": ["zendesk", "support", "helpdesk", "tickets", "mcp"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/server.js"],
+      "env": {
+        "ZENDESK_SUBDOMAIN": "${user_config.zendesk_subdomain}",
+        "ZENDESK_OAUTH_CLIENT_ID": "${user_config.oauth_client_id}",
+        "ZENDESK_OAUTH_CLIENT_SECRET": "${user_config.oauth_client_secret}",
+        "ZENDESK_OAUTH_CALLBACK_PORT": "${user_config.oauth_callback_port}",
+        "ZENDESK_SECURITY_LEVEL": "${user_config.security_level}",
+        "ZENDESK_MARKDOWN_CONVERSION": "${user_config.markdown_conversion}",
+        "ZENDESK_TIMEZONE": "${user_config.timezone}",
+        "ZENDESK_WORK_HOURS": "${user_config.work_hours}",
+        "ZENDESK_WORKDAYS": "${user_config.workdays}"
+      }
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32"],
+    "runtimes": {
+      "node": ">=20"
+    }
+  },
+  "user_config": {
+    "zendesk_subdomain": {
+      "type": "string",
+      "title": "Zendesk Subdomain",
+      "description": "e.g. 'acme' for acme.zendesk.com",
+      "required": true
+    },
+    "oauth_client_id": {
+      "type": "string",
+      "title": "OAuth Client ID",
+      "description": "Client ID from the OAuth client registered in Zendesk Admin Center",
+      "required": true
+    },
+    "oauth_client_secret": {
+      "type": "string",
+      "title": "OAuth Client Secret",
+      "description": "Client secret from the OAuth client registered in Zendesk Admin Center",
+      "required": true,
+      "sensitive": true
+    },
+    "oauth_callback_port": {
+      "type": "number",
+      "title": "OAuth Callback Port",
+      "description": "Localhost port for the OAuth redirect callback during authorization. The redirect URI you register in Zendesk must use this port.",
+      "default": 8976
+    },
+    "security_level": {
+      "type": "string",
+      "title": "Injection-Screening Level",
+      "description": "strict | standard | off — how aggressively inbound Zendesk content is screened for prompt injection.",
+      "default": "standard"
+    },
+    "markdown_conversion": {
+      "type": "boolean",
+      "title": "Markdown to HTML Conversion",
+      "description": "Default for converting comment/ticket bodies from Markdown to HTML. A per-call 'markdown' argument overrides this.",
+      "default": true
+    },
+    "timezone": {
+      "type": "string",
+      "title": "Business-Hours Timezone",
+      "description": "IANA timezone for business-hours FRT/resolution metrics, e.g. 'Europe/Berlin'. Defaults to UTC."
+    },
+    "work_hours": {
+      "type": "string",
+      "title": "Business Work Hours",
+      "description": "Working window as JSON {\"start\":\"HH:MM\",\"end\":\"HH:MM\"}, e.g. {\"start\":\"09:00\",\"end\":\"17:00\"}. Defaults to 09:00-17:00."
+    },
+    "workdays": {
+      "type": "string",
+      "title": "Business Workdays",
+      "description": "Working days as a JSON array of ISO weekdays (1=Mon ... 7=Sun), e.g. [1,2,3,4,5]. Defaults to Mon-Fri."
+    }
+  }
+}
