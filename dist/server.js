@@ -2,10 +2,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { AuthManager } from './auth/auth-manager.js';
 import { TokenStore } from './auth/token-store.js';
-import { resolveAuthConfig } from './auth/config.js';
+import { defaultDataDir, resolveAuthConfig, stripPlaceholders } from './auth/config.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
 import { ResponseCache } from './client/cache.js';
+import { registerAuthTools } from './register/auth.js';
 import { registerCoreTools } from './register/core.js';
 import { registerTicketTools } from './register/tickets.js';
 import { registerSearchTools } from './register/search.js';
@@ -27,21 +28,57 @@ function parseSecurityLevel(raw) {
 function parseMarkdownDefault(raw) {
     return raw !== 'false';
 }
+function resolveOrDegrade(env) {
+    try {
+        return { ...resolveAuthConfig(env), error: null };
+    }
+    catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        const dataDir = defaultDataDir(env);
+        return {
+            config: { subdomain: '', clientId: '', clientSecret: '', callbackPort: 0, scopes: [] },
+            dataDir,
+            tokensPath: `${dataDir}/tokens.enc`,
+            error: `${reason} Open Settings \u2192 Extensions \u2192 Zendesk, complete the configuration, then reload the extension.`,
+        };
+    }
+}
+// Stands in for AuthManager while the configuration is incomplete: every Zendesk request fails at
+// the token boundary with the actionable message instead of reaching the network.
+function unconfiguredTokenProvider(reason) {
+    return { getAccessToken: () => Promise.reject(new Error(reason)) };
+}
 // Build and fully wire the MCP server (auth, rate buckets, cache, ctx, all tool registration)
 // without connecting a transport — so the wiring is importable and testable. Reads env from the
 // argument (defaults to process.env) so a test can inject a fixture environment.
-export function createServer(env = process.env, deps = {}) {
-    const { config: oauthConfig, dataDir, tokensPath } = resolveAuthConfig(env);
+export function createServer(rawEnv = process.env, deps = {}) {
+    // Drop unsubstituted ${user_config.*} placeholders once, up front, so every downstream default
+    // (security level, markdown flag, report config) sees "absent" rather than a literal placeholder.
+    const env = stripPlaceholders(rawEnv);
+    const { config: oauthConfig, dataDir, tokensPath, error: configError } = resolveOrDegrade(env);
     const { subdomain, clientSecret } = oauthConfig;
     const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
     const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
-    const authManager = deps.authManager ?? new AuthManager(new TokenStore(tokensPath, clientSecret), oauthConfig);
+    const authManager = deps.authManager ??
+        (configError
+            ? unconfiguredTokenProvider(configError)
+            : new AuthManager(new TokenStore(tokensPath, clientSecret), oauthConfig));
     const rateLimiter = deps.rateLimiter ?? new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
     const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
     const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
     const cache = deps.cache ?? new ResponseCache(`${dataDir}/cache`);
     const server = new McpServer({ name: 'zendesk', version: '0.1.0' });
-    const ctx = { httpClient, cache, securityLevel, markdownDefault, reportConfig: parseReportConfig(env) };
+    const ctx = {
+        httpClient,
+        cache,
+        securityLevel,
+        markdownDefault,
+        reportConfig: parseReportConfig(env),
+        // Only the local (stdio/extension) path can receive the localhost OAuth callback; an injected
+        // TokenProvider means the remote bridge already owns authorization.
+        login: deps.authManager ? undefined : { config: oauthConfig, tokensPath, configError },
+    };
+    registerAuthTools(server, ctx);
     registerCoreTools(server, ctx);
     registerTicketTools(server, ctx);
     registerSearchTools(server, ctx);

@@ -3,6 +3,7 @@ import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import type { BusinessHoursConfig } from '../tools/analytics/business-hours.js';
+import type { LoginDeps } from '../tools/login.js';
 
 // Shared dependencies threaded into each per-domain tool registrar, instead of the
 // registrars closing over module-level singletons. Keeps registration testable and
@@ -15,4 +16,7 @@ export interface ToolContext {
   // Business-hours basis for zendesk_report (PRD §8). Optional — the analytics registrar
   // falls back to DEFAULT_BUSINESS_HOURS when unset, so pre-M6 ctx construction stays valid.
   reportConfig?: BusinessHoursConfig;
+  // Present only where an in-app OAuth login makes sense (stdio / Desktop Extension). Absent on the
+  // remote bridge, which cannot receive a localhost callback — see register/auth.ts.
+  login?: LoginDeps;
 }
