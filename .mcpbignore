@@ -1,0 +1,35 @@
+# What the packed Desktop Extension does NOT need. The bundle runs `dist/server.js`, so sources,
+# tests and CI material are dead weight inside it.
+#
+# Runtime modules are deliberately NOT excluded: @modelcontextprotocol/sdk, express,
+# express-rate-limit and zod ship inside the bundle, because the extension is self-contained.
+src/
+tests/
+vitest.config.ts
+.github/
+docs/
+deploy/
+.worktrees/
+
+# The Claude Code plugin layer (marketplace manifest, skills, slash commands, subagent) is loaded by
+# Claude Code from the repo, never by a Desktop Extension host.
+.claude-plugin/
+skills/
+commands/
+agents/
+
+# Internal repo files with no role inside the bundle.
+HANDOVER.md
+scripts/
+
+# Runtime state, never build input: the token store and the response cache live in the data dir,
+# which is cwd-relative for anyone who packs from a checkout that once ran the pre-PR default.
+# `mcpb pack` does NOT read .gitignore, so this file is the only thing keeping tokens.enc out of a
+# shipped, unsigned bundle (@anthropic-ai/mcpb@2.1.2 dist/node/files.js:44-62).
+.zendesk-plugin-data/
+tokens.enc
+memory/
+
+# Test output, produced by `npm run test:coverage` in a checkout that is then packed. Same reason as
+# above: .gitignore keeps it out of git, and only this file keeps it out of the bundle.
+coverage/

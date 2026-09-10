@@ -6,7 +6,9 @@ Help Center/Guide, and a data-analytics layer over ticket metrics and
 incremental exports. Includes a Microsoft 365 bridge (Outlook/Teams/Calendar/
 SharePoint).
 
-64 MCP tools · 5 skills · 5 slash commands · a support subagent.
+65 MCP tools (64 Zendesk tools + `zendesk_login`) · 5 skills · 5 slash commands ·
+a support subagent. Ships two ways: a Claude Code plugin and a Claude Desktop
+Extension (`.mcpb`).
 
 > Scope: full **read/write, no destructive operations** (no delete/merge/redact).
 > OAuth 2.0 (authorization-code + PKCE). TypeScript, Node ≥ 20.
@@ -18,6 +20,68 @@ _(Placeholder — add before publishing: 1. the `/zendesk:tickets` dashboard,
 terminal. Images cannot be generated in the build environment.)_
 
 ## Install
+
+Two supported paths. **Claude Desktop** users install the packed extension;
+**Claude Code** users install the plugin from the marketplace.
+
+### A. Claude Desktop Extension (`.mcpb`)
+
+No terminal required.
+
+1. Register the OAuth client in Zendesk (see [Setup step 1](#1-register-an-oauth-client-in-zendesk)).
+2. **Settings → Extensions → Advanced settings → Install extension…** and pick
+   `zendesk.mcpb`.
+3. Fill in the configuration dialog. Only three fields are required:
+
+   | Field | Required | Default |
+   |---|---|---|
+   | Zendesk Subdomain | **yes** | — |
+   | OAuth Client ID | **yes** | — |
+   | OAuth Client Secret | **yes** (stored as a secret) | — |
+   | OAuth Callback Port | no | `8976` |
+   | Injection-Screening Level | no | `standard` |
+   | Markdown to HTML Conversion | no | on |
+   | Business-Hours Timezone | no | UTC |
+   | Business Work Hours | no | 09:00–17:00 |
+   | Business Workdays | no | Mon–Fri |
+
+   The **redirect URI you register in Zendesk must match the callback port**:
+   `http://localhost:<OAuth Callback Port>/callback` — with the default port,
+   `http://localhost:8976/callback`.
+4. In a chat, run the **`zendesk_login`** tool. It returns a Zendesk
+   authorization URL — open it, approve, and the extension captures the
+   redirect and stores the credentials encrypted. It reports
+   *already authorized* if usable credentials exist; pass `force: true` to
+   authorize again.
+5. Verify with **`zendesk_get_me`** ("Who am I in Zendesk?").
+
+If the extension is installed but not yet configured, it still starts and every
+tool answers with the configuration field that is still empty, rather than
+failing silently.
+
+Build the bundle yourself:
+
+```bash
+npm ci && npm run build             # dist/ is what the bundle runs
+npm ci --omit=dev --ignore-scripts  # bundle only the four runtime dependencies
+npm run pack                        # → zendesk.mcpb (via npx @anthropic-ai/mcpb)
+npm ci                              # restore the dev toolchain
+```
+
+The two `npm ci` runs around `pack` are what keeps the bundle small: `mcpb pack`
+ships whatever is in `node_modules`, and the test/build toolchain has no business
+inside a shipped extension. `npm run pack` refuses to run until the tree is a
+production tree, so forgetting the step fails loudly instead of shipping 17 MB.
+`.mcpbignore` drops the sources, tests, the Claude Code plugin layer and the
+local data directory (`tokens.enc` must never enter a bundle); the four runtime
+dependencies stay in on purpose, so the extension is self-contained. Packaging
+adds **no** dependency of its own — the MCPB CLI is fetched through `npx`.
+
+> **Why `zendesk_login` exists.** The stdio tool surface gains exactly one tool,
+> because a Desktop Extension user has no terminal to run `npm run authorize` in;
+> it is offered only on the local path, never on the remote connector.
+
+### B. Claude Code plugin
 
 From Claude Code, add the marketplace and install the plugin:
 
@@ -71,8 +135,11 @@ When Claude Code installs the plugin it prompts for `userConfig`:
 | `workdays` | JSON | no | ISO weekdays, e.g. `[1,2,3,4,5]` |
 
 ### 3. Authorize (one time)
-The one-time first-token flow runs a local browser callback, so it is a CLI
-step, not an in-chat action. From the plugin directory, with the same
+**Desktop Extension:** run the `zendesk_login` tool in a chat — that is the
+whole step.
+
+**Claude Code:** the one-time first-token flow runs a local browser callback via
+the CLI. From the plugin directory, with the same
 subdomain / client credentials **and the same `CLAUDE_PLUGIN_DATA`** the server
 uses exported:
 
@@ -94,12 +161,20 @@ revoke access or rotate the client secret.
 > **`CLAUDE_PLUGIN_DATA` must match.** The server receives `CLAUDE_PLUGIN_DATA`
 > from its `plugin.json` env and reads `tokens.enc` from `$CLAUDE_PLUGIN_DATA`.
 > The `authorize` CLI writes to the **same** path only if you export the same
-> value — otherwise it writes to the default `.zendesk-plugin-data/` and the
+> value — otherwise it writes to the default per-user data directory and the
 > server reports "No authorization found". If you leave `CLAUDE_PLUGIN_DATA`
 > unset, the CLI prints a warning and the absolute path it used; make sure that
 > path is where the server looks. The tokens are encrypted with a key derived
 > from your client secret, so the same credentials + same path let the server
 > pick them up with no extra steps.
+
+> **Where credentials live.** With `CLAUDE_PLUGIN_DATA` unset — which is the
+> Desktop Extension case — `tokens.enc` (mode `0600`) and the response cache go
+> to a stable per-user directory: `~/Library/Application Support/zendesk-plugin`
+> on macOS, `%APPDATA%\zendesk-plugin` on Windows,
+> `$XDG_DATA_HOME/zendesk-plugin` (or `~/.local/share/zendesk-plugin`) elsewhere.
+> It sits outside the extension directory, so an extension update does not
+> discard the authorization. The bundle itself never contains credentials.
 
 ### 4. Confirm
 Ask Claude: **"Who am I in Zendesk?"** → runs `zendesk_get_me` and confirms auth.
@@ -127,7 +202,8 @@ Ask Claude: **"Who am I in Zendesk?"** → runs `zendesk_get_me` and confirms au
 - `/zendesk:escalate <id>` — push a ticket to Teams/Outlook
 
 ### Tools
-64 namespaced `zendesk_*` tools across Support, Users/Orgs, Search, Business
+`zendesk_login` (authorize this installation) plus 64 namespaced `zendesk_*`
+tools across Support, Users/Orgs, Search, Business
 Rules, Guide, Analytics, and a `zendesk_query` utility that re-slices cached
 responses without re-fetching. Read tools save the full JSON response to the
 plugin cache and return a summary + handle (token-efficient iteration). See the
@@ -160,6 +236,8 @@ classes), pass raw HTML directly rather than relying on Markdown conversion.
 npm install
 npm test          # vitest — full suite
 npm run build     # tsc
+npm run pack      # → zendesk.mcpb (Desktop Extension bundle)
+node scripts/validate-manifests.mjs   # manifest.json + plugin.json + marketplace.json
 claude plugin validate --strict .claude-plugin/plugin.json
 claude plugin validate --strict .claude-plugin/marketplace.json
 ```

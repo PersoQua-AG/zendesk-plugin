@@ -61,6 +61,9 @@ export function waitForAuthorizationCode(
   return new Promise((resolve, reject) => {
     let settled = false;
     const server: Server = createServer((req, res) => {
+      // req.url is typed `string | undefined` but is always set on a request the parser accepted,
+      // so the fallback exists for the type only and no test can reach it.
+      /* v8 ignore next */
       const url = new URL(req.url ?? '/', `http://localhost:${port}`);
       if (url.pathname !== '/callback') {
         res.writeHead(404).end();

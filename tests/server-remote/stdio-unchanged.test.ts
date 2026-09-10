@@ -27,10 +27,11 @@ function fixtureEnv(): NodeJS.ProcessEnv {
 }
 
 describe('createServer stdio path unchanged (regression)', () => {
-  it('still registers exactly 64 tools with no injected deps', () => {
+  // 64 Zendesk tools + zendesk_login, which is registered only on this local path.
+  it('still registers exactly 65 tools with no injected deps', () => {
     const spy = vi.spyOn(McpServer.prototype, 'registerTool');
     createServer(fixtureEnv());
-    expect(spy).toHaveBeenCalledTimes(64);
+    expect(spy).toHaveBeenCalledTimes(65);
   });
 
   it('defaults reproduce the 400/10 buckets and standard security', () => {
