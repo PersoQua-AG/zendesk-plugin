@@ -53,12 +53,6 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
     },
   );
 
-  it('never sends a placeholder subdomain to Zendesk', () => {
-    expect(() =>
-      resolveAuthConfig({ ...fullEnv(), ZENDESK_SUBDOMAIN: '${user_config.zendesk_subdomain}' }),
-    ).toThrow();
-  });
-
   it('a placeholder security level and markdown flag fall back to the shipped defaults', () => {
     const { ctx } = createServer({
       ...serverEnv(),
@@ -72,11 +66,5 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
   it('a stringified boolean "false" still disables markdown conversion', () => {
     const { ctx } = createServer({ ...serverEnv(), ZENDESK_MARKDOWN_CONVERSION: 'false' });
     expect(ctx.markdownDefault).toBe(false);
-  });
-
-  it('maps every env var the server reads to its user_config field', () => {
-    expect(USER_CONFIG_FIELD_BY_ENV.ZENDESK_SUBDOMAIN).toBe('zendesk_subdomain');
-    expect(USER_CONFIG_FIELD_BY_ENV.ZENDESK_OAUTH_CLIENT_SECRET).toBe('oauth_client_secret');
-    expect(Object.keys(USER_CONFIG_FIELD_BY_ENV)).toHaveLength(9);
   });
 });

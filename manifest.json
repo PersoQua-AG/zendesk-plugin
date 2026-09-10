@@ -15,7 +15,6 @@
     "url": "https://github.com/PersoQua-AG/zendesk-plugin"
   },
   "homepage": "https://github.com/PersoQua-AG/zendesk-plugin",
-  "documentation": "https://github.com/PersoQua-AG/zendesk-plugin#readme",
   "license": "MIT",
   "keywords": ["zendesk", "support", "helpdesk", "tickets", "mcp"],
   "server": {
@@ -38,7 +37,7 @@
     }
   },
   "compatibility": {
-    "platforms": ["darwin", "win32"],
+    "platforms": ["darwin", "win32", "linux"],
     "runtimes": {
       "node": ">=20"
     }

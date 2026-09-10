@@ -70,19 +70,16 @@ npm ci                              # restore the dev toolchain
 
 The two `npm ci` runs around `pack` are what keeps the bundle small: `mcpb pack`
 ships whatever is in `node_modules`, and the test/build toolchain has no business
-inside a shipped extension. `.mcpbignore` drops the sources, tests and the Claude
-Code plugin layer; the four runtime dependencies stay in on purpose, so the
-extension is self-contained. Packaging adds **no** dependency of its own — the
-MCPB CLI is fetched through `npx`.
+inside a shipped extension. `npm run pack` refuses to run until the tree is a
+production tree, so forgetting the step fails loudly instead of shipping 17 MB.
+`.mcpbignore` drops the sources, tests, the Claude Code plugin layer and the
+local data directory (`tokens.enc` must never enter a bundle); the four runtime
+dependencies stay in on purpose, so the extension is self-contained. Packaging
+adds **no** dependency of its own — the MCPB CLI is fetched through `npx`.
 
-> **Why `zendesk_login` exists.** The stdio tool surface is deliberately
-> extended by exactly one tool. The one-time authorization-code exchange needs a
-> browser round trip and a local callback listener; in Claude Code that is the
-> `npm run authorize` CLI, but a Desktop Extension user has no terminal and no
-> checkout to run it in. `zendesk_login` is that step, and nothing else: it
-> reuses the same OAuth flow and writes to the same token store. It is offered
-> only on the local (stdio/extension) path — the remote connector authorizes
-> through its own public callback and does not expose it.
+> **Why `zendesk_login` exists.** The stdio tool surface gains exactly one tool,
+> because a Desktop Extension user has no terminal to run `npm run authorize` in;
+> it is offered only on the local path, never on the remote connector.
 
 ### B. Claude Code plugin
 

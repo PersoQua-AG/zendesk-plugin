@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,18 +42,7 @@ describe('zendesk_login registration', () => {
     expect(schema.properties?.force?.type).toBe('boolean');
     expect(schema.required ?? []).not.toContain('force');
   });
-
-  it('is NOT exposed on the remote bridge path, which has no localhost callback listener', async () => {
-    const remoteDeps: ServerDeps = { authManager: { getAccessToken: vi.fn().mockResolvedValue('tok') } };
-    const names = (await listTools(fixtureEnv(), remoteDeps)).map((t) => t.name);
-    expect(names).not.toContain('zendesk_login');
-  });
-
-  it('leaves every pre-existing tool name untouched (purely additive)', async () => {
-    const stdio = (await listTools(fixtureEnv())).map((t) => t.name);
-    const remote = (
-      await listTools(fixtureEnv(), { authManager: { getAccessToken: vi.fn().mockResolvedValue('tok') } })
-    ).map((t) => t.name);
-    expect(stdio.filter((n) => !remote.includes(n))).toEqual(['zendesk_login']);
-  });
 });
+
+// Remote-path absence and tool-set parity are asserted once, in
+// tests/server-remote/tool-parity.test.ts:68-74, which also checks the other direction.

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from '../../src/server.js';
@@ -47,5 +47,16 @@ describe('an incompletely configured server never reaches the network', () => {
     const { ctx } = createServer(degradedEnv(), { fetchImpl: spyFetch() });
     const err = await ctx.httpClient.request('/users/me.json').catch((e: unknown) => e as Error);
     expect(err.message).not.toContain('.zendesk.com');
+  });
+
+  // US-3: the cache follows the same directory as the token store. The degraded path must apply the
+  // same CLAUDE_PLUGIN_DATA precedence as resolveAuthConfig (src/auth/config.ts:79) — otherwise a
+  // configured data dir is silently abandoned for the per-user default the moment a field is empty.
+  it('still honors CLAUDE_PLUGIN_DATA for the response cache', () => {
+    const env = degradedEnv();
+    const { ctx } = createServer(env, { fetchImpl: spyFetch() });
+    const entry = ctx.cache.save('zendesk_get_me', { id: 1 });
+    expect(existsSync(join(env.CLAUDE_PLUGIN_DATA as string, 'cache'))).toBe(true);
+    expect(ctx.cache.load(entry.handle)).toMatchObject({ id: 1 });
   });
 });

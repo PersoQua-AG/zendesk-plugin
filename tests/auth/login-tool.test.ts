@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createHttpServer } from 'node:http';
@@ -115,7 +115,7 @@ describe('zendesk_login when already authorized', () => {
         waitForCode: async () => ({ code: 'c', redirectUri: `http://localhost:${port}/callback` }),
         exchange: async () => ({ accessToken: 'a-new', refreshToken: 'r-new', expiresIn: 3600 }),
       }),
-      true,
+      { force: true },
     );
     expect(text).not.toMatch(/already authorized/i);
     expect(new TokenStore(tokensPath, SECRET).load()).toMatchObject({ accessToken: 'a-new' });
@@ -131,7 +131,7 @@ describe('zendesk_login when already authorized', () => {
           throw new Error('Token exchange failed: 400');
         },
       }),
-      true,
+      { force: true },
     );
     expect(text).toMatch(/zendesk_login/);
     expect(new TokenStore(tokensPath, SECRET).load()).toMatchObject({ accessToken: 'a-old' });
@@ -214,6 +214,27 @@ describe('zendesk_login negative paths', () => {
     );
     expect(text).not.toContain(tokensPath);
     expect(text).not.toContain(dataDir);
+  });
+});
+
+describe('zendesk_login with an unreadable token store', () => {
+  it('says the stored credentials were discarded, without a path or a stack trace', async () => {
+    const port = await freePort();
+    // What a rotated client secret looks like from here: a file the TokenStore cannot decrypt.
+    writeFileSync(tokensPath, 'not-a-valid-encrypted-token-file');
+    const text = await runLogin(
+      deps(port, {
+        waitForCode: async () => ({ code: 'c', redirectUri: `http://localhost:${port}/callback` }),
+        exchange: async () => ({ accessToken: 'a-new', refreshToken: 'r-new', expiresIn: 3600 }),
+      }),
+    );
+    expect(text).toMatch(/could not be read/i);
+    expect(text).toMatch(/encryption secret changed or file corrupt/i);
+    expect(text).not.toContain(tokensPath);
+    expect(text).not.toContain(dataDir);
+    expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
+    // The fresh flow still ran to completion.
+    expect(new TokenStore(tokensPath, SECRET).load()).toMatchObject({ accessToken: 'a-new' });
   });
 });
 

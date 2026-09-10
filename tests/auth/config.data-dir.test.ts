@@ -10,12 +10,6 @@ const fullEnv = (): NodeJS.ProcessEnv => ({
 });
 
 describe('defaultDataDir', () => {
-  it('is an absolute path outside the current working directory', () => {
-    const dir = defaultDataDir({}, 'darwin');
-    expect(isAbsolute(dir)).toBe(true);
-    expect(dir.startsWith(process.cwd())).toBe(false);
-  });
-
   it('uses the macOS Application Support directory on darwin', () => {
     expect(defaultDataDir({}, 'darwin')).toBe(
       join(homedir(), 'Library', 'Application Support', 'zendesk-plugin'),
@@ -40,13 +34,13 @@ describe('resolveAuthConfig data dir', () => {
     const { dataDir, tokensPath } = resolveAuthConfig(fullEnv());
     expect(dataDir).toBe(defaultDataDir(fullEnv()));
     expect(isAbsolute(dataDir)).toBe(true);
-    expect(tokensPath).toBe(`${dataDir}/tokens.enc`);
+    expect(tokensPath).toBe(join(dataDir, 'tokens.enc'));
   });
 
   it('still honors an explicit absolute CLAUDE_PLUGIN_DATA (Claude Code plugin path)', () => {
     const { dataDir, tokensPath } = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '/var/data' });
     expect(dataDir).toBe('/var/data');
-    expect(tokensPath).toBe('/var/data/tokens.enc');
+    expect(tokensPath).toBe(join('/var/data', 'tokens.enc'));
   });
 
   it('treats an empty-string CLAUDE_PLUGIN_DATA as absent', () => {

@@ -111,6 +111,20 @@ describe('MCPB env mapping', () => {
     expect(JSON.stringify(manifest)).not.toContain('CLAUDE_PLUGIN_DATA');
   });
 
+  // The same env map has to be mirrored in .claude-plugin/plugin.json, which a different host
+  // loads. Without this, a new config field costs five edits and only four of them are covered.
+  it('the Claude Code plugin manifest passes the same env vars, plus CLAUDE_PLUGIN_DATA', () => {
+    const pluginEnv: Record<string, string> = plugin.mcpServers.zendesk.env;
+    for (const [envName, field] of Object.entries(USER_CONFIG_FIELD_BY_ENV)) {
+      expect(pluginEnv[envName], envName).toBe(`\${user_config.${field}}`);
+    }
+    // CLAUDE_PLUGIN_DATA is the one known extra: Claude Code owns the plugin data dir, an MCPB
+    // host does not (see the test right above).
+    expect(Object.keys(pluginEnv).sort()).toEqual(
+      [...Object.keys(USER_CONFIG_FIELD_BY_ENV), 'CLAUDE_PLUGIN_DATA'].sort(),
+    );
+  });
+
   it('ships no Zendesk instance data: no ids, no view/group/form/field pre-configuration', () => {
     const text = JSON.stringify(manifest);
     expect(text).not.toMatch(/"\w*_id"\s*:\s*\d/);

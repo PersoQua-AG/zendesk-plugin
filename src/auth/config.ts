@@ -86,7 +86,8 @@ export function resolveAuthConfig(rawEnv: NodeJS.ProcessEnv): ResolvedAuthConfig
       scopes: DEFAULT_SCOPES,
     },
     dataDir,
-    // Single source of the token file location so server + authorize bin never drift.
-    tokensPath: `${dataDir}/tokens.enc`,
+    // Single source of the token file location so server + authorize bin never drift. join(), not
+    // a template literal: the manifest declares win32, where '/' would mix separators.
+    tokensPath: join(dataDir, 'tokens.enc'),
   };
 }
