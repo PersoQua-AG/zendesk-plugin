@@ -37,6 +37,16 @@ describe('AuthManager refresh failure path', () => {
     expect(store.load()).toMatchObject({ refreshToken: 'rt-old' });
   });
 
+  it('still names the remedy when the refresh rejects with something that is not an Error', async () => {
+    const store = fakeStore({ accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 1000 });
+    // fetch/undici and a hand-written mock can both reject with a bare value; the user must still
+    // be told to run zendesk_login rather than seeing "undefined".
+    const refresh = vi.fn().mockRejectedValue('invalid_grant');
+    const manager = new AuthManager(store, config, refresh as unknown as typeof import('../../src/auth/oauth-flow.js').refreshAccessToken);
+
+    await expect(manager.getAccessToken()).rejects.toThrow('invalid_grant — run the zendesk_login tool to authorize again.');
+  });
+
   it('single-flights concurrent refreshes: N overlapping calls near expiry spend the token once', async () => {
     const store = fakeStore({ accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 1000 });
     let resolveRefresh: (v: { accessToken: string; refreshToken: string; expiresIn: number }) => void = () => {};

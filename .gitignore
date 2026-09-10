@@ -6,4 +6,7 @@ node_modules/
 # The packed Desktop Extension bundle is a build artifact, produced by `npm run pack`.
 *.mcpb
 
+# Coverage output from `npm run test:coverage` (lcov reporter).
+coverage/
+
 .worktrees/

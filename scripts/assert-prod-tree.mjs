@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Unambiguous dev-only markers: none of the four frozen runtime dependencies depends on them.
-const DEV_MARKERS = ['typescript', 'vitest', '@types/node'];
+const DEV_MARKERS = ['typescript', 'vitest', '@vitest/coverage-v8', '@types/node'];
 
 const present = DEV_MARKERS.filter((name) => existsSync(join(root, 'node_modules', name)));
 const problems = present.map((name) => `node_modules/${name} is present (devDependency)`);

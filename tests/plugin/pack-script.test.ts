@@ -116,8 +116,17 @@ describe('what mcpb pack puts in the bundle', () => {
     'scripts/assert-prod-tree.mjs',
     '.claude-plugin/plugin.json',
     'tsconfig.json',
+    'coverage/lcov.info',
+    'coverage/lcov-report/index.html',
   ])('leaves repo-only material out: %s', (path) => {
     expect(excludes(PACKER_PATTERNS, path)).toBe(true);
+  });
+
+  it('keeps coverage output out for the same reason as the data dir: .mcpbignore, not .gitignore', () => {
+    expect(readFileSync(join(root, '.gitignore'), 'utf8')).toMatch(/^coverage\/$/m);
+    // The packer's own defaults do not cover it — `npm run test:coverage` before a pack would ship it.
+    expect(excludes(EXCLUDE_PATTERNS, 'coverage/lcov.info')).toBe(false);
+    expect(excludes(PACKER_PATTERNS, 'coverage/lcov.info')).toBe(true);
   });
 
   it.each(['manifest.json', 'package.json', 'dist/server.js', 'README.md', 'node_modules/zod/package.json'])(
@@ -158,7 +167,7 @@ describe('production-tree gate', () => {
     expect(r.stdout).toMatch(/production tree confirmed/i);
   });
 
-  it.each(['typescript', 'vitest', '@types/node'])('fails when the dev dependency %s is still installed', (dev) => {
+  it.each(['typescript', 'vitest', '@vitest/coverage-v8', '@types/node'])('fails when the dev dependency %s is still installed', (dev) => {
     const tree = prodTree();
     mkdirSync(join(tree, 'node_modules', dev), { recursive: true });
     const r = runGuardIn(tree);

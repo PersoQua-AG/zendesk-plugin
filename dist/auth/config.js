@@ -19,7 +19,7 @@ export function defaultDataDir(env = process.env, platform = process.platform) {
 // Every env var the extension/plugin manifests feed from a user_config field, so an error can name
 // the field the user must fill in rather than an env var they never see. Also the sync source the
 // manifest test checks both manifests against.
-export const USER_CONFIG_FIELD_BY_ENV = {
+const USER_CONFIG_FIELDS = {
     ZENDESK_SUBDOMAIN: 'zendesk_subdomain',
     ZENDESK_OAUTH_CLIENT_ID: 'oauth_client_id',
     ZENDESK_OAUTH_CLIENT_SECRET: 'oauth_client_secret',
@@ -30,6 +30,7 @@ export const USER_CONFIG_FIELD_BY_ENV = {
     ZENDESK_WORK_HOURS: 'work_hours',
     ZENDESK_WORKDAYS: 'workdays',
 };
+export const USER_CONFIG_FIELD_BY_ENV = USER_CONFIG_FIELDS;
 // The MCPB host substitutes ${...} only for variables it has a value for; an optional user_config
 // field the user left blank arrives as the LITERAL placeholder string
 // (@anthropic-ai/mcpb@2.1.2 dist/shared/config.js:16-27). Dropping such values makes them "absent",
@@ -43,11 +44,13 @@ export function stripPlaceholders(env) {
     }
     return out;
 }
+// Only an env var that HAS a user_config field may be required: the error names that field, and a
+// name without one is a compile error here rather than a fallback that names the raw env var.
 function required(env, name) {
     const value = env[name];
     if (!value) {
         throw new Error(`Missing required environment variable: ${name} (extension configuration field ` +
-            `"${USER_CONFIG_FIELD_BY_ENV[name] ?? name}" is empty).`);
+            `"${USER_CONFIG_FIELDS[name]}" is empty).`);
     }
     return value;
 }

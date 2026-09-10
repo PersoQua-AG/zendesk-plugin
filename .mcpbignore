@@ -29,3 +29,7 @@ scripts/
 .zendesk-plugin-data/
 tokens.enc
 memory/
+
+# Test output, produced by `npm run test:coverage` in a checkout that is then packed. Same reason as
+# above: .gitignore keeps it out of git, and only this file keeps it out of the bundle.
+coverage/

@@ -101,6 +101,33 @@ describe('the authorization URL survives every outcome of zendesk_login', () => 
     }
   });
 
+  // The counter-case: when no URL could be built at all, the reply must NOT promise one. A
+  // subdomain the user mistyped (a space, a full host) fails inside buildAuthorizationUrl, before
+  // anything is printed — the only path on which there is nothing to open.
+  it('a subdomain that cannot form a URL yields an actionable failure and promises no URL', async () => {
+    const port = await freePort();
+    const text = await runLogin(deps(port, { config: { ...config(port), subdomain: 'acme corp' } }));
+    expect(text).toMatch(/Invalid URL/i);
+    expect(text).toContain('Run zendesk_login again');
+    expect(text).not.toContain('Authorization URL for this attempt');
+    expect(text).not.toContain('https://');
+  });
+
+  it('reports a non-Error failure as plain text rather than swallowing it', async () => {
+    const port = await freePort();
+    const text = await runLogin(
+      deps(port, {
+        waitForCode: async () => ({ code: 'auth-code', redirectUri: `http://localhost:${port}/callback` }),
+        // A dependency rejecting with a bare value must not degrade into "undefined".
+        exchange: async () => {
+          throw 'zendesk rejected the code';
+        },
+      }),
+    );
+    expect(text).toContain('Zendesk login failed: zendesk rejected the code');
+    expect(authorizationUrl(text).host).toBe('acme.zendesk.com');
+  });
+
   it('never leaks the client secret alongside the URL', async () => {
     const port = await freePort();
     const text = await runLogin(deps(port, { callbackTimeoutMs: 50 }));

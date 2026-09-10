@@ -26,7 +26,7 @@ export function defaultDataDir(
 // Every env var the extension/plugin manifests feed from a user_config field, so an error can name
 // the field the user must fill in rather than an env var they never see. Also the sync source the
 // manifest test checks both manifests against.
-export const USER_CONFIG_FIELD_BY_ENV: Record<string, string> = {
+const USER_CONFIG_FIELDS = {
   ZENDESK_SUBDOMAIN: 'zendesk_subdomain',
   ZENDESK_OAUTH_CLIENT_ID: 'oauth_client_id',
   ZENDESK_OAUTH_CLIENT_SECRET: 'oauth_client_secret',
@@ -36,7 +36,9 @@ export const USER_CONFIG_FIELD_BY_ENV: Record<string, string> = {
   ZENDESK_TIMEZONE: 'timezone',
   ZENDESK_WORK_HOURS: 'work_hours',
   ZENDESK_WORKDAYS: 'workdays',
-};
+} as const;
+
+export const USER_CONFIG_FIELD_BY_ENV: Record<string, string> = USER_CONFIG_FIELDS;
 
 // The MCPB host substitutes ${...} only for variables it has a value for; an optional user_config
 // field the user left blank arrives as the LITERAL placeholder string
@@ -58,12 +60,14 @@ export interface ResolvedAuthConfig {
   tokensPath: string;
 }
 
-function required(env: NodeJS.ProcessEnv, name: string): string {
+// Only an env var that HAS a user_config field may be required: the error names that field, and a
+// name without one is a compile error here rather than a fallback that names the raw env var.
+function required(env: NodeJS.ProcessEnv, name: keyof typeof USER_CONFIG_FIELDS): string {
   const value = env[name];
   if (!value) {
     throw new Error(
       `Missing required environment variable: ${name} (extension configuration field ` +
-        `"${USER_CONFIG_FIELD_BY_ENV[name] ?? name}" is empty).`,
+        `"${USER_CONFIG_FIELDS[name]}" is empty).`,
     );
   }
   return value;
