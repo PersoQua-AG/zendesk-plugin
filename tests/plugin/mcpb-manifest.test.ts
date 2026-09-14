@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { USER_CONFIG_FIELD_BY_ENV } from '../../src/auth/config.js';
+import { defaultDataDir, USER_CONFIG_FIELD_BY_ENV } from '../../src/auth/config.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string) => JSON.parse(readFileSync(join(root, rel), 'utf8'));
@@ -47,6 +47,20 @@ describe('MCPB manifest shape', () => {
     expect(manifest.compatibility.runtimes.node).toBe(pkg.engines.node);
     for (const p of manifest.compatibility.platforms) expect(['darwin', 'win32', 'linux']).toContain(p);
   });
+
+  // The manifest promises a platform; defaultDataDir must have a home for it. Declaring one without
+  // the other is how tokens.enc ends up in an arbitrary working directory on the platform nobody
+  // tested — the failure the absolute-path rule exists to prevent. Driven off the manifest, so
+  // adding a platform there without a branch in config.ts fails here instead of in the field.
+  it.each(manifest.compatibility.platforms as NodeJS.Platform[])(
+    'resolves an absolute per-user data dir on every declared platform: %s',
+    (platform) => {
+      const dir = defaultDataDir({}, platform);
+      expect(isAbsolute(dir), `${platform} → ${dir}`).toBe(true);
+      expect(dir.startsWith(process.cwd())).toBe(false);
+      expect(dir.endsWith('zendesk-plugin')).toBe(true);
+    },
+  );
 
   it('keeps its version and identity in sync with the Claude Code plugin manifest', () => {
     expect(manifest.name).toBe(plugin.name);
