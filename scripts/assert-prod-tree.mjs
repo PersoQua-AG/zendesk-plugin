@@ -4,17 +4,26 @@
 // forgets `npm ci --omit=dev` therefore ships the whole build/test toolchain (measured: 17.2 MB
 // instead of 2.6 MB, including typescript and vitest) as attack surface. This turns "remember the
 // README step" into a hard failure. Zero deps — plain Node, and it is excluded from the bundle.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const problems = [];
 
-// Unambiguous dev-only markers: none of the four frozen runtime dependencies depends on them.
-const DEV_MARKERS = ['typescript', 'vitest', '@vitest/coverage-v8', '@types/node'];
-
-const present = DEV_MARKERS.filter((name) => existsSync(join(root, 'node_modules', name)));
-const problems = present.map((name) => `node_modules/${name} is present (devDependency)`);
+// The dev-only markers ARE the repo's own devDependencies — read, not restated. A hand-kept copy
+// (there was one here and a second one in the test) silently stops matching the day a tool is added
+// or dropped, and this gate would then wave through exactly what it exists to catch. None of the
+// four frozen runtime dependencies depends on any of them.
+let devMarkers = [];
+try {
+  devMarkers = Object.keys(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).devDependencies ?? {});
+} catch {
+  problems.push('package.json is missing or unreadable — this is not a packable tree');
+}
+for (const name of devMarkers) {
+  if (existsSync(join(root, 'node_modules', name))) problems.push(`node_modules/${name} is present (devDependency)`);
+}
 
 // A bundle without the compiled entry point is dead on arrival at the host.
 if (!existsSync(join(root, 'dist', 'server.js'))) problems.push('dist/server.js is missing — run `npm run build` first');

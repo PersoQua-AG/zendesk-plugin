@@ -12,7 +12,9 @@ deploy/
 .worktrees/
 
 # The Claude Code plugin layer (marketplace manifest, skills, slash commands, subagent) is loaded by
-# Claude Code from the repo, never by a Desktop Extension host.
+# Claude Code from the repo, never by a Desktop Extension host. `.claude/` is there because the hub
+# symlinks it into every subproject, and the packer reads THIS file, not .gitignore.
+.claude/
 .claude-plugin/
 skills/
 commands/

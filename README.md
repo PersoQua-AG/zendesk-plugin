@@ -48,11 +48,18 @@ No terminal required.
    The **redirect URI you register in Zendesk must match the callback port**:
    `http://localhost:<OAuth Callback Port>/callback` — with the default port,
    `http://localhost:8976/callback`.
-4. In a chat, run the **`zendesk_login`** tool. It returns a Zendesk
-   authorization URL — open it, approve, and the extension captures the
-   redirect and stores the credentials encrypted. It reports
-   *already authorized* if usable credentials exist; pass `force: true` to
-   authorize again.
+4. In a chat, run the **`zendesk_login`** tool **twice**:
+   - The **first call** returns a Zendesk authorization URL and starts listening
+     for the redirect. Open the URL, approve access — the browser tab confirms
+     the redirect landed. This call does not wait for you; the authorization
+     stays open for 5 minutes.
+   - The **second call** finishes the login: it exchanges the code and stores
+     the credentials encrypted. Called too early, it repeats the URL and says it
+     is still waiting; called after the 5 minutes, it says so and the next call
+     starts a fresh authorization.
+
+   It reports *already authorized* if usable credentials exist; pass
+   `force: true` to authorize again, or to restart an authorization in progress.
 5. Verify with **`zendesk_get_me`** ("Who am I in Zendesk?").
 
 If the extension is installed but not yet configured, it still starts and every
@@ -77,9 +84,15 @@ local data directory (`tokens.enc` must never enter a bundle); the four runtime
 dependencies stay in on purpose, so the extension is self-contained. Packaging
 adds **no** dependency of its own — the MCPB CLI is fetched through `npx`.
 
-> **Why `zendesk_login` exists.** The stdio tool surface gains exactly one tool,
-> because a Desktop Extension user has no terminal to run `npm run authorize` in;
-> it is offered only on the local path, never on the remote connector.
+> **Why `zendesk_login` exists, and why it takes two calls.** The stdio tool
+> surface gains exactly one tool, because a Desktop Extension user has no
+> terminal to run `npm run authorize` in. It needs two calls because a tool
+> result reaches the user only when the call returns: a single call that waited
+> for the browser redirect would reveal the URL to open only once it was already
+> too late to open it. The first call therefore publishes the URL and keeps the
+> localhost listener bound in the background; the second collects the result.
+> The tool is offered only on the local path, never on the remote connector —
+> the flow is per process, and the listener is on localhost.
 
 ### B. Claude Code plugin
 
@@ -135,8 +148,9 @@ When Claude Code installs the plugin it prompts for `userConfig`:
 | `workdays` | JSON | no | ISO weekdays, e.g. `[1,2,3,4,5]` |
 
 ### 3. Authorize (one time)
-**Desktop Extension:** run the `zendesk_login` tool in a chat — that is the
-whole step.
+**Desktop Extension:** run the `zendesk_login` tool in a chat, open the URL it
+returns, then run `zendesk_login` once more to finish — that is the whole step
+(see section A, step 4).
 
 **Claude Code:** the one-time first-token flow runs a local browser callback via
 the CLI. From the plugin directory, with the same

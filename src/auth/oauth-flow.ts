@@ -53,18 +53,41 @@ export function buildAuthorizationUrl(
   return url.toString();
 }
 
-export function waitForAuthorizationCode(
+// A callback listener that has been STARTED but is not yet awaited. The two-step login tool needs
+// those two moments apart: it hands the user the authorization URL on the first tool call and
+// collects the callback on a later one, with the listener — and the `state` it validates — living
+// across both. waitForAuthorizationCode() below is the same listener awaited at once, which is all
+// the CLI ever needs.
+export interface CallbackListener {
+  // The authorization result, or a rejection naming the reason: denied, state mismatch, missing
+  // code, bind failure, timeout, or a deliberate close().
+  promise: Promise<AuthorizationResult>;
+  // Resolves with null once the port is bound, or WITH the bind error rather than rejecting: a
+  // caller that ignores this handle (the CLI does) must not trip an unhandled rejection.
+  ready: Promise<Error | null>;
+  // Closes the listener and settles a still-pending `promise`. A no-op once settled.
+  close: () => void;
+}
+
+export function startCallbackListener(
   port: number,
   expectedState: string,
   timeoutMs: number = DEFAULT_CALLBACK_TIMEOUT_MS,
-): Promise<AuthorizationResult> {
-  return new Promise((resolve, reject) => {
+): CallbackListener {
+  let onBound!: (bindError: Error | null) => void;
+  const ready = new Promise<Error | null>((resolve) => {
+    onBound = resolve;
+  });
+  let close!: () => void;
+
+  const promise = new Promise<AuthorizationResult>((resolve, reject) => {
     let settled = false;
     const server: Server = createServer((req, res) => {
       // req.url is typed `string | undefined` but is always set on a request the parser accepted,
       // so the fallback exists for the type only and no test can reach it.
       /* v8 ignore next */
-      const url = new URL(req.url ?? '/', `http://localhost:${port}`);
+      const rawUrl = req.url ?? '/';
+      const url = new URL(rawUrl, `http://localhost:${port}`);
       if (url.pathname !== '/callback') {
         res.writeHead(404).end();
         return;
@@ -102,10 +125,28 @@ export function waitForAuthorizationCode(
       settle();
     };
 
+    close = () => finish(() => reject(new Error('OAuth callback listener closed')));
+
     // Bind errors (e.g. EADDRINUSE) reject the promise instead of throwing uncaught.
-    server.on('error', (err) => finish(() => reject(new Error(`OAuth callback server error: ${err.message}`))));
+    server.on('error', (err) => {
+      const bindError = new Error(`OAuth callback server error: ${err.message}`);
+      onBound(bindError);
+      finish(() => reject(bindError));
+    });
+    server.on('listening', () => onBound(null));
     server.listen(port);
   });
+
+  return { promise, ready, close };
+}
+
+// The CLI's shape: start the listener and wait for it in one call.
+export function waitForAuthorizationCode(
+  port: number,
+  expectedState: string,
+  timeoutMs: number = DEFAULT_CALLBACK_TIMEOUT_MS,
+): Promise<AuthorizationResult> {
+  return startCallbackListener(port, expectedState, timeoutMs).promise;
 }
 
 async function postToken(

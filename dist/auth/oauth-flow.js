@@ -24,14 +24,20 @@ export function buildAuthorizationUrl(config, codeChallenge, state, redirectUriO
     url.searchParams.set('code_challenge_method', 'S256');
     return url.toString();
 }
-export function waitForAuthorizationCode(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
-    return new Promise((resolve, reject) => {
+export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
+    let onBound;
+    const ready = new Promise((resolve) => {
+        onBound = resolve;
+    });
+    let close;
+    const promise = new Promise((resolve, reject) => {
         let settled = false;
         const server = createServer((req, res) => {
             // req.url is typed `string | undefined` but is always set on a request the parser accepted,
             // so the fallback exists for the type only and no test can reach it.
             /* v8 ignore next */
-            const url = new URL(req.url ?? '/', `http://localhost:${port}`);
+            const rawUrl = req.url ?? '/';
+            const url = new URL(rawUrl, `http://localhost:${port}`);
             if (url.pathname !== '/callback') {
                 res.writeHead(404).end();
                 return;
@@ -66,10 +72,21 @@ export function waitForAuthorizationCode(port, expectedState, timeoutMs = DEFAUL
             server.close();
             settle();
         };
+        close = () => finish(() => reject(new Error('OAuth callback listener closed')));
         // Bind errors (e.g. EADDRINUSE) reject the promise instead of throwing uncaught.
-        server.on('error', (err) => finish(() => reject(new Error(`OAuth callback server error: ${err.message}`))));
+        server.on('error', (err) => {
+            const bindError = new Error(`OAuth callback server error: ${err.message}`);
+            onBound(bindError);
+            finish(() => reject(bindError));
+        });
+        server.on('listening', () => onBound(null));
         server.listen(port);
     });
+    return { promise, ready, close };
+}
+// The CLI's shape: start the listener and wait for it in one call.
+export function waitForAuthorizationCode(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
+    return startCallbackListener(port, expectedState, timeoutMs).promise;
 }
 async function postToken(subdomain, body, fetchImpl, errorLabel) {
     const response = await fetchImpl(`https://${subdomain}.zendesk.com/oauth/tokens`, {

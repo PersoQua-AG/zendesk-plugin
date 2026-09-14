@@ -115,6 +115,10 @@ describe('what mcpb pack puts in the bundle', () => {
     '.github/workflows/ci.yml',
     'scripts/assert-prod-tree.mjs',
     '.claude-plugin/plugin.json',
+    // The hub symlinks .claude/ into every subproject; the packer follows it and reads no
+    // .gitignore, so only .mcpbignore keeps the agent cast out of a shipped bundle.
+    '.claude/settings.json',
+    '.claude/agents/engineer.md',
     'tsconfig.json',
     'coverage/lcov.info',
     'coverage/lcov-report/index.html',
@@ -158,6 +162,9 @@ describe('production-tree gate', () => {
     mkdirSync(join(tree, 'dist'), { recursive: true });
     writeFileSync(join(tree, 'dist', 'server.js'), '');
     mkdirSync(join(tree, 'node_modules', 'zod'), { recursive: true });
+    // The guard reads the dev-dependency names from here, so a real package.json is part of the
+    // fixture — and the cases below are driven by the same file, not by a copy of the list.
+    copyFileSync(join(root, 'package.json'), join(tree, 'package.json'));
     return tree;
   }
 
@@ -167,7 +174,7 @@ describe('production-tree gate', () => {
     expect(r.stdout).toMatch(/production tree confirmed/i);
   });
 
-  it.each(['typescript', 'vitest', '@vitest/coverage-v8', '@types/node'])('fails when the dev dependency %s is still installed', (dev) => {
+  it.each(Object.keys(pkg.devDependencies))('fails when the dev dependency %s is still installed', (dev: string) => {
     const tree = prodTree();
     mkdirSync(join(tree, 'node_modules', dev), { recursive: true });
     const r = runGuardIn(tree);
@@ -179,9 +186,21 @@ describe('production-tree gate', () => {
   it('fails when dist/server.js was never built', () => {
     const tree = tempRoot('prod-tree-');
     mkdirSync(join(tree, 'node_modules', 'zod'), { recursive: true });
+    copyFileSync(join(root, 'package.json'), join(tree, 'package.json'));
     const r = runGuardIn(tree);
     expect(r.status).not.toBe(0);
     expect(r.stderr).toMatch(/dist\/server\.js is missing/);
+  });
+
+  // The guard now derives the dev-dependency names from package.json, so a tree without one cannot
+  // be judged. It must say so and refuse, never pass by finding an empty list.
+  it('refuses a tree whose package.json it cannot read', () => {
+    const tree = tempRoot('prod-tree-');
+    mkdirSync(join(tree, 'dist'), { recursive: true });
+    writeFileSync(join(tree, 'dist', 'server.js'), '');
+    const r = runGuardIn(tree);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/package\.json is missing or unreadable/);
   });
 });
 

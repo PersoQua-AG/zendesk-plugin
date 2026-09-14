@@ -3,16 +3,17 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createHttpServer } from 'node:http';
-import { runLogin, type LoginDeps } from '../../src/tools/login.js';
-import type { OAuthConfig } from '../../src/auth/oauth-flow.js';
+import { runLogin, abortLoginFlow, type LoginDeps } from '../../src/tools/login.js';
+import type { CallbackListener, OAuthConfig } from '../../src/auth/oauth-flow.js';
 
-// README / US-1: "run zendesk_login. It returns a Zendesk authorization URL — open it, approve, and
-// the extension captures the callback." A user can only open a URL they have been given, so the URL
-// must reach the caller on every run that does NOT end in a stored token — otherwise the feature can
-// never succeed for a real Desktop user.
+// README / US-1: a user can only open a URL they have been given. The original assertion was "the
+// URL must survive every OUTCOME of zendesk_login", because the single call published it only at
+// the end. The two-call flow moves the guarantee earlier and makes it stronger: the URL is the
+// RESULT of call 1, returned before any waiting, and it is repeated by every later call that is
+// still waiting for the callback. What stays unchanged is the counter-guarantee — a reply that
+// cannot produce a usable URL must not promise one.
 //
-// Every test here drives the REAL localhost callback listener (no waitForCode stub), so the real
-// ordering — print the URL, then block on the callback — is what is exercised.
+// Every test here drives the REAL localhost callback listener unless it says otherwise.
 
 let dataDir: string;
 let tokensPath: string;
@@ -35,17 +36,8 @@ function deps(port: number, overrides: Partial<LoginDeps> = {}): LoginDeps {
   return { config: config(port), tokensPath, ...overrides };
 }
 
-// Retry until the real listener is bound, then hit /callback.
 async function hitCallback(port: number, query: string): Promise<void> {
-  for (let i = 0; i < 100; i++) {
-    try {
-      await fetch(`http://localhost:${port}/callback${query}`);
-      return;
-    } catch {
-      await new Promise((r) => setTimeout(r, 20));
-    }
-  }
-  throw new Error('callback listener never came up');
+  await fetch(`http://localhost:${port}/callback${query}`);
 }
 
 function authorizationUrl(text: string): URL {
@@ -59,101 +51,92 @@ beforeEach(() => {
   tokensPath = join(dataDir, 'tokens.enc');
 });
 afterEach(() => {
+  abortLoginFlow();
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe('the authorization URL survives every outcome of zendesk_login', () => {
-  it('a run that times out without a callback still names the URL to open', async () => {
+describe('the authorization URL reaches the user before anything waits', () => {
+  it('call 1 returns it without waiting for the callback', async () => {
     const port = await freePort();
-    const text = await runLogin(deps(port, { callbackTimeoutMs: 50 }));
-    expect(text).toMatch(/timed out/i);
+    const started = Date.now();
+    const text = await runLogin(deps(port, { callbackTimeoutMs: 60_000 }));
+    // A minute-long listener is open, yet the call is back at once with the URL.
+    expect(Date.now() - started).toBeLessThan(2_000);
     expect(authorizationUrl(text).host).toBe('acme.zendesk.com');
-  });
-
-  it('a cancelled/denied authorization still names the URL to open', async () => {
-    const port = await freePort();
-    const pending = runLogin(deps(port));
-    await hitCallback(port, '?error=access_denied');
-    const text = await pending;
-    expect(text).toMatch(/access_denied/);
     expect(authorizationUrl(text).pathname).toBe('/oauth/authorizations/new');
   });
 
-  it('a state mismatch still names the URL to open', async () => {
+  it('a call made while the callback is still outstanding names it again', async () => {
     const port = await freePort();
-    const pending = runLogin(deps(port));
-    await hitCallback(port, '?state=wrong&code=abc');
-    const text = await pending;
-    expect(text).toMatch(/state mismatch/i);
-    expect(authorizationUrl(text).host).toBe('acme.zendesk.com');
+    const d = deps(port, { callbackTimeoutMs: 60_000 });
+    const first = await runLogin(d);
+    const second = await runLogin(d);
+    expect(second).toMatch(/still waiting/i);
+    expect(authorizationUrl(second).toString()).toBe(authorizationUrl(first).toString());
   });
 
-  it('a blocked callback port still names the URL to open', async () => {
+  it('never leaks the client secret alongside the URL', async () => {
+    const port = await freePort();
+    const first = await runLogin(deps(port, { callbackTimeoutMs: 60_000 }));
+    const second = await runLogin(deps(port, { callbackTimeoutMs: 60_000 }));
+    expect(first).not.toContain('secret-xyz');
+    expect(second).not.toContain('secret-xyz');
+  });
+});
+
+// The counter-case: a reply that cannot lead anywhere must not hand out a URL. After a flow has
+// ended, its URL carries a dead `state` — repeating it would send the user into a state mismatch,
+// which is exactly the bug the two-call design exists to remove.
+describe('a reply that has no usable URL promises none', () => {
+  it('a subdomain that cannot form a URL yields an actionable failure and promises no URL', async () => {
+    const port = await freePort();
+    const text = await runLogin(deps(port, { config: { ...config(port), subdomain: 'acme corp' } }));
+    expect(text).toMatch(/Invalid URL/i);
+    expect(text).toContain('Run zendesk_login again');
+    expect(text).not.toContain('https://');
+  });
+
+  it('a blocked callback port names the remedy and promises no URL', async () => {
     const port = await freePort();
     const blocker = createHttpServer(() => {});
     await new Promise<void>((r) => blocker.listen(port, r));
     try {
       const text = await runLogin(deps(port));
       expect(text).toContain('oauth_callback_port');
-      expect(authorizationUrl(text).host).toBe('acme.zendesk.com');
+      expect(text).not.toContain('https://');
     } finally {
       await new Promise((r) => blocker.close(r));
     }
   });
 
-  // The counter-case: when no URL could be built at all, the reply must NOT promise one. A
-  // subdomain the user mistyped (a space, a full host) fails inside buildAuthorizationUrl, before
-  // anything is printed — the only path on which there is nothing to open.
-  it('a subdomain that cannot form a URL yields an actionable failure and promises no URL', async () => {
+  it('a cancelled/denied authorization reports the reason and points at a NEW authorization', async () => {
     const port = await freePort();
-    const text = await runLogin(deps(port, { config: { ...config(port), subdomain: 'acme corp' } }));
-    expect(text).toMatch(/Invalid URL/i);
-    expect(text).toContain('Run zendesk_login again');
-    expect(text).not.toContain('Authorization URL for this attempt');
-    expect(text).not.toContain('https://');
+    const d = deps(port);
+    const first = await runLogin(d);
+    expect(authorizationUrl(first).host).toBe('acme.zendesk.com');
+    await hitCallback(port, '?error=access_denied');
+    const second = await runLogin(d);
+    expect(second).toMatch(/access_denied/);
+    expect(second).toContain('Run zendesk_login again to start a new authorization');
+    expect(second).not.toContain('https://');
   });
 
   it('reports a non-Error failure as plain text rather than swallowing it', async () => {
     const port = await freePort();
-    const text = await runLogin(
-      deps(port, {
-        waitForCode: async () => ({ code: 'auth-code', redirectUri: `http://localhost:${port}/callback` }),
-        // A dependency rejecting with a bare value must not degrade into "undefined".
-        exchange: async () => {
-          throw 'zendesk rejected the code';
-        },
-      }),
-    );
+    const listen = (): CallbackListener => ({
+      promise: Promise.resolve({ code: 'auth-code', redirectUri: `http://localhost:${port}/callback` }),
+      ready: Promise.resolve(null),
+      close: () => {},
+    });
+    const d = deps(port, {
+      listen,
+      // A dependency rejecting with a bare value must not degrade into "undefined".
+      exchange: async () => {
+        throw 'zendesk rejected the code';
+      },
+    });
+    await runLogin(d);
+    const text = await runLogin(d);
     expect(text).toContain('Zendesk login failed: zendesk rejected the code');
-    expect(authorizationUrl(text).host).toBe('acme.zendesk.com');
-  });
-
-  it('never leaks the client secret alongside the URL', async () => {
-    const port = await freePort();
-    const text = await runLogin(deps(port, { callbackTimeoutMs: 50 }));
-    expect(text).not.toContain('secret-xyz');
-  });
-});
-
-describe('two zendesk_login calls at once', () => {
-  it('the second call does not blame the user for the port the FIRST login occupies', async () => {
-    const port = await freePort();
-    const first = runLogin(deps(port, { callbackTimeoutMs: 400 }));
-    // Let the first listener bind, then start a second login against the same port.
-    await new Promise((r) => setTimeout(r, 100));
-    const second = await runLogin(deps(port, { callbackTimeoutMs: 400 }));
-    await first;
-
-    expect(second).not.toContain('Close whatever is listening');
-    expect(second).toMatch(/already waiting for the callback/i);
-    expect(second).toContain(String(port));
-  });
-
-  it('releases the marker again, so a later login is not refused', async () => {
-    const port = await freePort();
-    await runLogin(deps(port, { callbackTimeoutMs: 50 }));
-    const next = await runLogin(deps(port, { callbackTimeoutMs: 50 }));
-    expect(next).not.toMatch(/already waiting/i);
-    expect(next).toMatch(/timed out/i);
   });
 });

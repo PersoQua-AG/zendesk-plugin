@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from '../../src/server.js';
 
-// resolveOrDegrade (src/server.ts:46) keeps the server alive with an EMPTY subdomain, so the http
+// resolveOrDegrade (src/server.ts:50) keeps the server alive with an EMPTY subdomain, so the http
 // client's base URL is literally "https://.zendesk.com/api/v2". Nothing may ever reach that host.
 // The guard is ordering, not string checking: both request paths await getAccessToken() BEFORE
-// fetch (src/client/http-client.ts:53, :83), and the degraded TokenProvider always rejects
-// (src/server.ts:63). This pins that ordering — reorder either path and these turn red.
+// fetch (src/client/http-client.ts:53, :82), and the degraded TokenProvider always rejects
+// (src/server.ts:109). This pins that ordering — reorder either path and these turn red.
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -50,7 +50,7 @@ describe('an incompletely configured server never reaches the network', () => {
   });
 
   // US-3: the cache follows the same directory as the token store. The degraded path must apply the
-  // same CLAUDE_PLUGIN_DATA precedence as resolveAuthConfig (src/auth/config.ts:79) — otherwise a
+  // same CLAUDE_PLUGIN_DATA precedence as resolveAuthConfig (src/auth/config.ts:83) — otherwise a
   // configured data dir is silently abandoned for the per-user default the moment a field is empty.
   it('still honors CLAUDE_PLUGIN_DATA for the response cache', () => {
     const env = degradedEnv();
