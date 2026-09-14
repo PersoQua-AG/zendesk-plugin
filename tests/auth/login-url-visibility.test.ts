@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { existsSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { runLogin, type LoginDeps } from '../../src/tools/login.js';
 import type { CallbackListener } from '../../src/auth/oauth-flow.js';
-import { authorizationUrl, config, deps, freePort, hitCallback, setupLoginHarness } from './login-harness.js';
+import { authorizationUrl, config, deps, freePort, hitCallback, setupLoginHarness, tokensPath } from './login-harness.js';
 
 // README / US-1: a user can only open a URL they have been given. The original assertion was "the
 // URL must survive every OUTCOME of zendesk_login", because the single call published it only at
@@ -34,6 +35,9 @@ describe('the authorization URL reaches the user before anything waits', () => {
     expect(second).toMatch(/still waiting/i);
     expect(second).toContain(String(port));
     expect(authorizationUrl(second).toString()).toBe(authorizationUrl(first).toString());
+    // Repeating the notice must stay a read: nothing is exchanged and nothing is stored while the
+    // callback is still outstanding.
+    expect(existsSync(tokensPath)).toBe(false);
   });
 });
 
