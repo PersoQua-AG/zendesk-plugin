@@ -209,3 +209,42 @@ describe('a flow that ends without a callback', () => {
     await rebind(port);
   });
 });
+
+// REGRESSION (qa-engineer, 2026-09-14). Until c21c786 a synchronous `loginInFlight` marker was set
+// BEFORE the flow did any awaiting, and login-url-visibility.test.ts pinned the consequence: "the
+// second call does not blame the user for the port the FIRST login occupies". The two-call rewrite
+// replaced that marker with `activeFlow`, which is assigned only AFTER `await listener.ready`
+// (src/tools/login.ts:154-160). That reopens the window the marker existed to close, and the
+// deleted assertion no longer guards it.
+//
+// The window is reachable in practice precisely because the tool now asks to be called twice: a
+// model that emits both tool_use blocks in one turn produces exactly this interleaving. The second
+// call then binds a rival listener on the same port, gets EADDRINUSE from the FIRST call's
+// listener, and tells the user to close whatever is listening or to change oauth_callback_port and
+// restart the extension — advice that would destroy the very flow that is working.
+describe('two zendesk_login calls that overlap', () => {
+  it('does not blame the user for the port the other call is holding', async () => {
+    const port = await freePort();
+    const d = deps(port, { callbackTimeoutMs: 60_000 });
+
+    const [a, b] = await Promise.all([runLogin(d), runLogin(d)]);
+    // Exactly one call starts the flow; the other must recognise it, not compete with it.
+    const [started, other] = /authorization started/i.test(a) ? [a, b] : [b, a];
+    expect(started, `neither call started a flow:\n${a}\n---\n${b}`).toMatch(/authorization started/i);
+
+    expect(other, `the overlapping call blamed the port:\n${other}`).not.toContain('Close whatever is listening');
+    expect(other).not.toContain('oauth_callback_port');
+    expect(other).not.toMatch(/restart the extension/i);
+
+    // Whatever it says, it must leave the user on the one live flow: either by naming its URL again
+    // or by pointing at the authorization already in progress.
+    const live = authorizationUrl(started).searchParams.get('state') as string;
+    expect(other, `the overlapping call stranded the user:\n${other}`).toMatch(/still waiting|already waiting|authorization started/i);
+    if (/https:\/\//.test(other)) {
+      expect(authorizationUrl(other).searchParams.get('state')).toBe(live);
+    }
+
+    // And only one listener exists: the live flow's state is the one the port accepts.
+    expect((await redirect(authorizationUrl(started), { state: live, code: 'c' })).status).toBe(200);
+  });
+});
