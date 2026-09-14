@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
 import { z } from 'zod';
-const DEFAULT_CALLBACK_TIMEOUT_MS = 300_000;
+// The human step this bounds: open the URL, sign in to Zendesk, clear SSO/2FA, approve. Exported
+// because the login tool bounds the very same step and must not drift from it.
+export const DEFAULT_CALLBACK_TIMEOUT_MS = 300_000;
 // Zendesk's token endpoint is a trust boundary: a malformed body (e.g. missing
 // expires_in) must fail loudly here, not silently produce expiresAt=NaN downstream.
 const tokenResponseSchema = z.object({
@@ -24,69 +26,86 @@ export function buildAuthorizationUrl(config, codeChallenge, state, redirectUriO
     url.searchParams.set('code_challenge_method', 'S256');
     return url.toString();
 }
+// Resolves only once the port is actually bound, and REJECTS on a bind failure (e.g. EADDRINUSE) —
+// so a caller never receives a listener whose callback could never land, and never has to inspect
+// an error returned as a value.
 export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
-    let onBound;
-    const ready = new Promise((resolve) => {
-        onBound = resolve;
-    });
-    let close;
-    const promise = new Promise((resolve, reject) => {
-        let settled = false;
-        const server = createServer((req, res) => {
-            // req.url is typed `string | undefined` but is always set on a request the parser accepted,
-            // so the fallback exists for the type only and no test can reach it.
-            /* v8 ignore next */
-            const rawUrl = req.url ?? '/';
-            const url = new URL(rawUrl, `http://localhost:${port}`);
-            if (url.pathname !== '/callback') {
-                res.writeHead(404).end();
-                return;
-            }
-            const fail = (status, body, message) => {
-                res.writeHead(status, { 'Content-Type': 'text/plain' }).end(body);
-                finish(() => reject(new Error(message)));
+    return new Promise((bound, bindFailed) => {
+        let close;
+        const promise = new Promise((resolve, reject) => {
+            let settled = false;
+            const server = createServer((req, res) => {
+                // req.url is typed `string | undefined` but is always set on a request the parser accepted,
+                // so the fallback exists for the type only and no test can reach it.
+                /* v8 ignore next */
+                const rawUrl = req.url ?? '/';
+                const url = new URL(rawUrl, `http://localhost:${port}`);
+                if (url.pathname !== '/callback') {
+                    res.writeHead(404).end();
+                    return;
+                }
+                const fail = (status, body, message) => {
+                    res.writeHead(status, { 'Content-Type': 'text/plain' }).end(body);
+                    finish(() => reject(new Error(message)));
+                };
+                const error = url.searchParams.get('error');
+                if (error) {
+                    return fail(400, `Authorization failed: ${error}`, `OAuth authorization failed: ${error}`);
+                }
+                if (url.searchParams.get('state') !== expectedState) {
+                    return fail(400, 'State mismatch', 'OAuth state mismatch — possible CSRF');
+                }
+                const code = url.searchParams.get('code');
+                if (!code) {
+                    return fail(400, 'Missing code', 'OAuth callback missing code');
+                }
+                res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Authorized. You can close this tab.');
+                finish(() => resolve({ code, redirectUri: redirectUri(port) }));
+            });
+            const timer = setTimeout(() => {
+                finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`)));
+            }, timeoutMs);
+            timer.unref?.();
+            const finish = (settle) => {
+                if (settled)
+                    return;
+                settled = true;
+                clearTimeout(timer);
+                server.close();
+                settle();
             };
-            const error = url.searchParams.get('error');
-            if (error) {
-                return fail(400, `Authorization failed: ${error}`, `OAuth authorization failed: ${error}`);
-            }
-            if (url.searchParams.get('state') !== expectedState) {
-                return fail(400, 'State mismatch', 'OAuth state mismatch — possible CSRF');
-            }
-            const code = url.searchParams.get('code');
-            if (!code) {
-                return fail(400, 'Missing code', 'OAuth callback missing code');
-            }
-            res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Authorized. You can close this tab.');
-            finish(() => resolve({ code, redirectUri: redirectUri(port) }));
+            close = () => finish(() => reject(new Error('OAuth callback listener closed')));
+            server.on('error', (err) => {
+                const bindError = new Error(`OAuth callback server error: ${err.message}`);
+                finish(() => reject(bindError));
+                bindFailed(bindError);
+            });
+            server.on('listening', () => bound({ promise, close }));
+            server.listen(port);
         });
-        const timer = setTimeout(() => {
-            finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`)));
-        }, timeoutMs);
-        timer.unref?.();
-        const finish = (settle) => {
-            if (settled)
-                return;
-            settled = true;
-            clearTimeout(timer);
-            server.close();
-            settle();
-        };
-        close = () => finish(() => reject(new Error('OAuth callback listener closed')));
-        // Bind errors (e.g. EADDRINUSE) reject the promise instead of throwing uncaught.
-        server.on('error', (err) => {
-            const bindError = new Error(`OAuth callback server error: ${err.message}`);
-            onBound(bindError);
-            finish(() => reject(bindError));
-        });
-        server.on('listening', () => onBound(null));
-        server.listen(port);
+        // On a bind failure nobody holds `promise` yet — it is rejected before this function resolves,
+        // which would surface as an unhandled rejection. The bind error reaches the caller through
+        // bindFailed instead; a caller that DOES hold the listener still sees its own rejection.
+        promise.catch(() => { });
     });
-    return { promise, ready, close };
 }
 // The CLI's shape: start the listener and wait for it in one call.
-export function waitForAuthorizationCode(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
-    return startCallbackListener(port, expectedState, timeoutMs).promise;
+export async function waitForAuthorizationCode(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
+    return (await startCallbackListener(port, expectedState, timeoutMs)).promise;
+}
+// NFR-1: an error body reaches the user. Zendesk answers with a short JSON error, but anything in
+// front of it (a WAF, a captive portal, a proxy) can answer with a whole HTML page — measured: an
+// ~8 KB Cloudflare challenge carrying a cf_chl_tk token, all on ONE line, which a first-line-only
+// cut passes through untouched. So the body is capped on BOTH axes, and markup is dropped entirely
+// rather than quoted.
+const MAX_ERROR_BODY_CHARS = 200;
+function summarizeErrorBody(raw) {
+    const firstLine = raw.split('\n')[0].trim();
+    if (firstLine.startsWith('<'))
+        return '(non-text response body omitted)';
+    return firstLine.length > MAX_ERROR_BODY_CHARS
+        ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated)`
+        : firstLine;
 }
 async function postToken(subdomain, body, fetchImpl, errorLabel) {
     const response = await fetchImpl(`https://${subdomain}.zendesk.com/oauth/tokens`, {
@@ -95,7 +114,7 @@ async function postToken(subdomain, body, fetchImpl, errorLabel) {
         body: JSON.stringify(body),
     });
     if (!response.ok) {
-        throw new Error(`${errorLabel}: ${response.status} ${await response.text()}`);
+        throw new Error(`${errorLabel}: ${response.status} ${summarizeErrorBody(await response.text())}`);
     }
     const parsed = tokenResponseSchema.safeParse(await response.json());
     if (!parsed.success) {

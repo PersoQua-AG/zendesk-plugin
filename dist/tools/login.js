@@ -16,14 +16,8 @@
 import { randomBytes } from 'node:crypto';
 import { dirname } from 'node:path';
 import { generateCodeChallenge, generateCodeVerifier } from '../auth/pkce.js';
-import { buildAuthorizationUrl, exchangeCodeForTokens, startCallbackListener, } from '../auth/oauth-flow.js';
+import { buildAuthorizationUrl, exchangeCodeForTokens, startCallbackListener, DEFAULT_CALLBACK_TIMEOUT_MS, } from '../auth/oauth-flow.js';
 import { TokenStore } from '../auth/token-store.js';
-// How long the callback listener stays open between the two calls. It no longer bounds a blocking
-// tool call (the old 120s did, to stay under the host's call timeout) but the human step: open the
-// URL, sign in to Zendesk, possibly clear SSO/2FA, approve. That is exactly the CLI's budget, so
-// this is the CLI's default — 5 minutes. Configurable via deps, deliberately NOT a user_config
-// field.
-export const LOGIN_FLOW_TIMEOUT_MS = 300_000;
 const RETRY_RESOLVED = 'Run zendesk_login again once that is resolved.';
 const RETRY_FRESH = 'Run zendesk_login again to start a new authorization.';
 const UNREADABLE_STORE = 'Stored credentials could not be read (encryption secret changed or file corrupt) — starting a new authorization.';
@@ -74,17 +68,18 @@ async function beginFlow(deps, listen, timeoutMs) {
     const verifier = generateCodeVerifier();
     const state = randomBytes(16).toString('base64url');
     let url;
+    let listener;
     try {
         url = buildAuthorizationUrl(deps.config, generateCodeChallenge(verifier), state);
+        // Waiting for the bind is what lets a taken port be reported NOW, instead of handing out a URL
+        // whose callback can never land. A subdomain that cannot form a URL fails one line earlier, and
+        // in both cases nothing was bound and there is nothing to open — so this reply promises no URL.
+        listener = await listen(deps.config.callbackPort, state, timeoutMs);
     }
     catch (err) {
-        // A subdomain that cannot form a URL (a space, a whole host). Nothing was bound and there is
-        // nothing to open, so this reply must not promise a URL.
         return `${failureText(err, deps)} ${RETRY_RESOLVED}`;
     }
-    const port = deps.config.callbackPort;
-    const listener = listen(port, state, timeoutMs);
-    const flow = { verifier, state, url, port, outcome: { kind: 'pending' }, close: listener.close };
+    const flow = { verifier, url, outcome: { kind: 'pending' }, close: listener.close };
     // Attached before anything can await: the listener's rejection becomes a recorded outcome rather
     // than an unhandled rejection, however long the user takes to make the second call.
     void listener.promise.then((result) => {
@@ -92,13 +87,6 @@ async function beginFlow(deps, listen, timeoutMs) {
     }, (err) => {
         flow.outcome = { kind: 'failed', text: failureText(err, deps) };
     });
-    // Binding is immediate; only its OUTCOME is asynchronous. Waiting that one turn is what lets a
-    // taken port be reported now, instead of handing out a URL whose callback can never land.
-    const bindError = await listener.ready;
-    if (bindError) {
-        listener.close();
-        return `${failureText(bindError, deps)} ${RETRY_RESOLVED}`;
-    }
     activeFlow = flow;
     return [
         'Zendesk authorization started. Open this URL in your browser and approve access:',
@@ -113,7 +101,7 @@ async function collectFlow(flow, deps, exchange) {
         // The URL is repeated on purpose: by now the user may well have lost the first message, and
         // the state inside it is still the one this listener validates against.
         return [
-            `Still waiting for the Zendesk authorization callback on port ${flow.port}. Open this URL in your browser and approve access:`,
+            `Still waiting for the Zendesk authorization callback on port ${deps.config.callbackPort}. Open this URL in your browser and approve access:`,
             flow.url,
             'Then run zendesk_login again.',
         ].join('\n');
@@ -136,10 +124,27 @@ async function collectFlow(flow, deps, exchange) {
     }
     return 'Authorization complete — the Zendesk credentials are stored encrypted and are refreshed automatically. Verify with zendesk_get_me.';
 }
-export async function runLogin(deps, options = {}) {
+// Two zendesk_login calls can OVERLAP: the tool asks to be called twice, and a model that emits
+// both tool_use blocks in one turn produces exactly that interleaving. Every call is therefore
+// queued behind the one before it, which is the only thing that makes an overlapping second call
+// behave like a sequential one — it finds the flow the first call started and collects it, instead
+// of racing a rival listener onto the same port and telling the user to close whatever is listening
+// there. (That was the synchronous `loginInFlight` marker's job before the two-call rewrite; a
+// marker set after `await` reopened the window, because the reservation has to happen before the
+// first await, and `activeFlow` cannot exist until the bind has resolved.)
+let queue = Promise.resolve();
+// One handler for both outcomes: the queue is never read for its value, and a step that rejected
+// must not poison every login after it.
+const settled = () => { };
+export function runLogin(deps, options = {}) {
+    const next = queue.then(() => runQueuedLogin(deps, options));
+    queue = next.then(settled, settled);
+    return next;
+}
+async function runQueuedLogin(deps, options) {
     if (deps.configError)
         return deps.configError;
-    const timeoutMs = deps.callbackTimeoutMs ?? LOGIN_FLOW_TIMEOUT_MS;
+    const timeoutMs = deps.callbackTimeoutMs ?? DEFAULT_CALLBACK_TIMEOUT_MS;
     const listen = deps.listen ?? startCallbackListener;
     const exchange = deps.exchange ?? exchangeCodeForTokens;
     // force means "start over": abandon a flow in progress instead of collecting it, so a user who

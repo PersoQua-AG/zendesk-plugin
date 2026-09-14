@@ -20,7 +20,7 @@ export function registerAuthTools(server: McpServer, login?: LoginDeps): void {
     'zendesk_login',
     {
       description:
-        'Authorize this Zendesk extension. Call it TWICE: the first call returns a Zendesk authorization URL and starts listening for the redirect — show that URL to the user so they can open and approve it — then call this tool again to finish and store the credentials. It reports "already authorized" when usable credentials exist; use force=true to authorize again, or to restart an authorization already in progress.',
+        'Authorize this Zendesk extension. It takes two calls, one after the other — never both in the same turn. The first call returns a Zendesk authorization URL and starts listening for the redirect: show that URL to the user, wait until they have approved it, and only then call this tool a second time to finish and store the credentials. It reports "already authorized" when usable credentials exist; use force=true to authorize again, or to restart an authorization already in progress.',
       inputSchema: { force: z.boolean().optional() },
     },
     async ({ force }) => toText(await runLogin(login, { force })),
