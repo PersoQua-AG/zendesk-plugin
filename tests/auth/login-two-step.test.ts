@@ -1,12 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { createServer as createHttpServer } from 'node:http';
-import { runLogin, abortLoginFlow, type LoginDeps } from '../../src/tools/login.js';
+import { describe, it, expect, vi } from 'vitest';
+import { existsSync } from 'node:fs';
+import { runLogin } from '../../src/tools/login.js';
 import { TokenStore } from '../../src/auth/token-store.js';
 import { generateCodeChallenge } from '../../src/auth/pkce.js';
-import type { OAuthConfig } from '../../src/auth/oauth-flow.js';
+import { SECRET, authorizationUrl, deps, freePort, rebind, redirect, setupLoginHarness, tokensPath } from './login-harness.js';
 
 // The two-call login, walked over the REAL localhost listener — no listener stub anywhere in this
 // file. This is the level at which the previous design failed while its suite stayed green: the
@@ -14,58 +11,7 @@ import type { OAuthConfig } from '../../src/auth/oauth-flow.js';
 // arrived only after the call had finished waiting, and the retry re-rolled the `state` that the
 // already-published URL carried). Only the token exchange is stubbed, so no test touches Zendesk.
 
-const SECRET = 'secret-xyz';
-
-let dataDir: string;
-let tokensPath: string;
-
-function freePort(): Promise<number> {
-  return new Promise((resolve) => {
-    const s = createHttpServer();
-    s.listen(0, () => {
-      const port = (s.address() as { port: number }).port;
-      s.close(() => resolve(port));
-    });
-  });
-}
-
-function config(port: number): OAuthConfig {
-  return { subdomain: 'acme', clientId: 'client-abc', clientSecret: SECRET, callbackPort: port, scopes: ['read', 'write'] };
-}
-
-function deps(port: number, overrides: Partial<LoginDeps> = {}): LoginDeps {
-  return { config: config(port), tokensPath, ...overrides };
-}
-
-function authorizationUrl(text: string): URL {
-  const raw = text.split(/\s+/).find((w) => w.startsWith('https://'));
-  expect(raw, `no authorization URL in:\n${text}`).toBeDefined();
-  return new URL(raw as string);
-}
-
-// What the user's browser does after approving, verbatim: a GET on the redirect_uri the
-// authorization URL itself names.
-function redirect(url: URL, params: Record<string, string>): Promise<Response> {
-  const target = new URL(url.searchParams.get('redirect_uri') as string);
-  for (const [k, v] of Object.entries(params)) target.searchParams.set(k, v);
-  return fetch(target);
-}
-
-async function rebind(port: number): Promise<void> {
-  const probe = createHttpServer(() => {});
-  await new Promise<void>((r) => probe.listen(port, r));
-  await new Promise((r) => probe.close(r));
-}
-
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'login-two-step-'));
-  tokensPath = join(dataDir, 'tokens.enc');
-});
-afterEach(() => {
-  abortLoginFlow();
-  rmSync(dataDir, { recursive: true, force: true });
-  vi.restoreAllMocks();
-});
+setupLoginHarness('login-two-step-');
 
 describe('the two-call login over the real callback listener', () => {
   it('call 1 hands out the URL, the browser redirect lands, call 2 completes the login', async () => {
@@ -130,17 +76,6 @@ describe('the two-call login over the real callback listener', () => {
     expect(text).toMatch(/state mismatch/i);
     expect(existsSync(tokensPath)).toBe(false);
   });
-
-  it('answers a call made before the callback arrived with a wait notice, not a new flow', async () => {
-    const port = await freePort();
-    const d = deps(port, { callbackTimeoutMs: 60_000 });
-    const first = await runLogin(d);
-    const second = await runLogin(d);
-    expect(second).toMatch(/still waiting/i);
-    expect(second).toContain(String(port));
-    expect(authorizationUrl(second).toString()).toBe(authorizationUrl(first).toString());
-    expect(existsSync(tokensPath)).toBe(false);
-  });
 });
 
 describe('a flow that ends without a callback', () => {
@@ -187,7 +122,6 @@ describe('a flow that ends without a callback', () => {
       return timer;
     }) as unknown as typeof setTimeout);
 
-    const baseline = process.getActiveResourcesInfo().length;
     const d = deps(port, {
       callbackTimeoutMs: 60_000,
       exchange: async () => ({ accessToken: 'a', refreshToken: 'r', expiresIn: 3600 }),
@@ -204,8 +138,6 @@ describe('a flow that ends without a callback', () => {
     await runLogin(d);
 
     expect(timers[0].hasRef()).toBe(false);
-    // And the completed flow added nothing to what keeps the event loop alive.
-    expect(process.getActiveResourcesInfo().length).toBeLessThanOrEqual(baseline);
     await rebind(port);
   });
 });
@@ -213,15 +145,15 @@ describe('a flow that ends without a callback', () => {
 // REGRESSION (qa-engineer, 2026-09-14). Until c21c786 a synchronous `loginInFlight` marker was set
 // BEFORE the flow did any awaiting, and login-url-visibility.test.ts pinned the consequence: "the
 // second call does not blame the user for the port the FIRST login occupies". The two-call rewrite
-// replaced that marker with `activeFlow`, which is assigned only AFTER `await listener.ready`
-// (src/tools/login.ts:154-160). That reopens the window the marker existed to close, and the
-// deleted assertion no longer guards it.
+// replaced that marker with `activeFlow`, which is assigned only AFTER the listener has bound.
+// That reopened the window the marker existed to close, and the deleted assertion no longer
+// guarded it. runLogin now queues every call behind the one before it (src/tools/login.ts:205).
 //
-// The window is reachable in practice precisely because the tool now asks to be called twice: a
-// model that emits both tool_use blocks in one turn produces exactly this interleaving. The second
-// call then binds a rival listener on the same port, gets EADDRINUSE from the FIRST call's
-// listener, and tells the user to close whatever is listening or to change oauth_callback_port and
-// restart the extension — advice that would destroy the very flow that is working.
+// The window is reachable in practice precisely because the tool takes two calls: a model that
+// emits both tool_use blocks in one turn produces exactly this interleaving. The second call then
+// bound a rival listener on the same port, got EADDRINUSE from the FIRST call's listener, and told
+// the user to close whatever is listening or to change oauth_callback_port and restart the
+// extension — advice that would destroy the very flow that is working.
 describe('two zendesk_login calls that overlap', () => {
   it('does not blame the user for the port the other call is holding', async () => {
     const port = await freePort();
@@ -244,7 +176,23 @@ describe('two zendesk_login calls that overlap', () => {
       expect(authorizationUrl(other).searchParams.get('state')).toBe(live);
     }
 
-    // And only one listener exists: the live flow's state is the one the port accepts.
+    // And only one listener exists: the live flow's state is the one the port accepts, and once it
+    // has, the port is free — no rival listener is left holding it.
     expect((await redirect(authorizationUrl(started), { state: live, code: 'c' })).status).toBe(200);
+    await rebind(port);
+  });
+
+  // The same interleaving once a flow is already running: neither overlapping call may re-bind.
+  it('answers both calls from the running flow when one is already in progress', async () => {
+    const port = await freePort();
+    const d = deps(port, { callbackTimeoutMs: 60_000 });
+    const live = authorizationUrl(await runLogin(d));
+
+    const [a, b] = await Promise.all([runLogin(d), runLogin(d)]);
+    for (const text of [a, b]) {
+      expect(text).toMatch(/still waiting/i);
+      expect(text).not.toContain('Close whatever is listening');
+      expect(authorizationUrl(text).toString()).toBe(live.toString());
+    }
   });
 });

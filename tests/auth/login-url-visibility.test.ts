@@ -1,10 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { describe, it, expect } from 'vitest';
 import { createServer as createHttpServer } from 'node:http';
-import { runLogin, abortLoginFlow, type LoginDeps } from '../../src/tools/login.js';
-import type { CallbackListener, OAuthConfig } from '../../src/auth/oauth-flow.js';
+import { runLogin, type LoginDeps } from '../../src/tools/login.js';
+import type { CallbackListener } from '../../src/auth/oauth-flow.js';
+import { authorizationUrl, config, deps, freePort, hitCallback, setupLoginHarness } from './login-harness.js';
 
 // README / US-1: a user can only open a URL they have been given. The original assertion was "the
 // URL must survive every OUTCOME of zendesk_login", because the single call published it only at
@@ -15,45 +13,7 @@ import type { CallbackListener, OAuthConfig } from '../../src/auth/oauth-flow.js
 //
 // Every test here drives the REAL localhost callback listener unless it says otherwise.
 
-let dataDir: string;
-let tokensPath: string;
-
-function freePort(): Promise<number> {
-  return new Promise((resolve) => {
-    const s = createHttpServer();
-    s.listen(0, () => {
-      const port = (s.address() as { port: number }).port;
-      s.close(() => resolve(port));
-    });
-  });
-}
-
-function config(port: number): OAuthConfig {
-  return { subdomain: 'acme', clientId: 'client-abc', clientSecret: 'secret-xyz', callbackPort: port, scopes: ['read', 'write'] };
-}
-
-function deps(port: number, overrides: Partial<LoginDeps> = {}): LoginDeps {
-  return { config: config(port), tokensPath, ...overrides };
-}
-
-async function hitCallback(port: number, query: string): Promise<void> {
-  await fetch(`http://localhost:${port}/callback${query}`);
-}
-
-function authorizationUrl(text: string): URL {
-  const raw = text.split(/\s+/).find((w) => w.startsWith('https://'));
-  expect(raw, `no authorization URL in:\n${text}`).toBeDefined();
-  return new URL(raw as string);
-}
-
-beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'login-url-'));
-  tokensPath = join(dataDir, 'tokens.enc');
-});
-afterEach(() => {
-  abortLoginFlow();
-  rmSync(dataDir, { recursive: true, force: true });
-});
+setupLoginHarness('login-url-');
 
 describe('the authorization URL reaches the user before anything waits', () => {
   it('call 1 returns it without waiting for the callback', async () => {
@@ -72,15 +32,8 @@ describe('the authorization URL reaches the user before anything waits', () => {
     const first = await runLogin(d);
     const second = await runLogin(d);
     expect(second).toMatch(/still waiting/i);
+    expect(second).toContain(String(port));
     expect(authorizationUrl(second).toString()).toBe(authorizationUrl(first).toString());
-  });
-
-  it('never leaks the client secret alongside the URL', async () => {
-    const port = await freePort();
-    const first = await runLogin(deps(port, { callbackTimeoutMs: 60_000 }));
-    const second = await runLogin(deps(port, { callbackTimeoutMs: 60_000 }));
-    expect(first).not.toContain('secret-xyz');
-    expect(second).not.toContain('secret-xyz');
   });
 });
 
@@ -123,9 +76,8 @@ describe('a reply that has no usable URL promises none', () => {
 
   it('reports a non-Error failure as plain text rather than swallowing it', async () => {
     const port = await freePort();
-    const listen = (): CallbackListener => ({
+    const listen: NonNullable<LoginDeps['listen']> = async (): Promise<CallbackListener> => ({
       promise: Promise.resolve({ code: 'auth-code', redirectUri: `http://localhost:${port}/callback` }),
-      ready: Promise.resolve(null),
       close: () => {},
     });
     const d = deps(port, {
