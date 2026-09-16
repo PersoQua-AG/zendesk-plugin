@@ -165,17 +165,42 @@ function summarizeErrorBody(raw: string): string {
     : firstLine;
 }
 
+// Unlike the callback timeout above, this one bounds a MACHINE step: one POST to Zendesk's token
+// endpoint with no human in it. Left without a signal the wait is not zero, it is undici's
+// headersTimeout (~300 s) — inherited rather than chosen, and the whole time the login queue in
+// ../tools/login.ts holds every other zendesk_login behind it, force=true included. 30 s is well
+// above any healthy token round trip (Zendesk answers in well under a second) and short enough that
+// the user gets an answer inside the turn that asked for it, instead of a tool call that never
+// returns.
+const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
+
+// Thrown by fetch when the signal above fires: undici rejects with the signal's reason, and
+// AbortSignal.timeout's reason is a DOMException named TimeoutError. Its own message ("The
+// operation was aborted due to timeout") names no remedy, so it is replaced rather than passed on.
+function isRequestTimeout(err: unknown): boolean {
+  return err instanceof Error && err.name === 'TimeoutError';
+}
+
 async function postToken(
   subdomain: string,
   body: Record<string, unknown>,
   fetchImpl: typeof fetch,
   errorLabel: string,
 ): Promise<TokenResponse> {
-  const response = await fetchImpl(`https://${subdomain}.zendesk.com/oauth/tokens`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetchImpl(`https://${subdomain}.zendesk.com/oauth/tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (!isRequestTimeout(err)) throw err;
+    throw new Error(
+      `${errorLabel}: no reply from the Zendesk token endpoint within ${TOKEN_REQUEST_TIMEOUT_MS / 1000} seconds — check the network connection, and any proxy or VPN between this machine and Zendesk.`,
+    );
+  }
   if (!response.ok) {
     throw new Error(`${errorLabel}: ${response.status} ${summarizeErrorBody(await response.text())}`);
   }
