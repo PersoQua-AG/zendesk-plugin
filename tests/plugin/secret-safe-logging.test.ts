@@ -13,12 +13,14 @@ const SRC = join(process.cwd(), 'src');
 const STDOUT_ALLOWLIST = ['bin/', 'auth/authorize.ts'];
 const STDOUT_WRITE = /console\.(log|info|debug)\s*\(|process\.stdout/;
 
-// stderr is safe for the stdio protocol, but only the CLI and the report config
-// parser (config-degradation warnings) are permitted to use it; every other
-// server-loaded module must stay silent so nothing can leak.
+// stderr is safe for the stdio protocol, but only the CLI and util/warn-config.ts
+// (config-degradation warnings) are permitted to use it; every other server-loaded
+// module must stay silent so nothing can leak. warn-config.ts is deliberately the ONE
+// writer for every config warning — the report-config parser and the security-level
+// parser both route through it instead of each earning its own line here.
 // remote/logger.ts is the single sanctioned stderr writer on the remote path — it redacts
 // bearer tokens/secrets before writing, and callers pass ids/outcomes, never PII bodies.
-const STDERR_ALLOWLIST = ['bin/', 'auth/authorize.ts', 'tools/analytics/business-hours.ts', 'remote/logger.ts'];
+const STDERR_ALLOWLIST = ['bin/', 'auth/authorize.ts', 'util/warn-config.ts', 'remote/logger.ts'];
 const STDERR_WRITE = /console\.(warn|error|trace|dir|table|group|count|assert)\s*\(|process\.stderr/;
 
 function srcFiles(): string[] {
@@ -52,7 +54,7 @@ describe('secret-safe logging (static guard)', () => {
     }
   });
 
-  it('only the CLI + report config parser write to stderr (console.warn/error/… or process.stderr)', () => {
+  it('only the CLI + the config-warning helper write to stderr (console.warn/error/… or process.stderr)', () => {
     for (const rel of srcFiles()) {
       if (allowed(rel, STDERR_ALLOWLIST)) continue;
       const source = readFileSync(join(SRC, rel), 'utf8');

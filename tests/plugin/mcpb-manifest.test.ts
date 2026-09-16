@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultDataDir, USER_CONFIG_FIELD_BY_ENV } from '../../src/auth/config.js';
+import { SECURITY_LEVELS } from '../../src/server.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string) => JSON.parse(readFileSync(join(root, rel), 'utf8'));
@@ -95,6 +96,23 @@ describe('MCPB user_config', () => {
     expect(userConfig.oauth_callback_port.max).toBe(65535);
     const bounded = Object.entries(userConfig).filter(([, e]) => e.min !== undefined || e.max !== undefined);
     expect(bounded.map(([k]) => k)).toEqual(['oauth_callback_port']);
+  });
+
+  // security_level is an enumeration in fact but cannot be declared as one: the MCPB v0.3 user_config
+  // entry schema (@anthropic-ai/mcpb@2.1.2 schemas/mcpb-manifest-v0.3.schema.json) lists exactly the
+  // nine keys in ALLOWED_USER_CONFIG_KEYS and sets "additionalProperties": false — there is no "enum",
+  // and "min"/"max" are numbers, so they cannot bound a string either. A host therefore cannot refuse
+  // a mistyped level in the settings dialog the way it refuses an out-of-range port; the server has
+  // to catch it, which is what parseSecurityLevel does. The description is the only place the manifest
+  // can state the accepted values, so it is pinned to the code's list rather than left to drift.
+  it('cannot declare an enum, so it names the accepted security levels in the description instead', () => {
+    expect(ALLOWED_USER_CONFIG_KEYS).not.toContain('enum');
+    for (const entry of [userConfig.security_level, plugin.userConfig.security_level as UserConfigEntry]) {
+      expect(Object.keys(entry)).not.toContain('enum');
+      expect(entry.description).toContain(SECURITY_LEVELS.join(' | '));
+    }
+    expect(userConfig.security_level.description).toBe(plugin.userConfig.security_level.description);
+    expect(SECURITY_LEVELS).toContain(userConfig.security_level.default);
   });
 
   it('carries only schema-known fields, a valid type, and a title + description on every key', () => {

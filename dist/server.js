@@ -2,7 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { AuthManager } from './auth/auth-manager.js';
 import { TokenStore } from './auth/token-store.js';
-import { defaultDataDir, resolveAuthConfig, stripPlaceholders } from './auth/config.js';
+import { defaultDataDir, resolveAuthConfig, stripPlaceholders, USER_CONFIG_FIELD_BY_ENV, } from './auth/config.js';
+import { warnConfig } from './util/warn-config.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
 import { ResponseCache } from './client/cache.js';
@@ -22,8 +23,32 @@ import { pathToFileURL } from 'node:url';
 // special-cased to 10/min.
 export const DEFAULT_RATE_LIMIT_RPM = 400;
 export const INCREMENTAL_RATE_LIMIT_RPM = 10;
+// An unrecognized value is never quietly downgraded. 'Strict', 'stict' and 'strict ' all used to
+// land on 'standard' without a word, so an operator who configured stricter injection screening got
+// weaker screening and had no symptom to notice — the one misconfiguration whose failure mode is
+// that everything looks fine. Case and surrounding whitespace are copy-paste artifacts rather than
+// opinions, so they are normalized away; anything still unrecognized warns AND resolves to the
+// STRICTEST level, so an unreadable security setting can only ever err toward more screening.
+//
+// A warning rather than a thrown error, unlike the callback port, for two reasons. The port has no
+// safe substitute (any other port breaks the redirect_uri the user registered with Zendesk), a
+// security level does. And the port's throw is caught: resolveOrDegrade turns it into a server that
+// still starts and names the field in every tool's answer, while a throw out of parseSecurityLevel
+// would leave a dead extension with nothing to read — exactly the outcome resolveOrDegrade exists
+// to prevent. Absent stays 'standard': that is the shipped default both manifests declare, not a typo.
+export const SECURITY_LEVELS = ['strict', 'standard', 'off'];
+const DEFAULT_SECURITY_LEVEL = 'standard';
+const UNREADABLE_SECURITY_LEVEL = 'strict';
 function parseSecurityLevel(raw) {
-    return raw === 'strict' || raw === 'off' ? raw : 'standard';
+    const value = raw?.trim().toLowerCase();
+    if (!value)
+        return DEFAULT_SECURITY_LEVEL;
+    if (SECURITY_LEVELS.includes(value))
+        return value;
+    warnConfig(`ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(' | ')} (extension configuration ` +
+        `field "${USER_CONFIG_FIELD_BY_ENV.ZENDESK_SECURITY_LEVEL}") \u2014 using ` +
+        `${UNREADABLE_SECURITY_LEVEL}, the strictest level, rather than silently screening less.`);
+    return UNREADABLE_SECURITY_LEVEL;
 }
 // Global Markdown→HTML default (PRD §8). A per-call `markdown` argument overrides it.
 function parseMarkdownDefault(raw) {
