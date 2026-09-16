@@ -86,6 +86,46 @@ function callbackPort(env: NodeJS.ProcessEnv): number {
   return port;
 }
 
+// The subdomain is interpolated into every Zendesk URL this plugin builds (oauth-flow.ts:48/:210,
+// http-client.ts:32, remote/zendesk-identity.ts:15). Unvalidated it does not merely produce a broken
+// URL, it RELOCATES one: new URL(`https://${s}.zendesk.com/oauth/tokens`) has origin
+// https://evil.example.com for s="evil.example.com/x", and the same for a '#', a '?' or an '@'
+// (userinfo). That POST carries client_id, client_secret and refresh_token in its body, so a moved
+// host is disclosure of secrets, not a failed request. The value is NOT attacker-supplied — it comes
+// from the local configuration dialog — so this guards a copy-paste (an instruction, a support
+// ticket, a shared setup snippet), and a copy-paste would hand the secrets over just as completely.
+//
+// The rule is Zendesk's own documented character set, not a tighter invention: a subdomain "can
+// include only letters A-Z, numbers 0-9, and dashes (-)" — "You can't use underscores (_) or other
+// special characters" — with "between 3 and 63 characters" (Zendesk help, "Renaming your
+// subdomain", support.zendesk.com/hc/en-us/articles/4408845973914). None of those characters carries
+// meaning in a URL authority, so the character set alone is what closes the hole; 63 is also the
+// hard DNS label limit (RFC 1035 §2.3.4), so a longer value could never resolve.
+//
+// Two documented limits are deliberately NOT enforced, because neither protects anything here and
+// both could lock out a real customer: the MINIMUM of 3 (it is stated for renaming, not as a
+// property of every account that has ever existed — a grandfathered two-letter subdomain would be
+// our bug, not their misconfiguration), and a leading/trailing dash (Zendesk states no such rule;
+// such a name simply fails to resolve in DNS, which is a loud failure, not a redirected one).
+export const MAX_SUBDOMAIN_LENGTH = 63;
+const SUBDOMAIN_PATTERN = /^[a-z0-9-]+$/i;
+
+// One rule, one wording — stated once here, the way CALLBACK_PORT_RULE is.
+export const SUBDOMAIN_RULE =
+  `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" must be the subdomain by ` +
+  `itself \u2014 letters, digits and dashes, at most ${MAX_SUBDOMAIN_LENGTH} characters; for ` +
+  `acme.zendesk.com the value is "acme"`;
+
+// Surrounding whitespace is a copy-paste artifact, not an opinion: trimmed, not rejected, because
+// "acme " and "acme" are indistinguishable in the settings dialog that produced them.
+function subdomain(env: NodeJS.ProcessEnv): string {
+  const raw = required(env, 'ZENDESK_SUBDOMAIN').trim();
+  if (!SUBDOMAIN_PATTERN.test(raw) || raw.length > MAX_SUBDOMAIN_LENGTH) {
+    throw new Error(`Invalid environment variable: ZENDESK_SUBDOMAIN="${raw}" (${SUBDOMAIN_RULE}).`);
+  }
+  return raw;
+}
+
 export interface ResolvedAuthConfig {
   config: OAuthConfig;
   dataDir: string;
@@ -115,7 +155,7 @@ export function resolveAuthConfig(rawEnv: NodeJS.ProcessEnv): ResolvedAuthConfig
   const dataDir = env.CLAUDE_PLUGIN_DATA || defaultDataDir(env);
   return {
     config: {
-      subdomain: required(env, 'ZENDESK_SUBDOMAIN'),
+      subdomain: subdomain(env),
       clientId: required(env, 'ZENDESK_OAUTH_CLIENT_ID'),
       clientSecret: required(env, 'ZENDESK_OAUTH_CLIENT_SECRET'),
       callbackPort: callbackPort(env),
