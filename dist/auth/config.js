@@ -54,9 +54,6 @@ export const MAX_CALLBACK_PORT = 65535;
 // a port that reached it from somewhere other than this resolver.
 export const CALLBACK_PORT_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_OAUTH_CALLBACK_PORT}" must be a whole ` +
     `number between ${MIN_CALLBACK_PORT} and ${MAX_CALLBACK_PORT}`;
-function isUsableCallbackPort(port) {
-    return Number.isInteger(port) && port >= MIN_CALLBACK_PORT && port <= MAX_CALLBACK_PORT;
-}
 // Rejected, never clamped. The port is half of the redirect_uri the user registered with Zendesk, so
 // substituting a different one trades a loud startup error for an authorization that dies at
 // Zendesk's redirect-mismatch check with nothing naming the cause. Port 0 is the sharpest case: it
@@ -67,7 +64,7 @@ function callbackPort(env) {
     if (!raw)
         return DEFAULT_CALLBACK_PORT;
     const port = Number(raw);
-    if (!isUsableCallbackPort(port)) {
+    if (!Number.isInteger(port) || port < MIN_CALLBACK_PORT || port > MAX_CALLBACK_PORT) {
         throw new Error(`Invalid environment variable: ZENDESK_OAUTH_CALLBACK_PORT="${raw}" (${CALLBACK_PORT_RULE}).`);
     }
     return port;
@@ -99,12 +96,35 @@ const SUBDOMAIN_PATTERN = /^[a-z0-9-]+$/i;
 export const SUBDOMAIN_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" must be the subdomain by ` +
     `itself \u2014 letters, digits and dashes, at most ${MAX_SUBDOMAIN_LENGTH} characters; for ` +
     `acme.zendesk.com the value is "acme"`;
+// The second wording, for a value that satisfies the rule above and still is not a host name.
+export const SUBDOMAIN_NOT_A_HOST_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" is not a usable host ` +
+    `name \u2014 a value starting with "xn--" is an internationalized-domain prefix and this one does ` +
+    `not decode; for acme.zendesk.com the value is "acme"`;
 // Surrounding whitespace is a copy-paste artifact, not an opinion: trimmed, not rejected, because
 // "acme " and "acme" are indistinguishable in the settings dialog that produced them.
 function subdomain(env) {
     const raw = required(env, 'ZENDESK_SUBDOMAIN').trim();
     if (!SUBDOMAIN_PATTERN.test(raw) || raw.length > MAX_SUBDOMAIN_LENGTH) {
         throw new Error(`Invalid environment variable: ZENDESK_SUBDOMAIN="${raw}" (${SUBDOMAIN_RULE}).`);
+    }
+    // A value can pass the character set above and still not be a host name. An `xn--` prefix marks an
+    // internationalized (punycode) label, and new URL() applies IDNA to it: measured on node v24,
+    // "xn--", "xn--a" and "xn--1" all throw `Invalid URL`, while a REAL one resolves
+    // ("xn--bcher-kva" -> https://xn--bcher-kva.zendesk.com, b\u00fccher). Checked by FORMING the URL
+    // rather than by refusing the prefix, for exactly that reason: the prefix is legitimate and a
+    // customer could hold one, only some of its payloads are not, and forming the URL states the
+    // property instead of guessing which payloads those are.
+    //
+    // Not an origin defect \u2014 the character set already closed that hole \u2014 but a message one.
+    // Unchecked, the value reaches buildAuthorizationUrl (oauth-flow.ts:48) and the user is told
+    // "Zendesk login failed: Invalid URL. Run zendesk_login again once that is resolved."
+    // (../tools/login.ts:133): no field named, and a retry that can never succeed. Here it fails at
+    // startup, in the field that has to change.
+    try {
+        new URL(`https://${raw}.zendesk.com`);
+    }
+    catch {
+        throw new Error(`Invalid environment variable: ZENDESK_SUBDOMAIN="${raw}" (${SUBDOMAIN_NOT_A_HOST_RULE}).`);
     }
     return raw;
 }

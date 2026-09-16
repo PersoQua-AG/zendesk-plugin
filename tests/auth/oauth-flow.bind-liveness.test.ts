@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { startCallbackListener } from '../../src/auth/oauth-flow.js';
 import { resolveAuthConfig } from '../../src/auth/config.js';
 import { runLogin } from '../../src/tools/login.js';
-import { deps, freePort, setupLoginHarness } from './login-harness.js';
+import { deps, freePort, settledWithin as settlesWithin, setupLoginHarness } from './login-harness.js';
 
 setupLoginHarness('login-bind-liveness-');
 
@@ -16,19 +16,6 @@ setupLoginHarness('login-bind-liveness-');
 //   NaN, Infinity, -Infinity, -1, 1.5, 65536, 70000 -> throws RangeError ERR_SOCKET_BAD_PORT
 //   0                                               -> binds a RANDOM port, no throw, no error event
 // so the table below is split at exactly that line and not at the line the guard draws.
-function settlesWithin<T>(label: string, promise: Promise<T>, ms = 2_000): Promise<PromiseSettledResult<T>> {
-  return Promise.race([
-    promise.then(
-      (value) => ({ status: 'fulfilled', value }) as PromiseSettledResult<T>,
-      (reason: unknown) => ({ status: 'rejected', reason }) as PromiseSettledResult<T>,
-    ),
-    new Promise<never>((_, reject) => {
-      const t = setTimeout(() => reject(new Error(`${label} never settled within ${ms}ms`)), ms);
-      t.unref?.();
-    }),
-  ]);
-}
-
 const THROWS_SYNCHRONOUSLY: ReadonlyArray<readonly [string, number]> = [
   ['above the maximum', 70_000],
   ['one past the maximum', 65_536],
@@ -86,13 +73,14 @@ describe('startCallbackListener settles for every port listen() refuses', () => 
   });
 });
 
-// The fix added a catch block whose body runs finish() and bindFailed(). If anything in THAT body
-// could throw, the executor would reject the inner promise — which promise.catch(() => {}) swallows
-// (src/auth/oauth-flow.ts:158) — and neither bound nor bindFailed would ever be called: the exact
-// wedge the fix removes, reintroduced one line lower. finish() calls clearTimeout(), server.close()
-// and the settle callback, so server.close() is the only candidate, and it is called on a server
-// that never listened.
-describe('the fix did not move the wedge into finish()', () => {
+// Liveness no longer depends on a catch block: server.listen() stands in the OUTER executor of
+// startCallbackListener(), so ANY synchronous throw there rejects the returned promise by Promise
+// semantics. What the catch beside it still owns is cleanup and wording — it runs close(), which
+// runs finish(): clearTimeout(), server.close(), and the settle callback. server.close() is the one
+// call in there that could throw, and it is called on a server that never listened; if it did throw,
+// the returned promise would still settle (that is the point of the move) but with node's wording
+// instead of the field name, so the case below stays.
+describe('finish() is not a second way to lose the outcome', () => {
   it('server.close() does not throw on a server that never listened, nor on a second call', () => {
     const s = createServer(() => {});
     expect(() => s.close()).not.toThrow();

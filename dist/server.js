@@ -37,22 +37,43 @@ export const INCREMENTAL_RATE_LIMIT_RPM = 10;
 // would leave a dead extension with nothing to read — exactly the outcome resolveOrDegrade exists
 // to prevent. Absent stays 'standard': that is the shipped default both manifests declare, not a typo.
 export const SECURITY_LEVELS = ['strict', 'standard', 'off'];
-const DEFAULT_SECURITY_LEVEL = 'standard';
-const UNREADABLE_SECURITY_LEVEL = 'strict';
 function parseSecurityLevel(raw) {
     const value = raw?.trim().toLowerCase();
     if (!value)
-        return DEFAULT_SECURITY_LEVEL;
+        return 'standard';
     if (SECURITY_LEVELS.includes(value))
         return value;
     warnConfig(`ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(' | ')} (extension configuration ` +
         `field "${USER_CONFIG_FIELD_BY_ENV.ZENDESK_SECURITY_LEVEL}") \u2014 using ` +
-        `${UNREADABLE_SECURITY_LEVEL}, the strictest level, rather than silently screening less.`);
-    return UNREADABLE_SECURITY_LEVEL;
+        `strict, the strictest level, rather than silently screening less.`);
+    return 'strict';
 }
 // Global Markdown→HTML default (PRD §8). A per-call `markdown` argument overrides it.
+//
+// Same class of bug as the level above, and it was read the same way: `raw !== 'false'` made
+// 'False', 'FALSE' and 'false ' all mean TRUE — the exact opposite of what was typed, with
+// nothing said. Case and surrounding whitespace are copy-paste artifacts here too, so they are
+// normalized away rather than treated as opinions. Reachable only through a directly set
+// ZENDESK_MARKDOWN_CONVERSION: both manifests declare the field as type "boolean", so a compliant
+// host sends 'true' or 'false' and nothing else.
+//
+// The fail-closed DIRECTION that decides the security level has no counterpart here. Converting
+// Markdown when the user meant not to, and not converting when they meant to, are the same size of
+// mistake and both are visible in the ticket the user is looking at — neither withholds data,
+// neither weakens screening. With no safer side to fall to, an unreadable value falls back to the
+// value both manifests DECLARE (true) rather than to a guess at what was meant. Falling to false
+// instead would quietly change the shipped behaviour of the one installation that typed something
+// odd, which is the fault being fixed rather than a second opinion about it.
 function parseMarkdownDefault(raw) {
-    return raw !== 'false';
+    const value = raw?.trim().toLowerCase();
+    if (!value)
+        return true;
+    if (value === 'true' || value === 'false')
+        return value === 'true';
+    warnConfig(`ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false (extension configuration field ` +
+        `"${USER_CONFIG_FIELD_BY_ENV.ZENDESK_MARKDOWN_CONVERSION}") \u2014 using true, the shipped ` +
+        `default, rather than reading it as a "no".`);
+    return true;
 }
 function resolveOrDegrade(env) {
     try {

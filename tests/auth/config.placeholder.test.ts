@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -66,5 +66,54 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
   it('a stringified boolean "false" still disables markdown conversion', () => {
     const { ctx } = createServer({ ...serverEnv(), ZENDESK_MARKDOWN_CONVERSION: 'false' });
     expect(ctx.markdownDefault).toBe(false);
+  });
+});
+
+// `raw !== 'false'` read 'False', 'FALSE' and 'false ' as TRUE — the opposite of what was typed,
+// with nothing said. Same class as the security level, and the same remedy: normalize the
+// copy-paste artifacts, warn about anything still unreadable. The direction differs, and the cases
+// below pin that difference: there is no safer side here, so an unreadable value falls back to the
+// value both manifests declare (true) rather than being read as a "no".
+describe('markdown conversion — an unreadable value is never read as a silent "no"', () => {
+  function build(value?: string) {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const env = serverEnv();
+    if (value !== undefined) env.ZENDESK_MARKDOWN_CONVERSION = value;
+    const { ctx } = createServer(env);
+    const warnings = warn.mock.calls.map((c) => String(c[0]));
+    warn.mockRestore();
+    return { markdownDefault: ctx.markdownDefault, warnings };
+  }
+
+  it.each([
+    ['exactly true', 'true', true],
+    ['exactly false', 'false', false],
+    ['capitalized, the shape a settings dialog produces', 'False', false],
+    ['shouted', 'FALSE', false],
+    ['with a trailing space from a copy-paste', 'false ', false],
+    ['with surrounding whitespace', '  true  ', true],
+  ])('accepts %s (%s) without a warning', (_label, value, expected) => {
+    const { markdownDefault, warnings } = build(value);
+    expect(markdownDefault).toBe(expected);
+    expect(warnings).toEqual([]);
+  });
+
+  it.each([
+    ['a typo', 'flase'],
+    ['a synonym that is not the value', 'no'],
+    ['a numeric value', '0'],
+    ['a word that is not a boolean at all', 'maybe'],
+  ])('warns and keeps the declared default for %s: %s', (_label, value) => {
+    const { markdownDefault, warnings } = build(value);
+    expect(markdownDefault).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`ZENDESK_MARKDOWN_CONVERSION "${value}"`);
+    expect(warnings[0]).toContain('"markdown_conversion"');
+  });
+
+  it('stays silent and true when the variable is absent', () => {
+    const { markdownDefault, warnings } = build();
+    expect(markdownDefault).toBe(true);
+    expect(warnings).toEqual([]);
   });
 });

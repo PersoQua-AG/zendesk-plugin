@@ -47,6 +47,13 @@ describe('security level — an unrecognized value is never a silent downgrade',
     ['a word that is not a level at all', 'maximum'],
     ['an empty-looking value that is not blank', '.'],
     ['a numeric value', '2'],
+    // The four below are the ones that would be WEAKER than what the operator may have meant, so
+    // they carry the fail-closed direction: rows in the same table rather than a second case that
+    // re-asserts what this one already asserts for every row.
+    ['a typo of a weaker level', 'of'],
+    ['a typo of the default', 'standrd'],
+    ['a word meaning no screening', 'none'],
+    ['another word meaning no screening', 'disabled'],
   ])('warns and resolves to strict for %s: %s', (_label, value) => {
     const { securityLevel, warnings } = build(value);
     expect(securityLevel).toBe('strict');
@@ -54,12 +61,6 @@ describe('security level — an unrecognized value is never a silent downgrade',
     expect(warnings[0]).toContain(`ZENDESK_SECURITY_LEVEL "${value}"`);
     expect(warnings[0]).toContain('strict | standard | off');
     expect(warnings[0]).toContain('"security_level"');
-  });
-
-  it('never resolves an unrecognized value to a WEAKER level than the operator may have meant', () => {
-    for (const value of ['stict', 'of', 'standrd', 'none', 'disabled']) {
-      expect(build(value).securityLevel).toBe('strict');
-    }
   });
 
   // stdout is the MCP stdio transport (server.ts connects StdioServerTransport to it); a warning

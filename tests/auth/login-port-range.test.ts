@@ -1,20 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { runLogin } from '../../src/tools/login.js';
-import { deps, freePort, rebind, setupLoginHarness } from './login-harness.js';
+import { CALLBACK_PORT_RULE } from '../../src/auth/config.js';
+import { deps, freePort, rebind, settlesWithin, setupLoginHarness } from './login-harness.js';
 
 setupLoginHarness('login-port-range-');
-
-// Fails loudly instead of hanging until the suite timeout: a zendesk_login that never returns is
-// precisely the defect under test, and a timeout with this label says so.
-function settlesWithin<T>(label: string, promise: Promise<T>, ms = 2_000): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => {
-      const t = setTimeout(() => reject(new Error(`${label} never settled within ${ms}ms`)), ms);
-      t.unref?.();
-    }),
-  ]);
-}
 
 // resolveAuthConfig rejects such a port at startup, so the extension normally never reaches here.
 // The CLI, the remote path and a future caller can still hand one in, and then the bind fails
@@ -23,11 +12,14 @@ describe('zendesk_login with an unusable callback port', () => {
   it('answers with the field to fix instead of hanging', async () => {
     const text = await settlesWithin('runLogin(70000)', runLogin(deps(70_000)));
 
+    // The rule's wording lives in CALLBACK_PORT_RULE and is asserted verbatim once, in
+    // tests/auth/oauth-flow.port-range.test.ts. Handwriting it a third time here pins a sentence;
+    // what this case is about is that the sentence reaches the MCP boundary intact.
     expect(text).toBe(
-      'Zendesk login failed: OAuth callback server could not start on port 70000 (extension configuration ' +
-        'field "oauth_callback_port" must be a whole number between 1024 and 65535). ' +
+      `Zendesk login failed: OAuth callback server could not start on port 70000 (${CALLBACK_PORT_RULE}). ` +
         'Run zendesk_login again once that is resolved.',
     );
+    expect(text).toContain('oauth_callback_port');
     // MCP presentation rules: one line, no stack, no path, no secret.
     expect(text.split('\n')).toHaveLength(1);
     expect(text).not.toMatch(/\bat \S+:\d+|node:internal|RangeError/);

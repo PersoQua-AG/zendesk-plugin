@@ -59,6 +59,34 @@ export async function rebind(port: number): Promise<void> {
   await new Promise((r) => probe.close(r));
 }
 
+// Fails loudly instead of hanging until the suite timeout: a promise that never settles IS the
+// defect these suites are about — startCallbackListener() feeds beginFlow(), and beginFlow() feeds
+// a login queue that holds every later zendesk_login behind it. The label says which call hung.
+// Lived as three word-identical copies across oauth-flow.port-range, login-port-range and
+// oauth-flow.bind-liveness before it landed here.
+export function settlesWithin<T>(label: string, promise: Promise<T>, ms = 2_000): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      const t = setTimeout(() => reject(new Error(`${label} never settled within ${ms}ms`)), ms);
+      t.unref?.();
+    }),
+  ]);
+}
+
+// The same bound, for a caller that wants to assert the OUTCOME rather than let a rejection through:
+// it resolves with the settled result and rejects only when nothing settled in time.
+export function settledWithin<T>(label: string, promise: Promise<T>, ms = 2_000): Promise<PromiseSettledResult<T>> {
+  return settlesWithin(
+    label,
+    promise.then(
+      (value) => ({ status: 'fulfilled', value }) as PromiseSettledResult<T>,
+      (reason: unknown) => ({ status: 'rejected', reason }) as PromiseSettledResult<T>,
+    ),
+    ms,
+  );
+}
+
 export function setupLoginHarness(prefix: string): void {
   beforeEach(() => {
     dataDir = mkdtempSync(join(tmpdir(), prefix));

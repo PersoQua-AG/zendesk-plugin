@@ -26,7 +26,23 @@ type UserConfigEntry = {
 const userConfig: Record<string, UserConfigEntry> = manifest.user_config;
 const serverEnv: Record<string, string> = manifest.server.mcp_config.env;
 
-// Field names taken verbatim from @anthropic-ai/mcpb@2.1.2 schemas/mcpb-manifest-latest.schema.json.
+// Copied by hand from the MCPB manifest schema, because @anthropic-ai/mcpb is NOT a dependency of
+// this package (owner decision D7: CI runs neither `mcpb validate` nor `mcpb pack`, so a test that
+// reaches for it through npx would depend on the network and on the runner's npx cache). A copy is
+// therefore the only form this can take here, and it is checked by hand against the source below.
+//
+// Source, verified 2026-09-16 against @anthropic-ai/mcpb@2.1.2 as published on npm: the file lies in
+// the package under BOTH schemas/mcpb-manifest-v0.3.schema.json and
+// dist/mcpb-manifest-v0.3.schema.json (its package.json "files" is ["dist", "schemas"]; the two
+// files are byte-identical, `diff -q` reports no difference). At
+// properties.user_config.additionalProperties it declares exactly the nine property names below,
+// sets "additionalProperties": false, gives properties.type the five-value enum below, and types
+// both "min" and "max" as numbers. To re-verify:
+//
+//   npm pack @anthropic-ai/mcpb@2.1.2 && tar xzf anthropic-ai-mcpb-2.1.2.tgz
+//   node -e 'const u=require("./package/schemas/mcpb-manifest-v0.3.schema.json")
+//     .properties.user_config.additionalProperties;
+//     console.log(Object.keys(u.properties), u.additionalProperties, u.properties.type.enum)'
 const ALLOWED_USER_CONFIG_KEYS = ['type', 'title', 'description', 'required', 'default', 'multiple', 'sensitive', 'min', 'max'];
 const ALLOWED_TYPES = ['string', 'number', 'boolean', 'directory', 'file'];
 
@@ -88,12 +104,10 @@ describe('MCPB user_config', () => {
     }
   });
 
-  // The port bound the host accepts must be the port range the server accepts — the range is
-  // asserted against the code constants in tests/auth/config.callback-port.test.ts. Declaring it
-  // here is what turns "the server refuses to start" into "the settings dialog refuses the value".
-  it('bounds the callback port, the only numeric field, to the range the server accepts', () => {
-    expect(userConfig.oauth_callback_port.min).toBe(1024);
-    expect(userConfig.oauth_callback_port.max).toBe(65535);
+  // That the bounds MATCH the server's range is asserted against the code constants, in both
+  // manifests, in tests/auth/config.callback-port.test.ts:62-71. What is left here is the claim that
+  // file cannot make: the port is the only field that carries bounds at all.
+  it('bounds the callback port, and it is the only field that carries bounds', () => {
     const bounded = Object.entries(userConfig).filter(([, e]) => e.min !== undefined || e.max !== undefined);
     expect(bounded.map(([k]) => k)).toEqual(['oauth_callback_port']);
   });
@@ -105,8 +119,11 @@ describe('MCPB user_config', () => {
   // a mistyped level in the settings dialog the way it refuses an out-of-range port; the server has
   // to catch it, which is what parseSecurityLevel does. The description is the only place the manifest
   // can state the accepted values, so it is pinned to the code's list rather than left to drift.
+  // No assertion stands in for the schema claim above: ALLOWED_USER_CONFIG_KEYS is the hand copy
+  // itself, so `expect(ALLOWED_USER_CONFIG_KEYS).not.toContain('enum')` would only measure the copy
+  // against itself and could never fail. The claim's evidence is the source note at the top of this
+  // file; what IS asserted below is what the manifests actually do about it.
   it('cannot declare an enum, so it names the accepted security levels in the description instead', () => {
-    expect(ALLOWED_USER_CONFIG_KEYS).not.toContain('enum');
     for (const entry of [userConfig.security_level, plugin.userConfig.security_level as UserConfigEntry]) {
       expect(Object.keys(entry)).not.toContain('enum');
       expect(entry.description).toContain(SECURITY_LEVELS.join(' | '));
