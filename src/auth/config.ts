@@ -54,6 +54,38 @@ export function stripPlaceholders(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return out;
 }
 
+// A port a non-root process can actually be handed: below 1024 is privileged, above 65535 does not
+// exist. The upper end matters most — server.listen() rejects it with a SYNCHRONOUS RangeError that
+// no 'error' handler ever sees. Both manifests declare the same range as min/max on the
+// oauth_callback_port field, so a compliant host refuses the value before the server is even started.
+export const MIN_CALLBACK_PORT = 1024;
+export const MAX_CALLBACK_PORT = 65535;
+
+// One rule, one wording: stated here, reused verbatim by the callback listener in oauth-flow.ts for
+// a port that reached it from somewhere other than this resolver.
+export const CALLBACK_PORT_RULE =
+  `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_OAUTH_CALLBACK_PORT}" must be a whole ` +
+  `number between ${MIN_CALLBACK_PORT} and ${MAX_CALLBACK_PORT}`;
+
+function isUsableCallbackPort(port: number): boolean {
+  return Number.isInteger(port) && port >= MIN_CALLBACK_PORT && port <= MAX_CALLBACK_PORT;
+}
+
+// Rejected, never clamped. The port is half of the redirect_uri the user registered with Zendesk, so
+// substituting a different one trades a loud startup error for an authorization that dies at
+// Zendesk's redirect-mismatch check with nothing naming the cause. Port 0 is the sharpest case: it
+// binds a RANDOM port while the URL still advertises :0/callback.
+function callbackPort(env: NodeJS.ProcessEnv): number {
+  // Falsy-coalesce, as below: '' and a stripped placeholder are "absent", not a value.
+  const raw = env.ZENDESK_OAUTH_CALLBACK_PORT;
+  if (!raw) return DEFAULT_CALLBACK_PORT;
+  const port = Number(raw);
+  if (!isUsableCallbackPort(port)) {
+    throw new Error(`Invalid environment variable: ZENDESK_OAUTH_CALLBACK_PORT="${raw}" (${CALLBACK_PORT_RULE}).`);
+  }
+  return port;
+}
+
 export interface ResolvedAuthConfig {
   config: OAuthConfig;
   dataDir: string;
@@ -86,7 +118,7 @@ export function resolveAuthConfig(rawEnv: NodeJS.ProcessEnv): ResolvedAuthConfig
       subdomain: required(env, 'ZENDESK_SUBDOMAIN'),
       clientId: required(env, 'ZENDESK_OAUTH_CLIENT_ID'),
       clientSecret: required(env, 'ZENDESK_OAUTH_CLIENT_SECRET'),
-      callbackPort: Number(env.ZENDESK_OAUTH_CALLBACK_PORT || DEFAULT_CALLBACK_PORT),
+      callbackPort: callbackPort(env),
       scopes: DEFAULT_SCOPES,
     },
     dataDir,

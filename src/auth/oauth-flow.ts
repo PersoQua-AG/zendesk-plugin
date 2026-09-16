@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { z } from 'zod';
+import { CALLBACK_PORT_RULE } from './config.js';
 
 // The human step this bounds: open the URL, sign in to Zendesk, clear SSO/2FA, approve. Exported
 // because the login tool bounds the very same step and must not drift from it.
@@ -131,7 +132,24 @@ export function startCallbackListener(
         bindFailed(bindError);
       });
       server.on('listening', () => bound({ promise, close }));
-      server.listen(port);
+      // server.listen() is the ONE call in this executor that can throw SYNCHRONOUSLY — a RangeError
+      // for a port that is not a whole number in 0–65535. createServer(), setTimeout(), unref() and
+      // the on() registrations above cannot; the request handler and the timer callback run later,
+      // outside this executor. A synchronous throw is never delivered as an 'error' event, and here
+      // it would only reject `promise` — which the catch below this Promise swallows — so `bound`
+      // and `bindFailed` would BOTH go uncalled and the outer Promise would stay pending forever.
+      // startCallbackListener() would never settle, beginFlow() would never return, and the login
+      // queue in ../tools/login.ts would hold every later zendesk_login behind it until a restart.
+      try {
+        server.listen(port);
+      } catch {
+        // The RangeError's own text names node internals and no remedy, so it is replaced rather
+        // than passed on. A synchronous listen() failure has exactly one cause — the port value —
+        // so there is nothing else this could be reporting.
+        const portError = new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`);
+        finish(() => reject(portError));
+        bindFailed(portError);
+      }
     });
 
     // On a bind failure nobody holds `promise` yet — it is rejected before this function resolves,

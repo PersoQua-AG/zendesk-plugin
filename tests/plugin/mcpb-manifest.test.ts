@@ -18,6 +18,8 @@ type UserConfigEntry = {
   required?: boolean;
   default?: unknown;
   sensitive?: boolean;
+  min?: number;
+  max?: number;
 };
 
 const userConfig: Record<string, UserConfigEntry> = manifest.user_config;
@@ -73,12 +75,26 @@ describe('MCPB user_config', () => {
     expect(Object.keys(userConfig).sort()).toEqual(Object.keys(plugin.userConfig).sort());
   });
 
-  it('uses the same type and required flag for every key as the plugin manifest', () => {
+  it('uses the same type, required flag and value bounds for every key as the plugin manifest', () => {
     for (const [key, entry] of Object.entries(userConfig)) {
       const mirror = plugin.userConfig[key] as UserConfigEntry;
       expect(entry.type, key).toBe(mirror.type);
       expect(Boolean(entry.required), key).toBe(Boolean(mirror.required));
+      // Bounds are what a host refuses a value by. Declared on one manifest only, the two hosts
+      // would disagree about which values ever reach the server.
+      expect(entry.min, `${key}.min`).toBe(mirror.min);
+      expect(entry.max, `${key}.max`).toBe(mirror.max);
     }
+  });
+
+  // The port bound the host accepts must be the port range the server accepts — the range is
+  // asserted against the code constants in tests/auth/config.callback-port.test.ts. Declaring it
+  // here is what turns "the server refuses to start" into "the settings dialog refuses the value".
+  it('bounds the callback port, the only numeric field, to the range the server accepts', () => {
+    expect(userConfig.oauth_callback_port.min).toBe(1024);
+    expect(userConfig.oauth_callback_port.max).toBe(65535);
+    const bounded = Object.entries(userConfig).filter(([, e]) => e.min !== undefined || e.max !== undefined);
+    expect(bounded.map(([k]) => k)).toEqual(['oauth_callback_port']);
   });
 
   it('carries only schema-known fields, a valid type, and a title + description on every key', () => {
