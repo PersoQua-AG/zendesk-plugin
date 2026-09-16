@@ -28,6 +28,10 @@ export async function startRemote(
   fetchImpl: typeof fetch,
   identity = 'zendesk:1',
   seedToken = true,
+  // Extra environment for the remote server, merged last. Exists so a suite can exercise a
+  // configuration value the remote path reads from env (e.g. ZENDESK_SECURITY_LEVEL) without a
+  // second copy of this fixture. Callers that pass nothing get exactly today's environment.
+  envOverrides: NodeJS.ProcessEnv = {},
 ): Promise<RemoteHarness> {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-remote-int-'));
   const env: NodeJS.ProcessEnv = {
@@ -35,6 +39,7 @@ export async function startRemote(
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: SECRET,
     CLAUDE_PLUGIN_DATA: dataDir,
+    ...envOverrides,
   };
   const config: OAuthConfig = { subdomain: 'acme', clientId: 'client-abc', clientSecret: SECRET, callbackPort: 8976, scopes: ['read', 'write'] };
   const resolver = new IdentityAuthResolver(new IdentityTokenStore(join(dataDir, 'users'), SECRET), config);
