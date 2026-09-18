@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveAuthConfig } from '../../src/auth/config.js';
+import { defaultDataDir, resolveAuthConfig } from '../../src/auth/config.js';
 
 const fullEnv = (): NodeJS.ProcessEnv => ({
   ZENDESK_SUBDOMAIN: 'acme',
@@ -28,8 +28,8 @@ describe('resolveAuthConfig', () => {
 
   it('treats an empty-string CLAUDE_PLUGIN_DATA as absent (""→tokens.enc at fs root)', () => {
     const resolved = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '' });
-    expect(resolved.dataDir).toBe('.zendesk-plugin-data');
-    expect(resolved.tokensPath).toBe('.zendesk-plugin-data/tokens.enc');
+    expect(resolved.dataDir).toBe(defaultDataDir(fullEnv()));
+    expect(resolved.tokensPath).toBe(`${defaultDataDir(fullEnv())}/tokens.enc`);
   });
 
   it('uses read/write scopes (server source of truth)', () => {
@@ -37,7 +37,7 @@ describe('resolveAuthConfig', () => {
   });
 
   it('defaults dataDir and honors CLAUDE_PLUGIN_DATA', () => {
-    expect(resolveAuthConfig(fullEnv()).dataDir).toBe('.zendesk-plugin-data');
+    expect(resolveAuthConfig(fullEnv()).dataDir).toBe(defaultDataDir(fullEnv()));
     const overridden = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '/var/data' });
     expect(overridden.dataDir).toBe('/var/data');
   });

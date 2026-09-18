@@ -4,6 +4,7 @@
 // worked weekdays, in the configured IANA timezone, DST-aware. See the DST limitation flagged in
 // the M6 plan Dependencies: the work window is assumed to sit outside the transition instant
 // (default 09:00–17:00 never overlaps a 02:00–03:00 transition).
+import { warnConfig } from '../../util/warn-config.js';
 export const DEFAULT_BUSINESS_HOURS = {
     timeZone: 'UTC',
     workHours: { start: '09:00', end: '17:00' },
@@ -12,12 +13,6 @@ export const DEFAULT_BUSINESS_HOURS = {
 // Guard the day loop even against absurd inputs (~21 years of days).
 const MAX_DAYS = 8000;
 const WEEKDAY_INDEX = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
-// Operator config is misconfigurable at boot; degrade to a safe default rather than crash the
-// report, but never swallow silently. Warnings go to stderr (console.warn) — stdout is the MCP
-// stdio transport and must stay protocol-clean.
-function warnConfig(message) {
-    console.warn(`[zendesk-plugin] ${message}`);
-}
 // The zone's offset from UTC (ms, positive = ahead) at a given instant, by formatting the instant
 // as wall-clock parts in the zone and diffing from a UTC-interpreted rebuild of those parts.
 function tzOffsetMs(timeZone, epochMs) {

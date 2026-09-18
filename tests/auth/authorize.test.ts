@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -82,6 +82,41 @@ describe('authorize', () => {
     expect(output).not.toContain(config.clientSecret);
     expect(output).not.toContain('access-1');
     expect(output).not.toContain('refresh-1');
+  });
+
+  // The bin runs authorize() with neither a state generator nor a printer. Those built-in defaults
+  // are what a real `npm run authorize` uses, so they are exercised here rather than only their
+  // test doubles: an unguessable state must reach the URL, and the URL must reach stdout.
+  it('generates its own state and prints to stdout when no generator or printer is injected', async () => {
+    const written: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
+    let seenState = '';
+    try {
+      await authorize({
+        config,
+        tokensPath: `${dataDir}/tokens.enc`,
+        generateVerifier: () => 'fixed-verifier',
+        now: () => 1_000_000,
+        waitForCode: async (_port, state) => {
+          seenState = state;
+          return { code: 'auth-code', redirectUri: `http://localhost:${config.callbackPort}/callback` };
+        },
+        exchange: async () => ({ accessToken: 'access-1', refreshToken: 'refresh-1', expiresIn: 3600 }),
+      });
+    } finally {
+      stdoutSpy.mockRestore();
+    }
+
+    const output = written.join('');
+    // 16 random bytes, base64url-encoded — never a constant, never guessable.
+    expect(seenState).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(output).toContain(`state=${encodeURIComponent(seenState)}`);
+    expect(output).toContain('https://acme.zendesk.com/oauth/authorizations/new');
+    expect(output).toContain('Authorization complete.');
+    expect(output).not.toContain(config.clientSecret);
   });
 
   it('rejects and writes no token file when the callback fails', async () => {

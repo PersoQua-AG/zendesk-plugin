@@ -32,4 +32,8 @@ jobs:
       # A source change without a matching dist rebuild would otherwise ship stale install
       # artifacts (the plugin runs from dist/, not src/).
       - run: git diff --exit-code dist/
-      - run: npm test
+      # Replaces `npm test` rather than joining it: `vitest run --coverage` runs the identical suite
+      # and additionally enforces the thresholds in vitest.config.ts (100% on the OAuth login path,
+      # a ratchet on the rest). Keeping both steps would run every test twice for no new signal, and
+      # a threshold that only ever runs locally is a claim, not a gate.
+      - run: npm run test:coverage

@@ -17,7 +17,13 @@ describe('remote release-gate smoke', () => {
     });
     h = await startRemote(fetchImpl);
 
-    expect(await h.toolNames()).toHaveLength(64);
+    // Pins the assumption behind the lifted parity invariant (src/server.ts:118): the remote path
+    // ALWAYS injects a TokenProvider (src/remote/session-manager.ts:147), so zendesk_login — which
+    // binds a localhost callback no remote client can reach — is never offered here. A new remote
+    // createServer() call site that forgets authManager turns this red.
+    const names = await h.toolNames();
+    expect(names).toHaveLength(64);
+    expect(names).not.toContain('zendesk_login');
     const text = await h.callText('zendesk_get_ticket', { ticketId: 7 });
     expect(text).toContain('updated_stamp');
   });

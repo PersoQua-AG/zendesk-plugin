@@ -5,6 +5,8 @@
 // the M6 plan Dependencies: the work window is assumed to sit outside the transition instant
 // (default 09:00–17:00 never overlaps a 02:00–03:00 transition).
 
+import { warnConfig } from '../../util/warn-config.js';
+
 export interface WorkHours {
   start: string; // 'HH:MM' 24h local wall time, e.g. '09:00'
   end: string;   // 'HH:MM' 24h local wall time, e.g. '17:00' (must be after start)
@@ -32,13 +34,6 @@ interface LocalDate {
   month: number; // 1–12
   day: number;
   weekday: number; // ISO 1=Mon … 7=Sun
-}
-
-// Operator config is misconfigurable at boot; degrade to a safe default rather than crash the
-// report, but never swallow silently. Warnings go to stderr (console.warn) — stdout is the MCP
-// stdio transport and must stay protocol-clean.
-function warnConfig(message: string): void {
-  console.warn(`[zendesk-plugin] ${message}`);
 }
 
 // The zone's offset from UTC (ms, positive = ahead) at a given instant, by formatting the instant

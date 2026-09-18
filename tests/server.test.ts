@@ -31,9 +31,10 @@ describe('createServer wiring', () => {
     expect(ctx.reportConfig).toBeDefined();
   });
 
-  it('registers all 64 tools', () => {
+  // 64 Zendesk tools + zendesk_login (the Desktop Extension's in-app OAuth entry point).
+  it('registers all 65 tools', () => {
     const spy = vi.spyOn(McpServer.prototype, 'registerTool');
     createServer(fixtureEnv());
-    expect(spy).toHaveBeenCalledTimes(64);
+    expect(spy).toHaveBeenCalledTimes(65);
   });
 });

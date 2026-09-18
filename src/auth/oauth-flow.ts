@@ -1,7 +1,10 @@
 import { createServer, type Server } from 'node:http';
 import { z } from 'zod';
+import { CALLBACK_PORT_RULE } from './config.js';
 
-const DEFAULT_CALLBACK_TIMEOUT_MS = 300_000;
+// The human step this bounds: open the URL, sign in to Zendesk, clear SSO/2FA, approve. Exported
+// because the login tool bounds the very same step and must not drift from it.
+export const DEFAULT_CALLBACK_TIMEOUT_MS = 300_000;
 
 // Zendesk's token endpoint is a trust boundary: a malformed body (e.g. missing
 // expires_in) must fail loudly here, not silently produce expiresAt=NaN downstream.
@@ -53,56 +56,171 @@ export function buildAuthorizationUrl(
   return url.toString();
 }
 
-export function waitForAuthorizationCode(
+// A callback listener that is BOUND but not yet awaited. The two-step login tool needs those two
+// moments apart: it hands the user the authorization URL on the first tool call and collects the
+// callback on a later one, with the listener — and the `state` it validates — living across both.
+// waitForAuthorizationCode() below is the same listener awaited at once, which is all the CLI needs.
+export interface CallbackListener {
+  // The authorization result, or a rejection naming the reason: denied, state mismatch, missing
+  // code, timeout, or a deliberate close().
+  promise: Promise<AuthorizationResult>;
+  // Closes the listener and settles a still-pending `promise`. A no-op once settled.
+  close: () => void;
+}
+
+// Resolves only once the port is actually bound, and REJECTS on a bind failure (e.g. EADDRINUSE) —
+// so a caller never receives a listener whose callback could never land, and never has to inspect
+// an error returned as a value.
+export function startCallbackListener(
+  port: number,
+  expectedState: string,
+  timeoutMs: number = DEFAULT_CALLBACK_TIMEOUT_MS,
+): Promise<CallbackListener> {
+  return new Promise<CallbackListener>((bound, bindFailed) => {
+    let close!: () => void;
+    // Assigned synchronously by the executor below, so that server.listen() can be called from THIS
+    // executor rather than that one — see the comment at the call.
+    let server!: Server;
+
+    const promise = new Promise<AuthorizationResult>((resolve, reject) => {
+      let settled = false;
+      server = createServer((req, res) => {
+        // req.url is typed `string | undefined` but is always set on a request the parser accepted,
+        // so the fallback exists for the type only and no test can reach it.
+        /* v8 ignore next */
+        const rawUrl = req.url ?? '/';
+        // Not every request-target node's HTTP parser accepts is a URL this base can resolve.
+        // Measured on node v22: llhttp delivers "//", "///", "//%" and "http://" unchanged, and
+        // WHATWG rejects all four (empty authority) — `new URL` throws TypeError [ERR_INVALID_URL].
+        // Thrown from a 'request' listener that is an uncaughtException, so it did not fail the
+        // callback, it killed the whole stdio server: the extension is gone and every tool with it,
+        // for the five minutes the listener is open, on a port any local process can reach. A
+        // browser sent to http://localhost:<port>// is enough to produce it. The suite could not
+        // see it because every test drives the listener through fetch(), which normalizes the
+        // target and can never emit one of these.
+        //
+        // The remedy is 400 and keep listening, not a settled flow: a request this malformed is not
+        // the user's browser coming back from Zendesk, so the pending authorization must survive it
+        // exactly as it survives the 404 below.
+        let url: URL;
+        try {
+          url = new URL(rawUrl, `http://localhost:${port}`);
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Bad request target');
+          return;
+        }
+        if (url.pathname !== '/callback') {
+          res.writeHead(404).end();
+          return;
+        }
+        const fail = (status: number, body: string, message: string): void => {
+          res.writeHead(status, { 'Content-Type': 'text/plain' }).end(body);
+          finish(() => reject(new Error(message)));
+        };
+
+        const error = url.searchParams.get('error');
+        if (error) {
+          return fail(400, `Authorization failed: ${error}`, `OAuth authorization failed: ${error}`);
+        }
+        if (url.searchParams.get('state') !== expectedState) {
+          return fail(400, 'State mismatch', 'OAuth state mismatch — possible CSRF');
+        }
+        const code = url.searchParams.get('code');
+        if (!code) {
+          return fail(400, 'Missing code', 'OAuth callback missing code');
+        }
+        res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Authorized. You can close this tab.');
+        finish(() => resolve({ code, redirectUri: redirectUri(port) }));
+      });
+
+      const timer = setTimeout(() => {
+        finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`)));
+      }, timeoutMs);
+      timer.unref?.();
+
+      const finish = (settle: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        server.close();
+        settle();
+      };
+
+      close = () => finish(() => reject(new Error('OAuth callback listener closed')));
+
+      server.on('error', (err) => {
+        const bindError = new Error(`OAuth callback server error: ${err.message}`);
+        finish(() => reject(bindError));
+        bindFailed(bindError);
+      });
+      server.on('listening', () => bound({ promise, close }));
+    });
+
+    // On a bind failure nobody holds `promise` yet — it is rejected before this function resolves,
+    // which would surface as an unhandled rejection. The bind error reaches the caller through
+    // bindFailed instead; a caller that DOES hold the listener still sees its own rejection.
+    promise.catch(() => {});
+
+    // listen() stands HERE, in the outer executor and after that catch, on purpose. It validates its
+    // port synchronously and throws a RangeError for anything that is not a whole number in 0–65535
+    // — a throw that is never delivered as an 'error' event. Standing here, such a throw rejects the
+    // Promise this function returns by plain Promise semantics: settling is a property of WHERE the
+    // call stands, not of catching the right things. Inside the inner executor it rejected `promise`
+    // instead, which the catch above swallows, so neither `bound` nor `bindFailed` was ever called
+    // and startCallbackListener() stayed pending forever — beginFlow() never returned and the login
+    // queue in ../tools/login.ts held every later zendesk_login behind it until a restart.
+    try {
+      server.listen(port);
+    } catch {
+      // Cleanup and wording only, NOT liveness: whatever this block does, the throw out of it
+      // rejects the returned Promise. close() runs finish() — clearing the timer, closing the
+      // server and settling `promise` — so a refused bind leaves nothing behind. The RangeError's
+      // own text names node internals and no remedy, so it is replaced rather than passed on; a
+      // synchronous listen() failure has exactly one cause, the port value.
+      close();
+      throw new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`);
+    }
+  });
+}
+
+// The CLI's shape: start the listener and wait for it in one call.
+export async function waitForAuthorizationCode(
   port: number,
   expectedState: string,
   timeoutMs: number = DEFAULT_CALLBACK_TIMEOUT_MS,
 ): Promise<AuthorizationResult> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const server: Server = createServer((req, res) => {
-      const url = new URL(req.url ?? '/', `http://localhost:${port}`);
-      if (url.pathname !== '/callback') {
-        res.writeHead(404).end();
-        return;
-      }
-      const fail = (status: number, body: string, message: string): void => {
-        res.writeHead(status, { 'Content-Type': 'text/plain' }).end(body);
-        finish(() => reject(new Error(message)));
-      };
+  return (await startCallbackListener(port, expectedState, timeoutMs)).promise;
+}
 
-      const error = url.searchParams.get('error');
-      if (error) {
-        return fail(400, `Authorization failed: ${error}`, `OAuth authorization failed: ${error}`);
-      }
-      if (url.searchParams.get('state') !== expectedState) {
-        return fail(400, 'State mismatch', 'OAuth state mismatch — possible CSRF');
-      }
-      const code = url.searchParams.get('code');
-      if (!code) {
-        return fail(400, 'Missing code', 'OAuth callback missing code');
-      }
-      res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Authorized. You can close this tab.');
-      finish(() => resolve({ code, redirectUri: redirectUri(port) }));
-    });
+// NFR-1: an error body reaches the user. Zendesk answers with a short JSON error, but anything in
+// front of it (a WAF, a captive portal, a proxy) can answer with a whole HTML page — measured: an
+// ~8 KB Cloudflare challenge carrying a cf_chl_tk token, all on ONE line, which a first-line-only
+// cut passes through untouched. So the body is capped on BOTH axes, and markup is dropped entirely
+// rather than quoted.
+const MAX_ERROR_BODY_CHARS = 200;
 
-    const timer = setTimeout(() => {
-      finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`)));
-    }, timeoutMs);
-    timer.unref?.();
+function summarizeErrorBody(raw: string): string {
+  const firstLine = raw.split('\n')[0].trim();
+  if (firstLine.startsWith('<')) return '(non-text response body omitted)';
+  return firstLine.length > MAX_ERROR_BODY_CHARS
+    ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated)`
+    : firstLine;
+}
 
-    const finish = (settle: () => void): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      server.close();
-      settle();
-    };
+// Unlike the callback timeout above, this one bounds a MACHINE step: one POST to Zendesk's token
+// endpoint with no human in it. Left without a signal the wait is not zero, it is undici's
+// headersTimeout (~300 s) — inherited rather than chosen, and the whole time the login queue in
+// ../tools/login.ts holds every other zendesk_login behind it, force=true included. 30 s is well
+// above any healthy token round trip (Zendesk answers in well under a second) and short enough that
+// the user gets an answer inside the turn that asked for it, instead of a tool call that never
+// returns.
+const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 
-    // Bind errors (e.g. EADDRINUSE) reject the promise instead of throwing uncaught.
-    server.on('error', (err) => finish(() => reject(new Error(`OAuth callback server error: ${err.message}`))));
-    server.listen(port);
-  });
+// Thrown by fetch when the signal above fires: undici rejects with the signal's reason, and
+// AbortSignal.timeout's reason is a DOMException named TimeoutError. Its own message ("The
+// operation was aborted due to timeout") names no remedy, so it is replaced rather than passed on.
+function isRequestTimeout(err: unknown): boolean {
+  return err instanceof Error && err.name === 'TimeoutError';
 }
 
 async function postToken(
@@ -111,13 +229,22 @@ async function postToken(
   fetchImpl: typeof fetch,
   errorLabel: string,
 ): Promise<TokenResponse> {
-  const response = await fetchImpl(`https://${subdomain}.zendesk.com/oauth/tokens`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetchImpl(`https://${subdomain}.zendesk.com/oauth/tokens`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (!isRequestTimeout(err)) throw err;
+    throw new Error(
+      `${errorLabel}: no reply from the Zendesk token endpoint within ${TOKEN_REQUEST_TIMEOUT_MS / 1000} seconds — check the network connection, and any proxy or VPN between this machine and Zendesk.`,
+    );
+  }
   if (!response.ok) {
-    throw new Error(`${errorLabel}: ${response.status} ${await response.text()}`);
+    throw new Error(`${errorLabel}: ${response.status} ${summarizeErrorBody(await response.text())}`);
   }
   const parsed = tokenResponseSchema.safeParse(await response.json());
   if (!parsed.success) {
