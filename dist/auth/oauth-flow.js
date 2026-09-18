@@ -43,7 +43,27 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                 // so the fallback exists for the type only and no test can reach it.
                 /* v8 ignore next */
                 const rawUrl = req.url ?? '/';
-                const url = new URL(rawUrl, `http://localhost:${port}`);
+                // Not every request-target node's HTTP parser accepts is a URL this base can resolve.
+                // Measured on node v22: llhttp delivers "//", "///", "//%" and "http://" unchanged, and
+                // WHATWG rejects all four (empty authority) — `new URL` throws TypeError [ERR_INVALID_URL].
+                // Thrown from a 'request' listener that is an uncaughtException, so it did not fail the
+                // callback, it killed the whole stdio server: the extension is gone and every tool with it,
+                // for the five minutes the listener is open, on a port any local process can reach. A
+                // browser sent to http://localhost:<port>// is enough to produce it. The suite could not
+                // see it because every test drives the listener through fetch(), which normalizes the
+                // target and can never emit one of these.
+                //
+                // The remedy is 400 and keep listening, not a settled flow: a request this malformed is not
+                // the user's browser coming back from Zendesk, so the pending authorization must survive it
+                // exactly as it survives the 404 below.
+                let url;
+                try {
+                    url = new URL(rawUrl, `http://localhost:${port}`);
+                }
+                catch {
+                    res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Bad request target');
+                    return;
+                }
                 if (url.pathname !== '/callback') {
                     res.writeHead(404).end();
                     return;
