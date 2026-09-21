@@ -28,6 +28,10 @@ export async function startRemote(
   fetchImpl: typeof fetch,
   identity = 'zendesk:1',
   seedToken = true,
+  // Extra environment for the remote server, merged last. Exists so a suite can exercise a
+  // configuration value the remote path reads from env (e.g. ZENDESK_SECURITY_LEVEL) without a
+  // second copy of this fixture. Callers that pass nothing get exactly today's environment.
+  envOverrides: NodeJS.ProcessEnv = {},
 ): Promise<RemoteHarness> {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-remote-int-'));
   const env: NodeJS.ProcessEnv = {
@@ -35,6 +39,7 @@ export async function startRemote(
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: SECRET,
     CLAUDE_PLUGIN_DATA: dataDir,
+    ...envOverrides,
   };
   const config: OAuthConfig = { subdomain: 'acme', clientId: 'client-abc', clientSecret: SECRET, callbackPort: 8976, scopes: ['read', 'write'] };
   const resolver = new IdentityAuthResolver(new IdentityTokenStore(join(dataDir, 'users'), SECRET), config);
@@ -49,9 +54,23 @@ export async function startRemote(
 
   const { app } = buildRemoteApp(env, { resolver, issued, audit, fetchImpl });
   const token = issued.mint(identity);
-  const server = (app as unknown as { listen: (p: number) => Server }).listen(0);
+  // Bound to 127.0.0.1, not to the wildcard, because the client below dials 127.0.0.1 and those are
+  // not the same reservation. listen(0) alone binds `::` (measured on macOS/node v22:
+  // address() -> {"address":"::","family":"IPv6"}), and a FOREIGN process can then bind
+  // 127.0.0.1:<that same port> at the same time — the second bind succeeds, no EADDRINUSE. The
+  // client's request goes to whichever process owns the IPv4 socket, which is how this harness
+  // produced `Error POSTing to endpoint: Client sent an HTTP request to an HTTPS server` and
+  // `SocketError: other side closed` in roughly one run in four. Binding the address the client
+  // dials makes the ephemeral port a real reservation, so no other process can shadow it.
+  const server = (app as unknown as { listen: (p: number, host: string) => Server }).listen(0, '127.0.0.1');
   await new Promise<void>((r) => server.once('listening', () => r()));
-  const { port } = server.address() as AddressInfo;
+  const addr = server.address() as AddressInfo;
+  const { port } = addr;
+  // Cheap and load-bearing: if a future edit drops the host argument, the flake comes back as an
+  // intermittent failure in an unrelated suite instead of failing here.
+  if (addr.address !== '127.0.0.1') {
+    throw new Error(`remote harness bound ${addr.address}, not 127.0.0.1 — the client dials 127.0.0.1`);
+  }
 
   const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },

@@ -32,7 +32,9 @@
       "type": "number",
       "title": "OAuth Callback Port",
       "description": "Localhost port for the OAuth redirect callback during authorization",
-      "default": 8976
+      "default": 8976,
+      "min": 1024,
+      "max": 65535
     },
     "security_level": {
       "type": "string",

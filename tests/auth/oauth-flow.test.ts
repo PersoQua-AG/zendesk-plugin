@@ -39,19 +39,23 @@ describe('waitForAuthorizationCode', () => {
     expect(result.redirectUri).toBe('http://localhost:18977/callback');
   });
 
-  it('rejects on state mismatch (possible CSRF)', async () => {
+  // The CSRF assurance in the shape it now has. A foreign `state` is still never accepted as the
+  // code — but it no longer REJECTS either: the authorization it could once have ended survives it,
+  // and the user's own callback still completes. Why the check moved ahead of `error=`, and the
+  // same property driven from a raw socket, is in oauth-flow.stray-callback.test.ts.
+  it('never accepts a code under a foreign state, and keeps waiting for the real one', async () => {
     const pending = waitForAuthorizationCode(18978, 'expected-state');
-    // Attach the rejection assertion before triggering the callback so the
-    // rejection is never momentarily unhandled (which vitest fails the run on).
-    const assertion = expect(pending).rejects.toThrow(/state mismatch/i);
-    await fetch('http://localhost:18978/callback?code=auth-code-1&state=wrong-state').catch(() => {});
-    await assertion;
+    expect((await fetch('http://localhost:18978/callback?code=foreign&state=wrong-state')).status).toBe(400);
+    await fetch('http://localhost:18978/callback?code=auth-code-1&state=expected-state').catch(() => {});
+    expect((await pending).code).toBe('auth-code-1');
   });
 
+  // With `state`, because Zendesk sends it on the denial redirect too: this is what a real "the
+  // user clicked Deny" looks like on the wire. Citation in src/auth/oauth-flow.ts.
   it('rejects when Zendesk reports an authorization error', async () => {
     const pending = waitForAuthorizationCode(18979, 'expected-state');
     const assertion = expect(pending).rejects.toThrow(/access_denied/);
-    await fetch('http://localhost:18979/callback?error=access_denied').catch(() => {});
+    await fetch('http://localhost:18979/callback?error=access_denied&state=expected-state').catch(() => {});
     await assertion;
   });
 });
@@ -93,7 +97,7 @@ describe('exchangeCodeForTokens', () => {
     const fakeFetch = (async () => new Response('invalid_grant', { status: 400 })) as typeof fetch;
     await expect(
       exchangeCodeForTokens(config, 'bad-code', 'verifier-1', 'http://localhost:18976/callback', fakeFetch),
-    ).rejects.toThrow(/400/);
+    ).rejects.toThrow(/400 invalid_grant/);
   });
 
   it('throws a clear error (not NaN downstream) when expires_in is missing', async () => {

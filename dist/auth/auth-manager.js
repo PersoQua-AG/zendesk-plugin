@@ -27,10 +27,11 @@ export class AuthManager {
         catch {
             // Decrypt/integrity failure (secret rotated or file tampered) — surface an
             // actionable re-auth message instead of a raw GCM crash.
-            throw new Error('Stored Zendesk credentials could not be read (encryption secret changed or file corrupt). Please re-authorize.');
+            throw new Error('Stored Zendesk credentials could not be read (encryption secret changed or file corrupt). ' +
+                'Run the zendesk_login tool to re-authorize.');
         }
         if (!tokens) {
-            throw new Error('No Zendesk authorization found. Run the OAuth setup flow first.');
+            throw new Error('No Zendesk authorization found. Run the zendesk_login tool to authorize (from a terminal: `npm run authorize`).');
         }
         return tokens;
     }
@@ -45,7 +46,12 @@ export class AuthManager {
         return this.inFlightRefresh;
     }
     async doRefresh(refreshToken) {
-        const refreshed = await this.refresh(this.config, refreshToken);
+        // A dead refresh grant (revoked, rotated, expired) is only recoverable by authorizing again, so
+        // say so. First line only, so no stack reaches the user.
+        const refreshed = await this.refresh(this.config, refreshToken).catch((err) => {
+            const reason = (err instanceof Error ? err.message : String(err)).split('\n')[0];
+            throw new Error(`${reason} — run the zendesk_login tool to authorize again.`);
+        });
         const updated = {
             accessToken: refreshed.accessToken,
             refreshToken: refreshed.refreshToken,

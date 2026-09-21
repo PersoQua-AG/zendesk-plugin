@@ -12,6 +12,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // [file, [required top-level keys]]. Values must be present and non-empty (non-empty string,
 // non-empty array, or a non-null object) — an empty/blank required field fails the gate.
 const CHECKS = [
+  // MCPB required top-level fields per @anthropic-ai/mcpb@2.1.2
+  // schemas/mcpb-manifest-latest.schema.json ("required"), plus manifest_version, which the schema
+  // pins to the const "0.3" and the packer refuses to guess.
+  ['manifest.json', ['manifest_version', 'name', 'version', 'description', 'author', 'server']],
   ['.claude-plugin/plugin.json', ['name', 'version', 'mcpServers']],
   ['.claude-plugin/marketplace.json', ['name', 'owner', 'plugins']],
 ];
@@ -58,4 +62,4 @@ if (errors.length > 0) {
   for (const e of errors) console.error(`  - ${e}`);
   process.exit(1);
 }
-console.log('Manifest validation passed: plugin.json + marketplace.json parse and carry required fields.');
+console.log('Manifest validation passed: manifest.json + plugin.json + marketplace.json parse and carry required fields.');

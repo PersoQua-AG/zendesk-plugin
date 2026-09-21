@@ -49,9 +49,13 @@ function remoteDeps(): ServerDeps {
 }
 
 describe('tool-surface parity (remote vs stdio)', () => {
-  it('exposes an identical set of 64 tool names + input schemas on both transports', async () => {
+  // Parity holds for all 64 Zendesk tools. The single deliberate exception is zendesk_login: it
+  // binds a LOCALHOST OAuth callback listener, which only the local (stdio / Desktop Extension)
+  // path can receive — the remote bridge authorizes through its own public callback and would offer
+  // a tool that can never complete. Any OTHER divergence is still a parity break.
+  it('exposes an identical set of 64 Zendesk tool names + input schemas on both transports', async () => {
     const env = fixtureEnv();
-    const stdio = await listTools(env);
+    const stdio = (await listTools(env)).filter((t) => t.name !== 'zendesk_login');
     const remote = await listTools(fixtureEnv(), remoteDeps());
 
     expect(stdio).toHaveLength(64);
@@ -59,5 +63,12 @@ describe('tool-surface parity (remote vs stdio)', () => {
     expect(remote.map((t) => t.name)).toEqual(stdio.map((t) => t.name));
     // Deep structural equality of every input JSON Schema (order-independent).
     expect(remote).toEqual(stdio);
+  });
+
+  it('zendesk_login is the only tool the local path adds over the remote path', async () => {
+    const stdio = (await listTools(fixtureEnv())).map((t) => t.name);
+    const remote = (await listTools(fixtureEnv(), remoteDeps())).map((t) => t.name);
+    expect(stdio.filter((n) => !remote.includes(n))).toEqual(['zendesk_login']);
+    expect(remote.filter((n) => !stdio.includes(n))).toEqual([]);
   });
 });
