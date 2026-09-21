@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { startCallbackListener } from '../../src/auth/oauth-flow.js';
-import { closeRawSockets, freePort, rawRequest, settlesWithin } from './login-harness.js';
+import { closeRawSockets, freePort, rawRequest, rebind, settlesWithin } from './login-harness.js';
 
 // Two properties of the callback listener that a raw socket, and only a raw socket, can state.
 //
@@ -115,5 +115,42 @@ describe('a denial that does carry the expected state', () => {
     [`${'a'.repeat(120)}`, `${'a'.repeat(100)}… (truncated)`],
   ])('squeezes `%s` to `%s`', async (raw, expected) => {
     expect(await errorMessage(raw)).toBe(`OAuth authorization failed: ${expected}`);
+  });
+
+  // The cap itself, at the three lengths that tell `>` from `>=` apart. The table above states the
+  // cap only at 120, where both comparisons truncate — so an off-by-one in either direction passes
+  // it unnoticed, and the one that matters cuts a legal 100-character code short for no reason.
+  // Length is counted AFTER the squeeze, so the last row also pins which of the two runs first: 100
+  // legal characters padded with droppable ones is not over the cap.
+  it.each([
+    ['99 legal characters — under the cap, untouched', 'b'.repeat(99), 'b'.repeat(99)],
+    ['exactly 100 — at the cap, still untouched', 'b'.repeat(100), 'b'.repeat(100)],
+    ['101 — one over, cut to 100 and marked', 'b'.repeat(101), `${'b'.repeat(100)}… (truncated)`],
+    ['100 legal plus dropped characters — counted after the squeeze', `${'b'.repeat(100)}%00%09`, 'b'.repeat(100)],
+  ])('%s', async (_label, raw, expected) => {
+    expect(await errorMessage(raw)).toBe(`OAuth authorization failed: ${expected}`);
+  });
+});
+
+// The surface the state-first order creates: a stray request no longer ends the flow, so the only
+// thing that still bounds the listener's life is the timer. A local process that cannot produce
+// `state` must therefore also be unable to hold the listener open past it by talking to it — and
+// the timeout must still be the reason the flow ends, not a stray request's.
+describe('the timeout under a burst of stray callbacks', () => {
+  it('still fires, and still with its own wording', async () => {
+    const port = await freePort();
+    const listener = await startCallbackListener(port, 'state-abc', 300);
+    const assertion = settlesWithin('the timed-out listener', listener.promise).catch((err: Error) => err.message);
+
+    // Enough requests to span the whole window, each one a fresh connection the handler must answer.
+    for (let i = 0; i < 25; i += 1) {
+      expect(await settlesWithin(`stray #${i}`, rawRequest(port, `/callback?error=denied&state=wrong-${i}`))).toMatch(
+        /^HTTP\/1\.1 400\b/,
+      );
+    }
+
+    expect(await assertion).toBe('OAuth callback timed out after 300ms');
+    // And the timer released the port rather than merely settling the promise.
+    await rebind(port);
   });
 });
