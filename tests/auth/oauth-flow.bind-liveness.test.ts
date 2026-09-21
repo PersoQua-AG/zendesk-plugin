@@ -1,16 +1,20 @@
 import { describe, it, expect } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { startCallbackListener } from '../../src/auth/oauth-flow.js';
+import { startCallbackListener, waitForAuthorizationCode } from '../../src/auth/oauth-flow.js';
 import { resolveAuthConfig } from '../../src/auth/config.js';
 import { runLogin } from '../../src/tools/login.js';
-import { deps, freePort, settledWithin as settlesWithin, setupLoginHarness } from './login-harness.js';
+import { deps, freePort, settlesWithin, setupLoginHarness } from './login-harness.js';
 
 setupLoginHarness('login-bind-liveness-');
 
 // The invariant this file pins is LIVENESS, not a message: startCallbackListener() must SETTLE for
 // every port value, whatever the value is. A rejection is a fine outcome; a pending promise is the
 // defect, because beginFlow() awaits it and the login queue (src/tools/login.ts:201-205) holds
-// every later zendesk_login behind that await with no timeout and no message.
+// every later zendesk_login behind that await with no timeout and no message. The shape that used
+// to hang: server.listen() validates its port SYNCHRONOUSLY and throws a RangeError that is never
+// delivered as an 'error' event, so while listen() stood in the INNER promise executor the throw
+// only rejected the inner promise, which the unhandled-rejection guard swallowed. It stands in the
+// OUTER executor now, which is what the cases below hold in place.
 //
 // Measured, not assumed — node v24, `server.listen(p)` on a fresh http server:
 //   NaN, Infinity, -Infinity, -1, 1.5, 65536, 70000 -> throws RangeError ERR_SOCKET_BAD_PORT
@@ -28,13 +32,33 @@ const THROWS_SYNCHRONOUSLY: ReadonlyArray<readonly [string, number]> = [
 
 describe('startCallbackListener settles for every port listen() refuses', () => {
   it.each(THROWS_SYNCHRONOUSLY)('settles when the port is %s', async (_label, port) => {
-    const outcome = await settlesWithin(`startCallbackListener(${port})`, startCallbackListener(port, 'state', 5_000));
-    expect(outcome.status).toBe('rejected');
-    const err = (outcome as PromiseRejectedResult).reason as Error;
+    const err = await settlesWithin(`startCallbackListener(${port})`, startCallbackListener(port, 'state', 5_000)).catch(
+      (e: unknown) => e as Error,
+    );
     expect(err.message).toContain('OAuth callback server could not start on port');
     expect(err.message).toContain('oauth_callback_port');
     // The node wording is replaced, not wrapped: no internals reach the MCP boundary.
     expect(err.message).not.toMatch(/RangeError|ERR_SOCKET_BAD_PORT|node:internal/);
+  });
+
+  it('names the configuration field and the range the user has to fix, and leaks no internals', async () => {
+    const err = await settlesWithin('startCallbackListener(70000)', startCallbackListener(70_000, 'state', 5_000)).catch(
+      (e: unknown) => e as Error,
+    );
+    expect(err.message).toBe(
+      'OAuth callback server could not start on port 70000 (extension configuration field ' +
+        '"oauth_callback_port" must be a whole number between 1024 and 65535).',
+    );
+    // The RangeError's own wording names node's argument validation, not a remedy.
+    expect(err.message).not.toMatch(/RangeError|options\.port|ERR_SOCKET_BAD_PORT/);
+    expect(err.message.split('\n')).toHaveLength(1);
+  });
+
+  // The CLI path awaits the same listener. It must fail, not wait for a callback that can never come.
+  it('makes the CLI wrapper reject rather than wait forever', async () => {
+    await expect(
+      settlesWithin('waitForAuthorizationCode(70000)', waitForAuthorizationCode(70_000, 'state', 5_000)),
+    ).rejects.toThrow(/oauth_callback_port/);
   });
 
   // Port 0 is the one value listen() ACCEPTS and the configuration rejects, and it is the sharpest
@@ -43,9 +67,7 @@ describe('startCallbackListener settles for every port listen() refuses', () => 
   // it settles, which is this file's invariant — together with the proof that no reachable caller
   // can produce it, which is what makes the mismatch harmless rather than latent.
   it('settles on port 0 too, binding a random port while the redirect URI still says :0', async () => {
-    const outcome = await settlesWithin('startCallbackListener(0)', startCallbackListener(0, 'state', 5_000));
-    expect(outcome.status).toBe('fulfilled');
-    const listener = (outcome as PromiseFulfilledResult<{ close: () => void; promise: Promise<unknown> }>).value;
+    const listener = await settlesWithin('startCallbackListener(0)', startCallbackListener(0, 'state', 5_000));
     listener.close();
     await expect(listener.promise).rejects.toThrow(/closed/);
   });
@@ -66,20 +88,14 @@ describe('startCallbackListener settles for every port listen() refuses', () => 
       'runLogin(NO_OAUTH_CONFIG)',
       runLogin(deps(0, { configError: 'Missing required environment variable: ZENDESK_SUBDOMAIN' })),
     );
-    expect(text.status).toBe('fulfilled');
-    expect((text as PromiseFulfilledResult<string>).value).toBe(
-      'Missing required environment variable: ZENDESK_SUBDOMAIN',
-    );
+    expect(text).toBe('Missing required environment variable: ZENDESK_SUBDOMAIN');
   });
 });
 
-// Liveness no longer depends on a catch block: server.listen() stands in the OUTER executor of
-// startCallbackListener(), so ANY synchronous throw there rejects the returned promise by Promise
-// semantics. What the catch beside it still owns is cleanup and wording — it runs close(), which
-// runs finish(): clearTimeout(), server.close(), and the settle callback. server.close() is the one
-// call in there that could throw, and it is called on a server that never listened; if it did throw,
-// the returned promise would still settle (that is the point of the move) but with node's wording
-// instead of the field name, so the case below stays.
+// Liveness no longer depends on a catch block: server.listen() stands in the OUTER executor, so ANY
+// synchronous throw there rejects the returned promise by Promise semantics. What the catch beside
+// it still owns is cleanup and wording — and server.close(), the one call in there that could throw,
+// is called on a server that never listened, so the case below pins that it does not.
 describe('finish() is not a second way to lose the outcome', () => {
   it('server.close() does not throw on a server that never listened, nor on a second call', () => {
     const s = createServer(() => {});
@@ -88,8 +104,9 @@ describe('finish() is not a second way to lose the outcome', () => {
   });
 
   it('settles both the outer promise and the inner one on a synchronous listen() failure', async () => {
-    const outer = await settlesWithin('outer', startCallbackListener(70_000, 'state', 5_000));
-    expect(outer.status).toBe('rejected');
+    await expect(settlesWithin('outer', startCallbackListener(70_000, 'state', 5_000))).rejects.toThrow(
+      /could not start/,
+    );
     // The inner promise is rejected too — verified through the only handle a caller could hold if
     // the bind had succeeded. Both must be settled, or a later `await listener.promise` would hang.
     const listener = startCallbackListener(70_000, 'state', 5_000);
@@ -105,9 +122,9 @@ describe('finish() is not a second way to lose the outcome', () => {
     });
     const port = (taken.address() as { port: number }).port;
     try {
-      const outcome = await settlesWithin(`startCallbackListener(${port})`, startCallbackListener(port, 'state', 5_000));
-      expect(outcome.status).toBe('rejected');
-      expect(String((outcome as PromiseRejectedResult).reason)).toMatch(/EADDRINUSE|address already in use/i);
+      await expect(
+        settlesWithin(`startCallbackListener(${port})`, startCallbackListener(port, 'state', 5_000)),
+      ).rejects.toThrow(/EADDRINUSE|address already in use/i);
     } finally {
       await new Promise<void>((r) => taken.close(() => r()));
     }
@@ -119,14 +136,12 @@ describe('finish() is not a second way to lose the outcome', () => {
 describe('the login queue survives every unusable port in the table', () => {
   it('answers each one and still starts a normal flow afterwards', async () => {
     for (const [, port] of THROWS_SYNCHRONOUSLY) {
-      const outcome = await settlesWithin(`runLogin(${port})`, runLogin(deps(port)));
-      expect(outcome.status, `runLogin(${port})`).toBe('fulfilled');
-      expect((outcome as PromiseFulfilledResult<string>).value).toContain('oauth_callback_port');
+      const text = await settlesWithin(`runLogin(${port})`, runLogin(deps(port)));
+      expect(text, `runLogin(${port})`).toContain('oauth_callback_port');
     }
 
     const port = await freePort();
     const after = await settlesWithin('the next runLogin', runLogin(deps(port, { callbackTimeoutMs: 60_000 })));
-    expect(after.status).toBe('fulfilled');
-    expect((after as PromiseFulfilledResult<string>).value).toMatch(/authorization started/i);
+    expect(after).toMatch(/authorization started/i);
   });
 });

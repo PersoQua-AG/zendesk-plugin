@@ -63,20 +63,11 @@ function parseSecurityLevel(raw: string | undefined): SecurityLevel {
 
 // Global Markdown→HTML default (PRD §8). A per-call `markdown` argument overrides it.
 //
-// Same class of bug as the level above, and it was read the same way: `raw !== 'false'` made
-// 'False', 'FALSE' and 'false ' all mean TRUE — the exact opposite of what was typed, with
-// nothing said. Case and surrounding whitespace are copy-paste artifacts here too, so they are
-// normalized away rather than treated as opinions. Reachable only through a directly set
-// ZENDESK_MARKDOWN_CONVERSION: both manifests declare the field as type "boolean", so a compliant
-// host sends 'true' or 'false' and nothing else.
-//
-// The fail-closed DIRECTION that decides the security level has no counterpart here. Converting
-// Markdown when the user meant not to, and not converting when they meant to, are the same size of
-// mistake and both are visible in the ticket the user is looking at — neither withholds data,
-// neither weakens screening. With no safer side to fall to, an unreadable value falls back to the
-// value both manifests DECLARE (true) rather than to a guess at what was meant. Falling to false
-// instead would quietly change the shipped behaviour of the one installation that typed something
-// odd, which is the fault being fixed rather than a second opinion about it.
+// Same class of bug as the level above: `raw !== 'false'` made 'False' and 'false ' mean TRUE, so
+// case and surrounding whitespace are normalized away here too. There is no fail-closed direction
+// to fall to — converting when the user meant not to and the reverse are the same size of mistake,
+// and both are visible in the ticket — so an unreadable value falls back to the value both
+// manifests DECLARE (true) rather than to a guess at what was meant.
 function parseMarkdownDefault(raw: string | undefined): boolean {
   const value = raw?.trim().toLowerCase();
   if (!value) return true;

@@ -2,11 +2,8 @@
 // In-app OAuth login for the Desktop Extension. A Desktop user has no terminal, so the one-time
 // authorization-code exchange that `npm run authorize` performs must be reachable as a tool.
 //
-// It runs in TWO calls, and it has to. A single call cannot both show the user the authorization
-// URL and wait for the callback: a tool result reaches the user only when the call returns, so a
-// call that waits reveals the URL only once it is already too late to open it. The first call
-// therefore starts the callback listener and returns the URL immediately, and a later call
-// collects the result. The PKCE verifier and the CSRF `state` belong to the FLOW, not to the call
+// It runs in TWO calls, for the reason the README states under "Why `zendesk_login` exists". What
+// follows from it here: the PKCE verifier and the CSRF `state` belong to the FLOW, not to the call
 // — re-rolling them on the second call would invalidate the URL the user just opened.
 //
 // No new OAuth logic: PKCE, URL building, the listener and the token exchange all come from

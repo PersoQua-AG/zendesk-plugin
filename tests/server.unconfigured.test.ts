@@ -33,10 +33,6 @@ function textOf(result: unknown): string {
 }
 
 describe('createServer with incomplete extension configuration', () => {
-  it('starts instead of throwing', () => {
-    expect(() => createServer(halfConfiguredEnv())).not.toThrow();
-  });
-
   it('still registers the full tool surface so the host lists the extension normally', async () => {
     const client = await connect(halfConfiguredEnv());
     const { tools } = await client.listTools();

@@ -84,12 +84,6 @@ function callbackPort(env) {
 // subdomain", support.zendesk.com/hc/en-us/articles/4408845973914). None of those characters carries
 // meaning in a URL authority, so the character set alone is what closes the hole; 63 is also the
 // hard DNS label limit (RFC 1035 §2.3.4), so a longer value could never resolve.
-//
-// Two documented limits are deliberately NOT enforced, because neither protects anything here and
-// both could lock out a real customer: the MINIMUM of 3 (it is stated for renaming, not as a
-// property of every account that has ever existed — a grandfathered two-letter subdomain would be
-// our bug, not their misconfiguration), and a leading/trailing dash (Zendesk states no such rule;
-// such a name simply fails to resolve in DNS, which is a loud failure, not a redirected one).
 export const MAX_SUBDOMAIN_LENGTH = 63;
 const SUBDOMAIN_PATTERN = /^[a-z0-9-]+$/i;
 // One rule, one wording — stated once here, the way CALLBACK_PORT_RULE is.
@@ -97,7 +91,7 @@ export const SUBDOMAIN_RULE = `extension configuration field "${USER_CONFIG_FIEL
     `itself \u2014 letters, digits and dashes, at most ${MAX_SUBDOMAIN_LENGTH} characters; for ` +
     `acme.zendesk.com the value is "acme"`;
 // The second wording, for a value that satisfies the rule above and still is not a host name.
-export const SUBDOMAIN_NOT_A_HOST_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" is not a usable host ` +
+const SUBDOMAIN_NOT_A_HOST_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" is not a usable host ` +
     `name \u2014 a value starting with "xn--" is an internationalized-domain prefix and this one does ` +
     `not decode; for acme.zendesk.com the value is "acme"`;
 // Surrounding whitespace is a copy-paste artifact, not an opinion: trimmed, not rejected, because

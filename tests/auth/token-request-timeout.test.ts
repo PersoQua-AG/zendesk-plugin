@@ -68,6 +68,31 @@ describe('token request timeout', () => {
     );
   });
 
+  // The signal bounds the whole request, not just the headers: a token endpoint that answers its
+  // headers fast and then stalls the BODY fires the same TimeoutError out of response.text() /
+  // response.json(). Read outside the try it reached the MCP boundary as the raw DOMException
+  // "The operation was aborted due to timeout" — no field, no remedy, the very thing the wrapper
+  // exists to prevent.
+  it.each([
+    ['an error body that stalls after the headers', 400],
+    ['a token body that stalls after the headers', 200],
+  ])('turns %s into the same prose', async (_label, status) => {
+    const stalling = (() =>
+      Promise.resolve({
+        ok: status === 200,
+        status,
+        text: () => Promise.reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError')),
+        json: () => Promise.reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError')),
+      } as unknown as Response)) as unknown as typeof fetch;
+
+    const err = await exchangeCodeForTokens(config(PORT), 'c', 'v', REDIRECT, stalling).catch((e: unknown) => e as Error);
+    expect(err.message).toBe(
+      'Token exchange failed: no reply from the Zendesk token endpoint within 30 seconds — check the ' +
+        'network connection, and any proxy or VPN between this machine and Zendesk.',
+    );
+    expect(err.message).not.toMatch(/abort/i);
+  });
+
   it('passes a non-timeout transport failure through untouched', async () => {
     const failing = (() => Promise.reject(new Error('getaddrinfo ENOTFOUND acme.zendesk.com'))) as unknown as typeof fetch;
     await expect(exchangeCodeForTokens(config(PORT), 'c', 'v', REDIRECT, failing)).rejects.toThrow(

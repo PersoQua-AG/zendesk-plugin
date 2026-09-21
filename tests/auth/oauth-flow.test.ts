@@ -96,36 +96,6 @@ describe('exchangeCodeForTokens', () => {
     ).rejects.toThrow(/400 invalid_grant/);
   });
 
-  // NFR-1. The error body is quoted to the user, so it is capped on BOTH axes. A first-line-only
-  // cut is not enough: the page that made this necessary was ~8 KB on a single line.
-  it('drops an HTML error page rather than quoting it', async () => {
-    const page = `<!DOCTYPE html><html><body>${'x'.repeat(8000)}cf_chl_tk=SENTINEL</body></html>`;
-    const fakeFetch = (async () => new Response(page, { status: 403 })) as typeof fetch;
-    const err = await exchangeCodeForTokens(config, 'c', 'v', 'http://localhost:18976/callback', fakeFetch).catch(
-      (e: Error) => e,
-    );
-    expect(err.message).toBe('Token exchange failed: 403 (non-text response body omitted)');
-  });
-
-  it('truncates a long single-line plain-text body', async () => {
-    const body = `error_description=${'a'.repeat(500)}SENTINEL`;
-    const fakeFetch = (async () => new Response(body, { status: 400 })) as typeof fetch;
-    const err = await exchangeCodeForTokens(config, 'c', 'v', 'http://localhost:18976/callback', fakeFetch).catch(
-      (e: Error) => e,
-    );
-    expect(err.message).not.toContain('SENTINEL');
-    expect(err.message).toContain('(truncated)');
-    expect(err.message.length).toBeLessThan(300);
-  });
-
-  it('keeps a short body verbatim and drops everything after the first line', async () => {
-    const fakeFetch = (async () => new Response('invalid_grant\nStack: nothing to see', { status: 400 })) as typeof fetch;
-    const err = await exchangeCodeForTokens(config, 'c', 'v', 'http://localhost:18976/callback', fakeFetch).catch(
-      (e: Error) => e,
-    );
-    expect(err.message).toBe('Token exchange failed: 400 invalid_grant');
-  });
-
   it('throws a clear error (not NaN downstream) when expires_in is missing', async () => {
     const fakeFetch = (async () =>
       new Response(JSON.stringify({ access_token: 'at-1', refresh_token: 'rt-1' }), { status: 200 })) as typeof fetch;

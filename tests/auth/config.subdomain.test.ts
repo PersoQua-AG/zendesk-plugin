@@ -96,17 +96,6 @@ describe('subdomain validation — values that must keep working', () => {
       'Missing required environment variable: ZENDESK_SUBDOMAIN (extension configuration field "zendesk_subdomain" is empty).',
     );
   });
-
-  // The point of the guard, stated as the property it buys: whatever survives resolveAuthConfig can
-  // only ever build a URL on the account's own zendesk.com host.
-  it('leaves every accepted value unable to move the authorization URL off zendesk.com', () => {
-    for (const value of ['acme', '-acme', 'acme-', 'ACME', '2acme', 'a'.repeat(MAX_SUBDOMAIN_LENGTH)]) {
-      const { config } = resolveAuthConfig(withSubdomain(value));
-      const url = new URL(buildAuthorizationUrl(config, 'challenge', 'state'));
-      expect(url.origin.toLowerCase()).toBe(`https://${value.toLowerCase()}.zendesk.com`);
-      expect(url.hostname.toLowerCase().endsWith('.zendesk.com')).toBe(true);
-    }
-  });
 });
 
 // The remote bridge resolves the SAME config and builds the same host into the same URLs

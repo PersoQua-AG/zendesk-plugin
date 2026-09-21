@@ -5,12 +5,10 @@ import { runLogin, type LoginDeps } from '../../src/tools/login.js';
 import type { CallbackListener } from '../../src/auth/oauth-flow.js';
 import { authorizationUrl, config, deps, freePort, hitCallback, setupLoginHarness, tokensPath } from './login-harness.js';
 
-// README / US-1: a user can only open a URL they have been given. The original assertion was "the
-// URL must survive every OUTCOME of zendesk_login", because the single call published it only at
-// the end. The two-call flow moves the guarantee earlier and makes it stronger: the URL is the
-// RESULT of call 1, returned before any waiting, and it is repeated by every later call that is
-// still waiting for the callback. What stays unchanged is the counter-guarantee — a reply that
-// cannot produce a usable URL must not promise one.
+// README / US-1: a user can only open a URL they have been given. The URL is the RESULT of call 1,
+// returned before any waiting, and it is repeated by every later call still waiting for the
+// callback. The counter-guarantee, which the second describe holds: a reply that cannot produce a
+// usable URL must not promise one.
 //
 // Every test here drives the REAL localhost callback listener unless it says otherwise.
 

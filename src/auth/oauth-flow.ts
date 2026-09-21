@@ -161,22 +161,15 @@ export function startCallbackListener(
     // bindFailed instead; a caller that DOES hold the listener still sees its own rejection.
     promise.catch(() => {});
 
-    // listen() stands HERE, in the outer executor and after that catch, on purpose. It validates its
-    // port synchronously and throws a RangeError for anything that is not a whole number in 0–65535
-    // — a throw that is never delivered as an 'error' event. Standing here, such a throw rejects the
-    // Promise this function returns by plain Promise semantics: settling is a property of WHERE the
-    // call stands, not of catching the right things. Inside the inner executor it rejected `promise`
-    // instead, which the catch above swallows, so neither `bound` nor `bindFailed` was ever called
-    // and startCallbackListener() stayed pending forever — beginFlow() never returned and the login
-    // queue in ../tools/login.ts held every later zendesk_login behind it until a restart.
+    // listen() stands HERE, in the OUTER executor, on purpose: it validates its port synchronously
+    // and throws a RangeError that is never delivered as an 'error' event, so only from here does
+    // such a throw reject the Promise this function returns. From the inner executor it rejected
+    // `promise` instead, which the catch above swallows — and this function stayed pending forever.
     try {
       server.listen(port);
     } catch {
-      // Cleanup and wording only, NOT liveness: whatever this block does, the throw out of it
-      // rejects the returned Promise. close() runs finish() — clearing the timer, closing the
-      // server and settling `promise` — so a refused bind leaves nothing behind. The RangeError's
-      // own text names node internals and no remedy, so it is replaced rather than passed on; a
-      // synchronous listen() failure has exactly one cause, the port value.
+      // Cleanup and wording only, NOT liveness: close() runs finish(), so a refused bind leaves
+      // nothing behind, and node's own text names internals and no remedy, so it is replaced.
       close();
       throw new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`);
     }
@@ -216,9 +209,9 @@ function summarizeErrorBody(raw: string): string {
 // returns.
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 
-// Thrown by fetch when the signal above fires: undici rejects with the signal's reason, and
-// AbortSignal.timeout's reason is a DOMException named TimeoutError. Its own message ("The
-// operation was aborted due to timeout") names no remedy, so it is replaced rather than passed on.
+// Thrown by fetch, and by the body read, when the signal above fires: undici rejects with the
+// signal's reason, and AbortSignal.timeout's reason is a DOMException named TimeoutError. Its own
+// message ("The operation was aborted due to timeout") names no remedy, so it is replaced.
 function isRequestTimeout(err: unknown): boolean {
   return err instanceof Error && err.name === 'TimeoutError';
 }
@@ -229,34 +222,36 @@ async function postToken(
   fetchImpl: typeof fetch,
   errorLabel: string,
 ): Promise<TokenResponse> {
-  let response: Response;
+  // The signal bounds the WHOLE request, headers and body alike, so the body read stands inside the
+  // same try: undici rejects `response.text()`/`.json()` with the same TimeoutError when the headers
+  // arrive fast and the body stalls, and that raw DOMException names no field and no remedy.
   try {
-    response = await fetchImpl(`https://${subdomain}.zendesk.com/oauth/tokens`, {
+    const response = await fetchImpl(`https://${subdomain}.zendesk.com/oauth/tokens`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
     });
+    if (!response.ok) {
+      throw new Error(`${errorLabel}: ${response.status} ${summarizeErrorBody(await response.text())}`);
+    }
+    const parsed = tokenResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      // Report which fields are wrong, never the raw body (it carries the tokens).
+      const fields = parsed.error.issues.map((i) => i.path.join('.')).join(', ');
+      throw new Error(`${errorLabel}: malformed token response (invalid/missing: ${fields})`);
+    }
+    return {
+      accessToken: parsed.data.access_token,
+      refreshToken: parsed.data.refresh_token,
+      expiresIn: parsed.data.expires_in,
+    };
   } catch (err) {
     if (!isRequestTimeout(err)) throw err;
     throw new Error(
       `${errorLabel}: no reply from the Zendesk token endpoint within ${TOKEN_REQUEST_TIMEOUT_MS / 1000} seconds — check the network connection, and any proxy or VPN between this machine and Zendesk.`,
     );
   }
-  if (!response.ok) {
-    throw new Error(`${errorLabel}: ${response.status} ${summarizeErrorBody(await response.text())}`);
-  }
-  const parsed = tokenResponseSchema.safeParse(await response.json());
-  if (!parsed.success) {
-    // Report which fields are wrong, never the raw body (it carries the tokens).
-    const fields = parsed.error.issues.map((i) => i.path.join('.')).join(', ');
-    throw new Error(`${errorLabel}: malformed token response (invalid/missing: ${fields})`);
-  }
-  return {
-    accessToken: parsed.data.access_token,
-    refreshToken: parsed.data.refresh_token,
-    expiresIn: parsed.data.expires_in,
-  };
 }
 
 export function exchangeCodeForTokens(
