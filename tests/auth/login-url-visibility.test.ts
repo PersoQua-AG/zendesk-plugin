@@ -40,8 +40,9 @@ describe('the authorization URL reaches the user before anything waits', () => {
 });
 
 // The counter-case: a reply that cannot lead anywhere must not hand out a URL. After a flow has
-// ended, its URL carries a dead `state` — repeating it would send the user into a state mismatch,
-// which is exactly the bug the two-call design exists to remove.
+// ended, its URL carries a dead `state` and the listener that validated it is closed — repeating it
+// would send the user to a callback that reaches nothing, which is exactly the bug the two-call
+// design exists to remove.
 describe('a reply that has no usable URL promises none', () => {
   it('a subdomain that cannot form a URL yields an actionable failure and promises no URL', async () => {
     const port = await freePort();
@@ -69,7 +70,9 @@ describe('a reply that has no usable URL promises none', () => {
     const d = deps(port);
     const first = await runLogin(d);
     expect(authorizationUrl(first).host).toBe('acme.zendesk.com');
-    await hitCallback(port, '?error=access_denied');
+    // The denial carries the flow's `state`, as Zendesk's does — see oauth-flow.stray-callback.test.ts
+    // for why a denial without one no longer ends the flow.
+    await hitCallback(port, `?state=${authorizationUrl(first).searchParams.get('state')}&error=access_denied`);
     const second = await runLogin(d);
     expect(second).toMatch(/access_denied/);
     expect(second).toContain('Run zendesk_login again to start a new authorization');

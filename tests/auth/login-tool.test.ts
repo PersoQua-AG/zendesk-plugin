@@ -121,8 +121,11 @@ describe('zendesk_login negative paths', () => {
   it('reports a cancelled/denied authorization in plain text with no stack trace', async () => {
     const port = await freePort();
     const d = deps(port);
-    await runLogin(d);
-    await hitCallback(port, '?error=access_denied');
+    // With the flow's own `state`, because Zendesk's denial redirect carries it too. Without one
+    // the listener answers 400 and keeps waiting instead — deliberately, so that a stray local
+    // request cannot end somebody's login (oauth-flow.stray-callback.test.ts).
+    const state = urlIn(await runLogin(d)).searchParams.get('state') as string;
+    await hitCallback(port, `?state=${state}&error=access_denied`);
     const text = await runLogin(d);
     expect(text).toMatch(/access_denied/);
     expect(text).toMatch(/zendesk_login/);

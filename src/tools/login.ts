@@ -103,8 +103,10 @@ function failureText(err: unknown, deps: LoginDeps): string {
   const port = deps.config.callbackPort;
 
   // Only EADDRINUSE needs translating: an errno tells the user nothing and the remedy names a
-  // configuration field. Every other flow error (timed out, state mismatch, denied, exchange
-  // failure) already arrives as prose from oauth-flow.ts and is passed through as-is.
+  // configuration field. Every other flow error (timed out, denied, exchange failure) already
+  // arrives as prose from oauth-flow.ts and is passed through as-is. A denial is the one that
+  // carries OUTSIDE text — the authorization server's `error` value — and oauth-flow.ts squeezes
+  // that through the spec's character set before it ever reaches this line.
   return /EADDRINUSE|address already in use/i.test(message)
     ? `Zendesk login could not start: local port ${port} is already in use, so the OAuth callback cannot be received. Close whatever is listening on port ${port}, or set a different port in the "oauth_callback_port" configuration field and restart the extension.`
     : `Zendesk login failed: ${message}`;

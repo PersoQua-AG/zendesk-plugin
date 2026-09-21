@@ -1,7 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { connect } from 'node:net';
 import { startCallbackListener } from '../../src/auth/oauth-flow.js';
-import { freePort, settlesWithin } from './login-harness.js';
+import { closeRawSockets, freePort, rawRequest, settlesWithin } from './login-harness.js';
 
 // The invariant here is the same LIVENESS one oauth-flow.bind-liveness.test.ts pins for the bind,
 // one layer further in: a request that reaches the bound callback listener must never take the
@@ -10,11 +9,11 @@ import { freePort, settlesWithin } from './login-harness.js';
 // tools, for as long as the five-minute authorization window is open on a port every local process
 // can reach.
 //
-// Why no existing case could see it: every other suite drives the listener through fetch() (see
+// Why no existing case could see it: every other suite drove the listener through fetch() (see
 // login-harness.ts hitCallback/redirect), and fetch normalizes its target before it is written to
-// the socket. Only a raw socket can put "//" on the request line. Coverage could not see it either
-// — the `new URL` line ran in every callback test and counted as covered; what was untested was its
-// THROWING exit, which v8 statement coverage does not distinguish.
+// the socket. Only a raw socket can put "//" on the request line — login-harness.ts rawRequest.
+// Coverage could not see it either — the `new URL` line ran in every callback test and counted as
+// covered; what was untested was its THROWING exit, which v8 statement coverage does not distinguish.
 //
 // Measured on node v22.23.1, `new URL(target, 'http://localhost:<port>')`:
 //   "//", "///", "//%", "http://"  -> TypeError [ERR_INVALID_URL] (empty authority)
@@ -22,28 +21,7 @@ import { freePort, settlesWithin } from './login-harness.js';
 // so the table is exactly the four that throw. The last one is absolute-form, legal in HTTP/1.1.
 const UNPARSEABLE_TARGETS: readonly string[] = ['//', '///', '//%', 'http://'];
 
-const openSockets: ReturnType<typeof connect>[] = [];
-afterEach(() => {
-  for (const s of openSockets.splice(0)) s.destroy();
-});
-
-// A raw HTTP/1.1 request, written to the socket verbatim — no client library in between to
-// normalize the request target away. Resolves with the status line, or '' if the peer hung up
-// without answering (which is what a crashed handler looks like from out here).
-function rawRequest(port: number, target: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const socket = connect(port, '127.0.0.1', () => {
-      socket.write(`GET ${target} HTTP/1.1\r\nHost: localhost:${port}\r\nConnection: close\r\n\r\n`);
-    });
-    openSockets.push(socket);
-    let received = '';
-    socket.on('data', (chunk) => {
-      received += String(chunk);
-    });
-    socket.on('close', () => resolve(received.split('\r\n')[0]));
-    socket.on('error', reject);
-  });
-}
+afterEach(closeRawSockets);
 
 describe('the callback listener survives a request target that is not a URL', () => {
   it.each(UNPARSEABLE_TARGETS)('answers 400 to `GET %s` instead of throwing out of the handler', async (target) => {

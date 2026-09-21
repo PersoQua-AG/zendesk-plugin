@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createHttpServer } from 'node:http';
+import { connect, type Socket } from 'node:net';
 import { abortLoginFlow, type LoginDeps } from '../../src/tools/login.js';
 import type { OAuthConfig } from '../../src/auth/oauth-flow.js';
 
@@ -50,6 +51,34 @@ export function redirect(url: URL, params: Record<string, string>): Promise<Resp
 
 export async function hitCallback(port: number, query: string): Promise<void> {
   await fetch(`http://localhost:${port}/callback${query}`);
+}
+
+// A raw HTTP/1.1 request written to the socket verbatim — no client library in between. fetch()
+// normalizes its target and its query before either reaches the wire, so it can express neither an
+// unparseable request target nor a percent-encoded NUL that survives to the handler; both defects
+// that reached this listener came in through a socket no test was holding. Resolves with the status
+// line, or '' if the peer hung up without answering (what a crashed handler looks like from here).
+const rawSockets: Socket[] = [];
+
+export function rawRequest(port: number, target: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1', () => {
+      socket.write(`GET ${target} HTTP/1.1\r\nHost: localhost:${port}\r\nConnection: close\r\n\r\n`);
+    });
+    rawSockets.push(socket);
+    let received = '';
+    socket.on('data', (chunk) => {
+      received += String(chunk);
+    });
+    socket.on('close', () => resolve(received.split('\r\n')[0]));
+    socket.on('error', reject);
+  });
+}
+
+// Every socket rawRequest opened, whether or not it was answered. A case whose request hung would
+// otherwise leave a handle behind for the suites that follow it.
+export function closeRawSockets(): void {
+  for (const s of rawSockets.splice(0)) s.destroy();
 }
 
 // Proof that nothing is left listening: the port binds again.

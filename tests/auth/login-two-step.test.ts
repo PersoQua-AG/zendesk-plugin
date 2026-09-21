@@ -64,17 +64,24 @@ describe('the two-call login over the real callback listener', () => {
     expect(await runLogin(d)).toMatch(/authorization complete/i);
   });
 
-  it('rejects a callback that carries a foreign state and stores nothing', async () => {
+  // A foreign `state` stores nothing — and no longer ENDS the user's login either. Any local
+  // process can reach the callback port while the window is open, so a stray request that could
+  // fail the flow was a way to break every login attempt from outside; it now answers 400 and the
+  // user's own authorization is still there to be finished. Whole reasoning in
+  // oauth-flow.stray-callback.test.ts.
+  it('refuses a callback that carries a foreign state, stores nothing, and keeps the login alive', async () => {
     const port = await freePort();
     const d = deps(port, { callbackTimeoutMs: 60_000 });
     const url = authorizationUrl(await runLogin(d));
 
     const response = await redirect(url, { state: 'not-the-flow-state', code: 'c' });
     expect(response.status).toBe(400);
-
-    const text = await runLogin(d);
-    expect(text).toMatch(/state mismatch/i);
     expect(existsSync(tokensPath)).toBe(false);
+
+    // Still the same authorization, still the same URL — the user is not sent to start over.
+    const still = await runLogin(d);
+    expect(still).toMatch(/still waiting/i);
+    expect(authorizationUrl(still).searchParams.get('state')).toBe(url.searchParams.get('state'));
   });
 });
 
@@ -107,9 +114,13 @@ describe('a flow that ends without a callback', () => {
     expect(restarted).not.toMatch(/still waiting/i);
     expect(fresh.searchParams.get('state')).not.toBe(stale.searchParams.get('state'));
 
-    // The abandoned state is dead; only the new one is accepted.
+    // The abandoned state is dead; only the new one is accepted. A browser that comes back on the
+    // OLD URL is refused with a 400 and — since the restart's flow is the live one — leaves that
+    // flow waiting for its own callback rather than killing it.
     expect((await redirect(stale, { state: stale.searchParams.get('state') as string, code: 'c' })).status).toBe(400);
-    expect(await runLogin(d)).toMatch(/state mismatch/i);
+    const waiting = await runLogin(d);
+    expect(waiting).toMatch(/still waiting/i);
+    expect(authorizationUrl(waiting).searchParams.get('state')).toBe(fresh.searchParams.get('state'));
   });
 
   it('leaves no handle that could keep the process alive', async () => {

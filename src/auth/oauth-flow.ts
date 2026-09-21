@@ -56,6 +56,38 @@ export function buildAuthorizationUrl(
   return url.toString();
 }
 
+// The `error` value arrives from outside and leaves as TEXT THE MODEL READS: it is interpolated
+// into the listener's rejection, which ../tools/login.ts turns into the zendesk_login result. So it
+// is squeezed through the character set the spec gives it before it is interpolated anywhere.
+//
+// RFC 6749 §4.1.2.1 defines the value as *NQCHAR — %x20-21 / %x23-5B / %x5D-7E, printable ASCII
+// without '"' and '\'. A character outside that set is not a legal error code in the first place,
+// so it is DROPPED rather than escaped: NUL, CR and LF (which made one value look like several
+// lines of prose), C1 controls, and every non-ASCII lookalike a homoglyph or a bidi override could
+// be written with.
+//
+// Not narrowed to the §4.1.2.1 code LIST, deliberately. That list is seven values, and Zendesk's
+// own documented errors already include two that are not on it — `invalid_grant` and
+// `redirect_uri_mismatch` (developer.zendesk.com, "Using OAuth to authenticate API requests",
+// "Common errors"). The second is the most actionable error the flow has, because it names a
+// configuration field the user must fix; rendering it as "unknown error code" would trade a
+// nonexistent injection gain (the set above already contains nothing executable, and the caller
+// already holds `state`) for a user who cannot tell what went wrong.
+const NOT_NQCHAR = /[^\x20-\x21\x23-\x5B\x5D-\x7E]/g;
+
+// Long enough for any real code plus a word of context, short enough that nothing can pad the tool
+// result with content of its own. The longest value Zendesk documents is 21 characters.
+const MAX_ERROR_CODE_CHARS = 100;
+
+function sanitizeErrorCode(raw: string): string {
+  const cleaned = raw.replace(NOT_NQCHAR, '').trim();
+  // Everything was dropped: say so, rather than render an empty reason as if none had been given.
+  if (!cleaned) return '(unprintable error code)';
+  return cleaned.length > MAX_ERROR_CODE_CHARS
+    ? `${cleaned.slice(0, MAX_ERROR_CODE_CHARS)}… (truncated)`
+    : cleaned;
+}
+
 // A callback listener that is BOUND but not yet awaited. The two-step login tool needs those two
 // moments apart: it hands the user the authorization URL on the first tool call and collects the
 // callback on a later one, with the listener — and the `state` it validates — living across both.
@@ -113,6 +145,28 @@ export function startCallbackListener(
           res.writeHead(404).end();
           return;
         }
+        // `state` FIRST, before any other query parameter is read, and a request that fails it ends
+        // like the 404 above: 400, keep listening, pending authorization untouched. `state` is the
+        // only thing separating the user's browser coming back from Zendesk from any other caller,
+        // and on a fixed local port held open for five minutes every local process is a possible
+        // caller — a browser tab included, since fetch's no-cors mode is blocked from READING the
+        // answer, not from sending the request. Checked second, as it was, an `error=` from such a
+        // caller did two things it must not: it ENDED the authorization the user was in the middle
+        // of, and it put text of its own choosing into the rejection the model reads as tool output
+        // (../tools/login.ts failureText).
+        //
+        // The order costs nothing, because a genuine denial carries `state` too: "If the user
+        // denies access, Zendesk redirects to your app with an error and the same state value you
+        // sent: …?error=access_denied&state=xyz789" (developer.zendesk.com, "Using OAuth to
+        // authenticate API requests", step 3) — which RFC 6749 §4.1.2.1 requires of any
+        // authorization server ("state: REQUIRED if a 'state' parameter was present in the client
+        // authorization request"). So a denial still settles AT ONCE, and nobody waits out the
+        // window for an answer that already exists.
+        if (url.searchParams.get('state') !== expectedState) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' }).end('State mismatch');
+          return;
+        }
+
         const fail = (status: number, body: string, message: string): void => {
           res.writeHead(status, { 'Content-Type': 'text/plain' }).end(body);
           finish(() => reject(new Error(message)));
@@ -120,10 +174,8 @@ export function startCallbackListener(
 
         const error = url.searchParams.get('error');
         if (error) {
-          return fail(400, `Authorization failed: ${error}`, `OAuth authorization failed: ${error}`);
-        }
-        if (url.searchParams.get('state') !== expectedState) {
-          return fail(400, 'State mismatch', 'OAuth state mismatch — possible CSRF');
+          const reason = sanitizeErrorCode(error);
+          return fail(400, `Authorization failed: ${reason}`, `OAuth authorization failed: ${reason}`);
         }
         const code = url.searchParams.get('code');
         if (!code) {
