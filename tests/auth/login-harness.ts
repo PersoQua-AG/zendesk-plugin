@@ -4,6 +4,7 @@
 // listener bound makes the NEXT case depend on the order it ran in.
 import { expect, beforeEach, afterEach, vi } from 'vitest';
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createHttpServer } from 'node:http';
@@ -58,19 +59,26 @@ export function portClaimPath(port: number): string {
   return join(CLAIM_DIR, String(port));
 }
 
-// No run of this suite lasts anywhere near this long, so a claim older than it is wreckage even
-// when its pid still answers — pids are reused, and a claim held by an unrelated live process would
-// otherwise hold its port for the lifetime of the machine. Measured before this ceiling existed:
-// `mkdir $T/20001; echo 1 > $T/20001/pid` survived every later load.
+// A claim older than this is wreckage even when its pid still answers: pids are reused, and a claim
+// held by an unrelated live process would otherwise hold its port for the lifetime of the machine.
+// The ceiling is a time ASSUMPTION, and it is the one number here that can hand a port out twice —
+// a run that outlived it would have a LIVE claim swept. So the margin, measured: the whole suite
+// takes 15.5 s (15.34 s under coverage), and the slowest single file holding a claim ~5.2 s. Thirty
+// minutes is a factor of more than a hundred. The one process that can outlive it is `test:watch`,
+// and the claims ageing out there belong to earlier passes whose listeners are long closed.
 const MAX_CLAIM_AGE_MS = 30 * 60_000;
 
-// `kill(pid, 0)` sends no signal, it only asks. EPERM means the process exists and is someone
-// else's — alive. ESRCH, an unreadable claim, or content that is not a pid means nobody holds it.
-function ownerAlive(path: string): boolean {
+// A claim stands only if it is BOTH young enough to belong to a running suite AND owned by a
+// process that still exists. Either half alone leaks the band — the first to killed runs, the
+// second to reused pids. `kill(pid, 0)` sends no signal, it only asks; EPERM means the process
+// exists and is someone else's, which is alive.
+function claimIsLive(path: string): boolean {
   let pid: number;
   try {
+    if (Date.now() - statSync(path).mtimeMs >= MAX_CLAIM_AGE_MS) return false;
     pid = Number.parseInt(readFileSync(path, 'utf8'), 10);
   } catch {
+    // Swept by another run between the readdir and the read, or not a claim at all.
     return false;
   }
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -80,19 +88,6 @@ function ownerAlive(path: string): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'EPERM';
   }
-}
-
-// Both halves are required: young enough to belong to a running suite, AND owned by a process that
-// still exists. Either alone leaks the band — the first to killed runs, the second to reused pids.
-function claimIsLive(path: string): boolean {
-  let age: number;
-  try {
-    age = Date.now() - statSync(path).mtimeMs;
-  } catch {
-    // Gone between the readdir and the stat: another run swept it, and there is nothing to keep.
-    return false;
-  }
-  return age < MAX_CLAIM_AGE_MS && ownerAlive(path);
 }
 
 // Vitest ends its worker processes with a signal, so 'exit' hooks do not run and nothing releases a
@@ -111,7 +106,7 @@ function sweepDeadClaims(): void {
   for (const entry of entries) {
     const path = join(CLAIM_DIR, entry);
     try {
-      // Every entry here carries its owner's pid — a claim and a staging file alike — so one rule
+      // Every entry here holds its owner's pid — a claim and a staging file alike — so one rule
       // covers both. `recursive` also clears a claim left by the mkdir shape this replaced.
       if (!claimIsLive(path)) rmSync(path, { recursive: true, force: true });
     } catch {
@@ -120,52 +115,36 @@ function sweepDeadClaims(): void {
   }
 }
 
-mkdirSync(CLAIM_DIR, { recursive: true });
 sweepDeadClaims();
 
-// A claim must NEVER be observable without its owner: a claim that can be read empty is a claim a
-// concurrent sweep calls ownerless and removes, and then the port goes out twice — the very defect
-// this replaces, in a narrower window. So the pid is written under a private staging name FIRST and
-// the finished file is then hard-linked into place; link() fails with EEXIST when the name is
-// taken, which makes publication and test-and-set one step. (Create-then-write, mkdir-then-write
-// included, cannot do that: measured, `printf "" > $T/20002/pid` was swept despite a fresh mtime.)
-// Each claim gets its own staging file, and so its own inode: hard links share an mtime, and a
-// reused staging file would keep refreshing the age of every claim already linked from it.
-let stagingSeq = 0;
-
-function tryClaim(port: number): boolean {
-  const staging = join(CLAIM_DIR, `.staging-${process.pid}-${(stagingSeq += 1)}`);
-  writeFileSync(staging, String(process.pid));
+// A claim must NEVER be observable without its owner: one that can be read empty is one a
+// concurrent sweep calls ownerless and removes, and then the port goes out twice — the defect this
+// replaces, in a narrower window. So the pid is written under a private staging name FIRST and the
+// finished file is hard-linked into place: link() fails with EEXIST when the name is taken, which
+// makes publishing the owner and taking the name one event. (Create-then-write cannot: measured,
+// `printf "" > $T/20002/pid` was swept despite a fresh mtime.) Hard links need one filesystem, so
+// staging lives in CLAIM_DIR; on Windows they are not universal, and CI is ubuntu-latest.
+//
+// The staging name is random AND created exclusively. A reused name would be a reused inode, and
+// the claim already linked from it would take a fresh mtime and a live owner from a write meant for
+// another port — measured on a hand-built collision: `mtime moved: true`. `wx` is what makes that
+// impossible rather than improbable: the OS refuses the second create instead of the RNG not
+// repeating.
+function claimPort(port: number): boolean {
+  // Cheap enough to repeat (measured: 3.4 µs on a directory that exists) and it is the whole
+  // recovery from macOS pruning its per-user temp dir under a running suite — which it did in this
+  // session, after which every freePort() threw ENOENT with no way back.
+  mkdirSync(CLAIM_DIR, { recursive: true });
+  const staging = join(CLAIM_DIR, `.staging-${randomUUID()}`);
+  writeFileSync(staging, String(process.pid), { flag: 'wx' });
   try {
     linkSync(staging, portClaimPath(port));
     return true;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
-    throw err;
+    throw new Error(`could not claim test port ${port} at ${portClaimPath(port)}: ${(err as Error).message}`);
   } finally {
     rmSync(staging, { force: true });
-  }
-}
-
-function claimError(port: number, err: unknown): Error {
-  return new Error(`could not claim test port ${port} at ${portClaimPath(port)}: ${(err as Error).message}`);
-}
-
-// Only EEXIST means "taken". Anything else is reported with the path rather than read as taken,
-// which would spin the scan below through all 10 000 candidates and then blame exhaustion.
-function claimPort(port: number): boolean {
-  try {
-    return tryClaim(port);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw claimError(port, err);
-    // macOS prunes its per-user temp dir, and in this session it did — every later freePort() threw
-    // ENOENT with no way back. Rebuild the directory and try once; a second failure is real.
-    try {
-      mkdirSync(CLAIM_DIR, { recursive: true });
-      return tryClaim(port);
-    } catch (retry) {
-      throw claimError(port, retry);
-    }
   }
 }
 
@@ -266,23 +245,19 @@ function splitAnswer(received: string): RawAnswer {
   }
 }
 
-// Everything src/auth/oauth-flow.ts can answer, verbatim. On /callback: 400 with one of these
-// bodies (or "Authorization failed: <code>"), or 200 with that last one. On any OTHER path: 404 with
-// no body at all (src/auth/oauth-flow.ts, the pathname guard). The asymmetry is the fingerprint —
-// our listener never answers /callback with 404, which is how #13 was spotted.
+// Everything src/auth/oauth-flow.ts can answer on /callback, verbatim: 400 with one of these bodies
+// (or "Authorization failed: <code>"), or 200 with that last one. Never 404 — that is the answer it
+// gives on a path that is NOT /callback, and a 404 here is the fingerprint #13 was spotted by.
 const OUR_BODIES = ['State mismatch', 'Bad request target', 'Missing code', 'Authorized. You can close this tab.'];
 
-function requestPath(target: string): string {
-  return target.split('?')[0];
-}
-
-function couldBeOurs(target: string, { statusLine, body }: RawAnswer): boolean {
+// Every caller below asks about /callback, where a 404 is by definition not ours — so there is no
+// branch for the unknown-path 404 our listener gives on other paths. A future caller that passes
+// one would be told "FOREIGN", loudly and visibly, and then this grows a line.
+function couldBeOurs({ statusLine, body }: RawAnswer): boolean {
   if (statusLine.startsWith('HTTP/1.1 400')) {
     return OUR_BODIES.includes(body) || body.startsWith('Authorization failed: ');
   }
-  if (statusLine.startsWith('HTTP/1.1 200')) return body === 'Authorized. You can close this tab.';
-  // Our own 404 — the unknown-path answer, and OURS on any path but /callback.
-  return statusLine.startsWith('HTTP/1.1 404') && body === '' && requestPath(target) !== '/callback';
+  return statusLine.startsWith('HTTP/1.1 200') && body === 'Authorized. You can close this tab.';
 }
 
 // The answer to a raw request, having first established that OUR listener is the one that gave it
@@ -292,7 +267,7 @@ function couldBeOurs(target: string, { statusLine, body }: RawAnswer): boolean {
 // blaming a stranger for it would be the same error pointed the other way.
 export async function answerFromOurListener(port: number, target: string): Promise<RawAnswer> {
   const answer = await settlesWithin(`the raw request ${target}`, rawExchange(port, target));
-  if (couldBeOurs(target, answer)) return answer;
+  if (couldBeOurs(answer)) return answer;
   if (answer.statusLine === '') {
     return expect.fail(
       `the peer on port ${port} closed the connection without answering ${target} — no status line at ` +
@@ -303,9 +278,8 @@ export async function answerFromOurListener(port: number, target: string): Promi
   return expect.fail(
     `the answer on port ${port} did not come from our callback listener — a FOREIGN listener holds ` +
       `this port. It answered ${JSON.stringify(answer.statusLine)} with body ${JSON.stringify(answer.body)}; ` +
-      `ours answers ${target} with 400 or 200 and one of ${JSON.stringify(OUR_BODIES)}, and 404 only on a ` +
-      `path that is not /callback. Read this as a port collision (#13), not as a wrong status from our ` +
-      `own code.`,
+      `ours answers ${target} with 400 or 200 and one of ${JSON.stringify(OUR_BODIES)}, and never with ` +
+      `404. Read this as a port collision (#13), not as a wrong status from our own code.`,
   );
 }
 

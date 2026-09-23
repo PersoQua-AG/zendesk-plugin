@@ -80,23 +80,27 @@ describe('the port a remote test server is put on', () => {
   });
 
   // The lesson lived in a comment inside harness.ts and four suites never read it. A comment cannot
-  // fail; this can. Matches an ephemeral bind that does NOT name the loopback address — `.listen(0)`,
-  // `.listen( 0 )`, `.listen(0, cb)` and `.listen(0, '0.0.0.0')` alike — across both test trees,
-  // because the class is not confined to one directory.
-  const WILDCARD_BIND = /\.listen\(\s*0\s*(?!,\s*'127\.0\.0\.1')/;
+  // fail; this can. Matches an ephemeral bind that does not name the loopback address — `.listen(0)`,
+  // `.listen( 0 )`, `.listen(0, cb)`, `.listen(0, "0.0.0.0")` alike — in CODE, with comments stripped
+  // first: matching prose needed two files exempted that have no wildcard bind in them at all, and
+  // left both blind to a real one arriving later.
+  const WILDCARD_BIND = /\.listen\(\s*0\s*(?!\s*,\s*['"]127\.0\.0\.1['"])/;
+  const COMMENTS = /\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
 
-  // harness.ts owns the correct bind; this file demonstrates the wrong one on purpose; and
-  // oauth-flow.bind-liveness.test.ts binds the wildcard DELIBERATELY — it needs the collision with
-  // the production listener's own wildcard bind, and a loopback host would make it prove nothing.
-  const EXEMPT = new Set(['harness.ts', 'listen-loopback.test.ts', 'oauth-flow.bind-liveness.test.ts']);
+  // The only exemption left, and it is a code one: oauth-flow.bind-liveness.test.ts binds the
+  // wildcard DELIBERATELY — it needs the collision with the production listener's own wildcard bind,
+  // and a loopback host would make it prove nothing.
+  const EXEMPT = new Set(['oauth-flow.bind-liveness.test.ts']);
 
-  it('is acquired without a wildcard bind by every suite in tests/', () => {
+  // The two trees that hold port-binding suites today, not the whole of tests/ — a tree-walking
+  // guard next to scripts/assert-executor-safety.mjs is the right home for that, and its own change.
+  it('is acquired without a wildcard bind by every suite in tests/auth and tests/server-remote', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const trees = [here, join(here, '..', 'auth')];
     const offenders = trees.flatMap((dir) =>
       readdirSync(dir)
         .filter((name) => name.endsWith('.ts') && !EXEMPT.has(name))
-        .filter((name) => WILDCARD_BIND.test(readFileSync(join(dir, name), 'utf8')))
+        .filter((name) => WILDCARD_BIND.test(readFileSync(join(dir, name), 'utf8').replace(COMMENTS, '')))
         .map((name) => join(dir, name)),
     );
     expect(offenders).toEqual([]);
