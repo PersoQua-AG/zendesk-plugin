@@ -162,23 +162,34 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                 server.on('listening', () => bound({ promise, close }));
             }
             catch (err) {
-                bindFailed(err);
+                // Not `err as Error`: a throw from any of these is not typed, and login.ts's failureText
+                // reads `err instanceof Error` (src/tools/login.ts:95). The cast was a lie the type system
+                // could not catch, written only to satisfy an earlier, stricter reading of the guard.
+                bindFailed(err instanceof Error ? err : new Error(String(err)));
             }
         });
         // On a bind failure nobody holds `promise` yet — it is rejected before this function resolves,
         // which would surface as an unhandled rejection. The bind error reaches the caller through
         // bindFailed instead; a caller that DOES hold the listener still sees its own rejection.
         promise.catch(() => { });
-        // listen() stands HERE, in the OUTER executor, on purpose: it validates its port synchronously
-        // and throws a RangeError that is never delivered as an 'error' event, so only from here does
-        // such a throw reject the Promise this function returns. From the inner executor it rejected
-        // `promise` instead, which the catch above swallows — and this function stayed pending forever.
+        // listen() stands HERE, in the OUTER executor, on purpose, and this is the PREFERRED shape: it
+        // validates its port synchronously and throws a RangeError that is never delivered as an
+        // 'error' event, so only from here does such a throw reject the Promise this function returns.
+        // From the inner executor it rejected `promise` instead, which the catch above swallows.
+        //
+        // Two layers now stand between that throw and a pending promise, and they are not redundant:
+        // this placement is the fix, and the inner executor's try/catch is the net under everything
+        // ELSE in that body (createServer, the emitter registrations) that #9 never looked at.
         try {
             server.listen(port);
         }
         catch {
-            // Cleanup and wording only, NOT liveness: close() runs finish(), so a refused bind leaves
-            // nothing behind, and node's own text names internals and no remedy, so it is replaced.
+            // Cleanup and wording only, NOT liveness. Honest about its own reach: if the INNER executor
+            // threw, `server` and `close` were never assigned, so listen() throws a TypeError here,
+            // close() throws a second one, and both are swallowed because bindFailed() has already
+            // settled this promise. Harmless — there is nothing to close on that path — but the cleanup
+            // below provably does not run there. It carries on the path it was written for: a real
+            // listener that refuses to bind.
             close();
             throw new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`);
         }
