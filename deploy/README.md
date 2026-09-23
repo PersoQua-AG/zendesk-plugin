@@ -85,3 +85,40 @@ The exact claude.ai custom-connector OAuth/discovery/registration contract is pi
 Owner registration (Task 0, `scripts/spike-remote.mjs`); the confirmed values live in
 `src/remote/connector-contract.ts`. Until then the connector runs against the SDK-documented
 defaults marked `ASSUMED` there.
+
+## Upgrading to the downstream refresh grant (M9, issue #7)
+
+**Every user must sign in again once, in the browser.** This is a one-off cost at the upgrade, not
+a recurring one — it is the change that stops the hourly re-authorization.
+
+The encryption envelope is unchanged (AES-256-GCM, same key, same file layout), so old files still
+decrypt. The **plaintext schema inside them is not**: token records moved from
+`{accessToken, refreshToken, expiresAt}` to `{identity, clientId, expiresAt, chainId}`. A record in
+the old shape is now refused rather than accepted with an empty identity, so at the moment of the
+upgrade:
+
+- every outstanding issued **access token** (1 h) stops working,
+- every outstanding **refresh token** (30 days) stops working,
+- the per-user Zendesk credential files under `users/` are **unaffected** — they keep the old
+  three-slot shape and are still read normally.
+
+Nothing has to be deleted by hand; the refused records age out on the normal prune. Deleting
+`<data>/issued/` and `<data>/refresh/` after the upgrade is safe and simply makes it immediate.
+
+### What the refresh grant costs operationally
+
+- **A refresh chain lives 30 days, absolutely.** Rotation renews the token, never the family's
+  deadline, so every user re-authorizes at least monthly. This is deliberate: it keeps the
+  replay evidence alive exactly as long as the chain it protects.
+- **A damaged chain head costs a re-authorization.** The store refuses a refresh token that cannot
+  prove a living family that names it. That is the fail-closed direction, chosen because every
+  alternative leaves a stolen token spendable.
+- **A repeated refresh request is answered idempotently for 10 seconds.** A client whose `200` is
+  lost — a proxy timeout, a mobile handover, a reconnect after standby — may present the same
+  refresh token again inside that window and receives the identical token pair. Nothing rotates a
+  second time. After the window the same presentation is treated as theft and revokes the family.
+  The cost of the window is deliberate and worth knowing: a stolen token replayed inside it, against
+  a chain that is still alive, receives the same pair the legitimate client got. Detection resumes
+  the moment the window closes.
+- **Concurrent presentations do not revoke anything.** Two tabs or a double-click produce one spend;
+  the others are refused as "already in progress" without touching the chain.

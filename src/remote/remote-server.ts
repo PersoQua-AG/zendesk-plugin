@@ -9,6 +9,7 @@ import { DEFAULT_RATE_LIMIT_RPM, INCREMENTAL_RATE_LIMIT_RPM } from '../server.js
 import { IdentityAuthResolver } from '../auth/identity-resolver.js';
 import { IdentityTokenStore } from '../auth/identity-store.js';
 import { IssuedTokenStore } from '../auth/issued-token-store.js';
+import { RefreshTokenStore } from '../auth/refresh-token-store.js';
 import { ZendeskBridgeOAuthProvider } from './bridge-oauth-provider.js';
 import { SessionManager } from './session-manager.js';
 import { WriteAuditLog } from './audit-log.js';
@@ -53,6 +54,10 @@ function assertAllowedRedirect(uri: string, hosts: Set<string>): URL {
 export interface RemoteDeps {
   resolver?: IdentityAuthResolver;
   issued?: IssuedTokenStore;
+  refreshTokens?: RefreshTokenStore;
+  // Overrides CONNECTOR.refreshGrant for one app instance. CONNECTOR is `as const`; a suite that
+  // needs the gate off must not mutate a process-wide singleton that parallel test files share.
+  refreshGrant?: boolean;
   audit?: WriteAuditLog;
   rateLimiter?: RateLimiter;
   incrementalRateLimiter?: RateLimiter;
@@ -84,6 +89,12 @@ export function buildRemoteApp(env: NodeJS.ProcessEnv = process.env, deps: Remot
 
   const resolver = deps.resolver ?? new IdentityAuthResolver(new IdentityTokenStore(`${dataDir}/users`, requireEncKey()), config);
   const issued = deps.issued ?? new IssuedTokenStore(`${dataDir}/issued`, requireEncKey());
+  // Downstream refresh tokens live in their OWN directory with their own (longer) TTL, so an access
+  // token and a refresh token are never interchangeable. The store is built even when the grant is
+  // off, because a directory left over from an earlier enabled run still has to be swept — inert is
+  // not the same as unswept. Only the PROVIDER is gated, and that is what makes the grant inert.
+  const refreshGrant = deps.refreshGrant ?? CONNECTOR.refreshGrant;
+  const refreshTokens = deps.refreshTokens ?? new RefreshTokenStore(`${dataDir}/refresh`, requireEncKey(), CONNECTOR.refreshTtlMs);
   const audit = deps.audit ?? new WriteAuditLog(`${dataDir}/audit/write-audit.jsonl`);
   // Enforce retention at startup, then on an unref'd daily timer so the sweep never holds the
   // process open (D3/A7). No external cron/manual command required. The issued-token sweep rides the
@@ -91,6 +102,7 @@ export function buildRemoteApp(env: NodeJS.ProcessEnv = process.env, deps: Remot
   const prune = (): void => {
     audit.prune();
     issued.prune();
+    refreshTokens.prune();
   };
   prune();
   setInterval(prune, PRUNE_INTERVAL_MS).unref?.();
@@ -99,7 +111,7 @@ export function buildRemoteApp(env: NodeJS.ProcessEnv = process.env, deps: Remot
   const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
 
   const sessions = new SessionManager(env, { resolver, rateLimiter, incrementalRateLimiter, dataDir, audit, fetchImpl: deps.fetchImpl });
-  const provider = new ZendeskBridgeOAuthProvider(config, resolver, issued, CONNECTOR.clientsStore(), deps.fetchImpl ?? fetch, CONNECTOR.callbackUrl);
+  const provider = new ZendeskBridgeOAuthProvider(config, resolver, issued, CONNECTOR.clientsStore(), deps.fetchImpl ?? fetch, CONNECTOR.callbackUrl, refreshGrant ? refreshTokens : undefined);
 
   const app = express();
   // Behind the mandated reverse proxy (Caddy/nginx) the socket IP is the proxy's, so without this
@@ -150,6 +162,11 @@ export function buildRemoteApp(env: NodeJS.ProcessEnv = process.env, deps: Remot
     target.searchParams.set('state', state);
     res.redirect(target.toString());
   });
+  // AC1: a gate that leaves the metadata advertising `refresh_token` is not inert, it is
+  // advertised-and-broken — a client takes the metadata at its word and walks into a refusal. The
+  // SDK hardcodes grant_types_supported (router.js createOAuthMetadata), so the one honest lever is
+  // to drop the grant from the document it produced, leaving every other field the SDK's own.
+  if (!refreshGrant) app.use('/.well-known/oauth-authorization-server', stripRefreshGrant);
   app.use(mcpAuthRouter({
     provider,
     issuerUrl: new URL(CONNECTOR.issuerUrl),
@@ -165,6 +182,21 @@ export function buildRemoteApp(env: NodeJS.ProcessEnv = process.env, deps: Remot
   app.delete('/mcp', bearer, (req: Request, res: Response) => sessions.handleDelete(req, res).catch((e: unknown) => fail(res, e)));
 
   return { app, provider, issued, resolver };
+}
+
+// Rewrites the SDK's authorization-server metadata on the way out, dropping `refresh_token` from
+// grant_types_supported. Wrapping res.json rather than rebuilding the document keeps every other
+// field exactly as the SDK generated it, so this cannot drift as the SDK's metadata grows.
+function stripRefreshGrant(_req: Request, res: Response, next: () => void): void {
+  const json = res.json.bind(res);
+  res.json = (body: unknown): Response => {
+    const meta = body as { grant_types_supported?: string[] };
+    if (Array.isArray(meta?.grant_types_supported)) {
+      meta.grant_types_supported = meta.grant_types_supported.filter((g) => g !== 'refresh_token');
+    }
+    return json(body);
+  };
+  next();
 }
 
 // Surface a 400 without ever logging the request body (REQ-1 negative: no body content in logs).

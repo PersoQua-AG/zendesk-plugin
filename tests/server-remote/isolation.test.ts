@@ -107,7 +107,12 @@ async function bootTwoIdentity(zdTokens: Record<string, string>): Promise<{
     ZENDESK_SUBDOMAIN: 'acme',
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: SECRET,
-    REMOTE_TOKEN_ENC_KEY: 'enc-key-123',
+    // This key is used by buildRemoteApp's OWN default store construction only — the refresh-token
+    // store, which is now built from env. It must clear the 32-byte fail-closed bar (M3). The two
+    // stores this fixture injects below keep their own 'enc-key-123' and are unaffected by it; the
+    // suite asserts cross-identity isolation, not key strength, so their key is deliberately left
+    // as it was rather than silently re-keyed.
+    REMOTE_TOKEN_ENC_KEY: '0+k4qZ+4xicM8rKBVMRYFikJpkLODNCh33wHb08pJyU=',
     CLAUDE_PLUGIN_DATA: dataDir,
   };
   const config: OAuthConfig = { subdomain: 'acme', clientId: 'client-abc', clientSecret: SECRET, callbackPort: 8976, scopes: ['read', 'write'] };
