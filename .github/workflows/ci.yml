@@ -42,3 +42,11 @@ jobs:
       # a ratchet on the rest). Keeping both steps would run every test twice for no new signal, and
       # a threshold that only ever runs locally is a claim, not a gate.
       - run: npm run test:coverage
+      # The release gate, end to end. `.mcpbignore` is an intention; the audit in
+      # scripts/audit-bundle.mjs is the proof, and it is taken from the packed artifact. Running it
+      # only at release time would mean discovering a leak in the tree that is already being
+      # uploaded, so CI packs a real production bundle on every push and audits it. `npm run pack`
+      # is the existing chain — prod-tree gate, mcpb pack, audit — not a second one beside it.
+      # It runs last because `npm ci --omit=dev` removes the toolchain every step above needs.
+      - run: npm ci --omit=dev --ignore-scripts
+      - run: npm run pack

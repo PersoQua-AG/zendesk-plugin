@@ -3,8 +3,12 @@ node_modules/
 .zendesk-plugin-data/
 .DS_Store
 
-# The packed Desktop Extension bundle is a build artifact, produced by `npm run pack`.
+# The packed Desktop Extension bundle is a build artifact, produced by `npm run pack`, and so is
+# the versioned copy plus SHA-256 sidecar that scripts/audit-bundle.mjs emits once it passes.
 *.mcpb
+*.mcpb.sha256
+# The quarantined copy a failed audit leaves behind (see scripts/audit-bundle.mjs).
+*.mcpb.REJECTED
 
 # Coverage output from `npm run test:coverage` (lcov reporter).
 coverage/

@@ -47,6 +47,13 @@ const ALLOWED_USER_CONFIG_KEYS = ['type', 'title', 'description', 'required', 'd
 const ALLOWED_TYPES = ['string', 'number', 'boolean', 'directory', 'file'];
 
 describe('MCPB manifest shape', () => {
+  it('keeps its identity in sync with the Claude Code plugin manifest', () => {
+    // The VERSION half of this used to live here too. scripts/validate-manifests.mjs owns the
+    // version fan-out across all seven hand-kept sites now; a second, weaker copy of one of its
+    // lines is a second owner for one question. The NAME is not part of that fan-out, so it stays.
+    expect(manifest.name).toBe(plugin.name);
+  });
+
   it('declares manifest_version 0.3 and every required top-level field', () => {
     expect(manifest.manifest_version).toBe('0.3');
     for (const key of ['name', 'version', 'description', 'author', 'server']) {
@@ -81,10 +88,6 @@ describe('MCPB manifest shape', () => {
     },
   );
 
-  it('keeps its version and identity in sync with the Claude Code plugin manifest', () => {
-    expect(manifest.name).toBe(plugin.name);
-    expect(manifest.version).toBe(plugin.version);
-  });
 });
 
 describe('MCPB user_config', () => {
