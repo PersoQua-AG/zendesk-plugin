@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Admin-Runbook: Zendesk-Erweiterung ausrollen</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #17181c;
+    --muted: #5b6070;
+    --line: #dfe2ea;
+    --soft: #f5f6f9;
+    --accent: #1f5fd0;
+    --warn-bg: #fff6e6;
+    --warn-line: #e2b24a;
+    --stop-bg: #fdecea;
+    --stop-line: #d0574b;
+    --open-bg: #eef1fb;
+    --open-line: #8398de;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --fg: #e9ebf0;
+      --muted: #a2a8b8;
+      --line: #2e323b;
+      --soft: #1b1e24;
+      --accent: #7aa8f5;
+      --warn-bg: #2a2317;
+      --warn-line: #8a6d28;
+      --stop-bg: #2c1a18;
+      --stop-line: #a14d43;
+      --open-bg: #1a1f2e;
+      --open-line: #4d5f92;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 52rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+  h1 { font-size: 1.85rem; line-height: 1.2; margin: 0 0 .4rem; }
+  h2 { font-size: 1.28rem; margin: 2.6rem 0 .6rem; padding-top: 1.4rem; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.02rem; margin: 1.5rem 0 .35rem; }
+  p, li { margin: .5rem 0; }
+  .lede { color: var(--muted); }
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .92em;
+    background: var(--soft);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow-wrap: anywhere;
+  }
+  code { padding: .05em .34em; }
+  pre { padding: .7rem .9rem; overflow-x: auto; }
+  pre code { border: 0; padding: 0; background: none; }
+  .ui { font-weight: 600; }
+  .box { border: 1px solid var(--line); border-radius: 8px; padding: .9rem 1.1rem; margin: 1.2rem 0; background: var(--soft); }
+  .box.warn { background: var(--warn-bg); border-color: var(--warn-line); }
+  .box.stop { background: var(--stop-bg); border-color: var(--stop-line); }
+  .box.open { background: var(--open-bg); border-color: var(--open-line); }
+  .box > :first-child { margin-top: 0; }
+  .box > :last-child { margin-bottom: 0; }
+  .tag {
+    display: inline-block; font-size: .72rem; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; padding: .12rem .45rem; border-radius: 3px;
+    border: 1px solid currentColor; vertical-align: .12em; margin-right: .4rem;
+  }
+  ol.proc > li { margin: .8rem 0; }
+  .tablewrap { overflow-x: auto; margin: 1rem 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 30rem; font-size: .94rem; }
+  th, td { border: 1px solid var(--line); padding: .5rem .6rem; text-align: left; vertical-align: top; }
+  th { background: var(--soft); font-weight: 600; }
+  footer { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
+  @media print {
+    body { background: #fff; color: #000; }
+    .wrap { max-width: none; padding: 0; }
+    h2 { page-break-after: avoid; }
+    .box { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Admin-Runbook: Zendesk-Erweiterung ausrollen</h1>
+<p class="lede">
+  Für die Person, die den OAuth-Client betreibt und die Datei verteilt — <strong>nicht</strong> für
+  die Kollegen. Die Kollegenanleitung ist eine eigene Seite (<code>install-guide.html</code>) und
+  bleibt frei von allem, was hier steht. Was du hier tust, betrifft immer alle Nutzer gleichzeitig;
+  der Abschnitt <a href="#geteilt">Ein Client für alle</a> sagt, was das im Ernstfall bedeutet.
+</p>
+
+<div class="box">
+  <h3>Was ausgeliefert wird</h3>
+  <div class="tablewrap">
+    <table>
+      <tbody>
+        <tr><th>Artefakt</th><td><code>zendesk-1.0.0.mcpb</code> — die Claude-Desktop-Erweiterung</td></tr>
+        <tr><th>Version</th><td>1.0.0 (übereinstimmend in <code>manifest.json</code> und <code>package.json</code>; abweichende Angaben brechen den Release-Lauf ab)</td></tr>
+        <tr><th>Prüfsumme</th><td><code>zendesk-1.0.0.mcpb.sha256</code> — Beiwerk aus dem Release-Lauf</td></tr>
+        <tr><th>Anleitung</th><td><code>install-guide.html</code> — liegt <em>getrennt daneben</em> zum Download, nicht in einem Archiv</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Beide Dateien liegen nebeneinander auf der Downloadseite. Es gibt bewusst kein Sammelarchiv,
+    damit für den Kollegen kein Entpacken-Schritt entsteht.
+  </p>
+</div>
+
+<h2 id="client">1. OAuth-Client in Zendesk registrieren</h2>
+
+<ol class="proc">
+  <li>
+    Öffne <span class="ui">Zendesk Admin Center → Apps and integrations → APIs → Zendesk API →
+    OAuth Clients</span> und lege einen Client an.
+  </li>
+  <li>
+    Setze die Weiterleitungsadresse (<em>Redirect URI</em>) <strong>exakt</strong> auf:
+    <pre><code>http://localhost:8976/callback</code></pre>
+    <code>8976</code> ist die Voreinstellung des Feldes <strong>OAuth Callback Port</strong> in der
+    Erweiterung. Weicht der Port bei einem Kollegen ab, muss die registrierte Adresse dieselbe Zahl
+    tragen — sonst bricht dessen Anmeldung ab.
+  </li>
+  <li>
+    Notiere <strong>Client-ID</strong> und <strong>Client-Secret</strong>. Das Secret wird von Zendesk
+    nur bei der Anlage vollständig angezeigt.
+  </li>
+</ol>
+
+<div class="box warn">
+  <h3>Port und Weiterleitungsadresse sind ein Paar</h3>
+  <p>
+    Die Anmeldung läuft über einen kurzzeitig geöffneten Zuhörer auf
+    <code>localhost:&lt;Port&gt;</code> auf dem Rechner des Kollegen. Deshalb gilt ohne Ausnahme:
+    registrierte Adresse = <code>http://localhost:&lt;Port&gt;/callback</code> mit genau dem Port,
+    der im Konfigurationsdialog steht. Zulässig sind 1024 bis 65535.
+  </p>
+  <p>
+    <strong>Plane mit dem Standardport.</strong> Belegt ein anderes Programm bei einem Kollegen die
+    8976, braucht dieser Kollege einen anderen Port — und damit eine zweite registrierte Adresse.
+    <em>Ob dieser eine geteilte Client mehrere Weiterleitungsadressen gleichzeitig tragen kann, ist
+    hier nicht belegt</em> (siehe <a href="#offen">Offene Punkte</a>). Bis das geklärt ist, ist ein
+    abweichender Port ein Einzelfall, den du ausdrücklich begleitest.
+  </p>
+</div>
+
+<h2 id="uebergabe">2. Secret an einen Kollegen übergeben</h2>
+
+<p>
+  Der Kollege braucht zwei Werte: <strong>Client-ID</strong> und <strong>Client-Secret</strong>. Die
+  Subdomain hat er selbst. Für den Übergabeweg gilt fest:
+</p>
+<ul>
+  <li><strong>Nicht</strong> über die Downloadseite — sie ist öffentlich erreichbar, die Werte dürfen dort niemals stehen.</li>
+  <li><strong>Nicht</strong> per E-Mail und <strong>nicht</strong> per Chat — beide legen dauerhafte Kopien an, über die du keine Kontrolle mehr hast.</li>
+  <li><strong>Nicht</strong> in einem Ticket, einem Vorgang oder einem Wiki-Eintrag.</li>
+  <li>Empfänger ist eine namentlich bekannte Person, nicht ein Verteiler.</li>
+</ul>
+
+<div class="box open">
+  <p>
+    <span class="tag">Offen</span>
+    <strong>Der konkrete Kanal ist noch nicht entschieden.</strong> Diese Fassung des Runbooks nennt
+    die Bedingungen oben, aber nicht den einen Weg — den legt der Eigentümer fest, und er gehört an
+    diese Stelle, sobald er feststeht. Bis dahin ist jede Übergabe eine Einzelfallentscheidung, die
+    du dokumentierst (wer, wann, worüber). Kandidaten, zwischen denen zu entscheiden ist: ein
+    gemeinsam genutzter Passwort-Tresor mit Freigabe an die Person, ein Einmal-Link mit kurzer
+    Gültigkeit, oder eine mündliche Übergabe. Die Kollegenanleitung sagt dem Leser bereits, dass er
+    die Werte von dir bekommt und <em>nicht</em> per E-Mail oder Chat — sie bindet dich also auf
+    diesen Punkt.
+  </p>
+</div>
+
+<h2 id="geteilt">3. Ein Client für alle — die Folge, ungeschönt</h2>
+
+<div class="box stop">
+  <p>
+    Alle Kollegen benutzen <strong>einen gemeinsamen OAuth-Client</strong> mit
+    <strong>einem gemeinsamen Client-Secret</strong>. Daraus folgt unmittelbar:
+  </p>
+  <p>
+    <strong>Ein geteiltes Secret ist für eine einzelne Person nicht widerrufbar.</strong> Es gibt
+    keinen Schalter, der einem einzelnen Kollegen den Zugang nimmt und die übrigen unberührt lässt.
+  </p>
+  <p>
+    <strong>Beim Offboarding oder bei einem verlorenen Gerät trifft der einzige mögliche Schritt —
+    das Secret zu wechseln — alle Kollegen gleichzeitig.</strong> Jeder von ihnen muss danach den
+    neuen Wert eintragen und sich erneut anmelden. Das ist kein Randfall und keine Fußnote, sondern
+    die Betriebseigenschaft, die mit der Entscheidung für einen gemeinsamen Client eingekauft wurde:
+    Sicherheitsvorfall bei einer Person = Unterbrechung für die gesamte Mannschaft.
+  </p>
+</div>
+
+<h3>Was das Secret nicht kann</h3>
+<ul>
+  <li>
+    Es ersetzt keine Zendesk-Rechte. Jeder Kollege meldet sich mit seinem <em>eigenen</em>
+    Zendesk-Konto an und arbeitet mit dessen Rechten; der geteilte Client ist nur der Türrahmen,
+    nicht der Schlüssel.
+  </li>
+  <li>
+    Wer ein Zendesk-Konto verliert, verliert damit auch den Zugriff über die Erweiterung — insoweit
+    ist die Deaktivierung des Zendesk-Kontos die schnellere und zielgenauere Maßnahme. Das Secret zu
+    wechseln bleibt trotzdem nötig, wenn das Secret selbst kompromittiert sein könnte.
+  </li>
+</ul>
+
+<h2 id="rotation">4. Secret wechseln — Ablauf</h2>
+
+<p>
+  Anlass: Offboarding, verlorenes oder abgegebenes Gerät, Verdacht auf Weitergabe, oder turnusmäßig.
+  Der Wechsel ist eine geplante Unterbrechung für alle Nutzer — kündige ihn an, außer bei einem
+  akuten Vorfall.
+</p>
+
+<ol class="proc">
+  <li>
+    <strong>Ankündigen.</strong> Allen Nutzern mitteilen: ab wann das alte Secret nicht mehr
+    funktioniert und dass jeder danach zwei Handgriffe zu tun hat (Schritt 5 unten).
+  </li>
+  <li>
+    <strong>Neues Secret erzeugen.</strong> In <span class="ui">Admin Center → Apps and integrations
+    → APIs → Zendesk API → OAuth Clients</span> den Client öffnen und ein neues Secret erzeugen.
+    Weiterleitungsadresse dabei unverändert lassen. Den neuen Wert sofort sichern — er wird nur
+    einmal vollständig angezeigt.
+  </li>
+  <li>
+    <strong>Übergeben.</strong> Über den in Abschnitt 2 festgelegten Kanal an jeden Nutzer einzeln.
+    Client-ID bleibt gleich, nur das Secret ändert sich.
+  </li>
+  <li>
+    <strong>Alten Zugang entwerten.</strong> Ist das alte Secret dadurch nicht bereits ungültig, den
+    alten Client löschen oder deaktivieren. Prüfe anschließend an einem eigenen Rechner, dass eine
+    Anmeldung mit dem alten Wert scheitert — sonst hast du rotiert, ohne etwas zu schließen.
+  </li>
+  <li>
+    <strong>Das müssen die Kollegen danach tun</strong> — genau das an sie weitergeben:
+    <ol>
+      <li>
+        In Claude Desktop <span class="ui">Einstellungen (Settings)</span> →
+        <span class="ui">Erweiterungen (Extensions)</span> öffnen, die Zendesk-Erweiterung wählen und
+        im Feld <strong>OAuth Client Secret</strong> den neuen Wert eintragen.
+      </li>
+      <li>
+        In einem Chat erneut anmelden, und zwar ausdrücklich mit <code>force: true</code> — also
+        <code>zendesk_login</code> mit <code>force: true</code> ausführen lassen und die
+        Browser-Bestätigung wie bei der Erstanmeldung durchlaufen (zwei Aufrufe, fünf Minuten
+        Fenster).
+      </li>
+      <li>
+        Mit der Frage <em>„Wer bin ich in Zendesk?“</em> gegenprüfen.
+      </li>
+    </ol>
+  </li>
+</ol>
+
+<div class="box warn">
+  <h3>Warum eine neue Anmeldung unvermeidlich ist</h3>
+  <p>
+    Die gespeicherten Anmeldedaten liegen verschlüsselt auf dem Rechner des Kollegen, und der
+    Schlüssel dafür wird aus dem Client-Secret abgeleitet. Mit einem neuen Secret ist der alte
+    Bestand nicht mehr lesbar — die Erweiterung meldet dann sinngemäß, dass keine Anmeldung
+    vorliegt. Ein Secret zu wechseln, ohne die Nutzer zur Neuanmeldung aufzufordern, erzeugt genau
+    dieses Bild und eine Welle von Rückfragen.
+  </p>
+</div>
+
+<h2 id="offboarding">5. Offboarding und verlorenes Gerät</h2>
+
+<ol class="proc">
+  <li>
+    <strong>Sofort:</strong> das Zendesk-Konto der Person deaktivieren. Das nimmt ihr den Zugriff
+    zielgenau und ohne Nebenwirkung für andere — und es ist der einzige Schritt, der nur sie trifft.
+  </li>
+  <li>
+    <strong>Rechner vorhanden und zugänglich?</strong> Erweiterung entfernen und den Datenordner
+    löschen (siehe Abschnitt 6). Damit verschwindet die verschlüsselte Anmeldung vom Gerät.
+  </li>
+  <li>
+    <strong>Gerät verloren, gestohlen oder nicht mehr zugänglich?</strong> Dann muss das Secret
+    als kompromittiert gelten und <strong>das gemeinsame Secret wird gewechselt</strong> — Abschnitt
+    4, mit der Folge aus Abschnitt 3 für alle. Diese Abwägung gehört dokumentiert: Wer sie
+    unterlässt, lässt ein Secret im Umlauf, das er nicht mehr kontrolliert.
+  </li>
+</ol>
+
+<h2 id="pruefsumme">6. Prüfsumme bereitstellen und gegenprüfen</h2>
+
+<p>
+  Der Release-Lauf erzeugt Artefakt und Prüfsumme nur gemeinsam und nur bei bestandener Prüfung des
+  Bundle-Inhalts. Veröffentliche die SHA-256 sichtbar neben dem Download-Link und trag sie in die
+  Kollegenanleitung ein (Kasten „Das lädst du herunter“).
+</p>
+<p>Gegenprüfen einer heruntergeladenen Datei, mit der Sidecar-Datei im selben Verzeichnis:</p>
+<pre><code>shasum -a 256 -c zendesk-1.0.0.mcpb.sha256</code></pre>
+<p>
+  Meldet ein Kollege eine Abweichung: Lass ihn die Datei löschen, nicht installieren, und prüfe den
+  veröffentlichten Stand selbst gegen die Prüfsumme aus dem Release-Lauf. Fast immer ist es ein
+  abgebrochener Download — ausschließen kannst nur du das.
+</p>
+
+<h2 id="daten">7. Wo Anmeldedaten liegen, und was Deinstallieren zurücklässt</h2>
+
+<p>
+  Die verschlüsselte Anmeldung und ein Antwort-Zwischenspeicher liegen <strong>außerhalb</strong> des
+  Erweiterungsverzeichnisses, in einem festen Ordner pro Benutzer:
+</p>
+<div class="tablewrap">
+  <table>
+    <thead><tr><th>System</th><th>Ordner</th></tr></thead>
+    <tbody>
+      <tr><td>macOS</td><td><code>~/Library/Application Support/zendesk-plugin</code></td></tr>
+      <tr><td>Windows</td><td><code>%APPDATA%\zendesk-plugin</code></td></tr>
+      <tr><td>Linux</td><td><code>$XDG_DATA_HOME/zendesk-plugin</code>, sonst <code>~/.local/share/zendesk-plugin</code></td></tr>
+    </tbody>
+  </table>
+</div>
+<p>
+  Das ist beabsichtigt: Eine Aktualisierung der Erweiterung verwirft die Anmeldung dadurch nicht. Für
+  die Deinstallation heißt es das Gegenteil — <strong>die Erweiterung zu entfernen löscht diese
+  Daten nicht mit.</strong> Wer restlos aufräumen will oder muss, löscht den Ordner von Hand. Das
+  ausgelieferte Bundle selbst enthält niemals Anmeldedaten.
+</p>
+
+<h2 id="offen">Offene Punkte</h2>
+<div class="box open">
+  <ul>
+    <li>
+      <span class="tag">Offen</span> <strong>Der Übergabekanal für das Client-Secret</strong> ist
+      nicht entschieden (Abschnitt 2). Bis dahin trägt nur die Negativliste.
+    </li>
+    <li>
+      <span class="tag">Offen</span> <strong>Mehrere Weiterleitungsadressen an einem Client</strong>
+      — ob der geteilte Client gleichzeitig mehrere <code>localhost</code>-Ports abdecken kann, ist
+      nicht geprüft. Betrifft jeden Kollegen, bei dem der Standardport belegt ist.
+    </li>
+    <li>
+      <span class="tag">Offen</span> <strong>Die genaue Beschriftung zum Entfernen einer
+      Erweiterung</strong> in Claude Desktop ist nicht belegt. Sie wird nach dem ersten
+      Trockenlauf mit installiertem Desktop nachgetragen — zusammen mit den Bildschirmfotos, die
+      diese Fassung noch nicht enthält.
+    </li>
+  </ul>
+</div>
+
+<footer>
+  <p>
+    Zendesk-Erweiterung für Claude Desktop, Version 1.0.0 · PersoQua AG, intern. Dieses Runbook
+    enthält bewusst keine Zugangsdaten, keine Subdomain und keine Adressen aus dem internen Netz.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>

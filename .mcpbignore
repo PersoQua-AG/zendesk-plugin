@@ -11,6 +11,11 @@ docs/
 deploy/
 .worktrees/
 
+# The download pages published NEXT TO the artifact, never inside it. They are also why this line
+# exists rather than nothing: the audit's allowlist is default-deny, so an unlisted web/ entry would
+# not be silently shipped — it would refuse the whole bundle at release time.
+web/
+
 # The Claude Code plugin layer (marketplace manifest, skills, slash commands, subagent) is loaded by
 # Claude Code from the repo, never by a Desktop Extension host. `.claude/` is there because the hub
 # symlinks it into every subproject, and the packer reads THIS file, not .gitignore.
