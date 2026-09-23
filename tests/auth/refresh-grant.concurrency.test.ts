@@ -48,7 +48,7 @@ const [dir, secret, token, startAt] = process.argv.slice(2);
 const store = new RefreshTokenStore(dir, secret, 3600000);
 while (Date.now() < Number(startAt)) { /* spin to the shared start instant */ }
 try {
-  process.stdout.write('OK ' + store.consume(token).identity + '\\n');
+  process.stdout.write('OK ' + store.consume(token).record.identity + '\\n');
 } catch (e) {
   process.stdout.write('REFUSED ' + (e && e.constructor ? e.constructor.name : 'unknown') + '\\n');
 }

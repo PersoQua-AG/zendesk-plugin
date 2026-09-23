@@ -19,11 +19,30 @@ export class RefreshTokenReplayError extends InvalidTokenError {
         this.alreadyDead = alreadyDead;
     }
 }
+// A concurrent presentation of the same token: another process holds the claim and is mid-spend.
+// This is NOT a theft signal, and answering it with a revocation is what killed the winner's
+// session too.
+export class RefreshInFlightError extends InvalidTokenError {
+    constructor() {
+        super('Refresh already in progress for this token - retry shortly.');
+    }
+}
 const SUFFIX_CHAIN = '.chain';
 // A claim exists only for the microseconds between winning the rename and finishing the spend.
 // Anything older is the residue of a process that died mid-spend, and is safe to sweep: a live
 // spend can never be this old, so sweeping cannot disturb the rename's race-freeness.
 const CLAIM_STALE_MS = 60_000;
+// How long the first spend's answer stays repeatable. This is the time a CLIENT needs to notice a
+// lost response and retry — a proxy timeout, a mobile handover, a reconnect after standby — not
+// time granted to a thief. Seconds, deliberately: within it a stolen token replayed against a live
+// chain receives the same pair the legitimate client got, which is the accepted cost of an
+// idempotent token endpoint (RFC 6749 §5.1 clients retry; RFC 6819 §5.2.2.3 detection resumes the
+// moment the window closes).
+const REPEAT_GRACE_MS = 10_000;
+const SUFFIX_REPEAT = '.repeat';
+const SUFFIX_CLAIM = '.claim';
+// `<sha256 of the token>` + this + `<nonce>` + `.claim` — the one place the claim name is defined.
+const CLAIM_INFIX = '.enc.';
 // Downstream refresh tokens: the opaque-token mechanism in its own directory with its own TTL, plus
 // the three things a refresh token needs and an access token does not — an atomic single-use spend,
 // rotation-replay detection, and revocation of the family a replayed token belongs to.
@@ -81,19 +100,19 @@ export class RefreshTokenStore extends OpaqueTokenStore {
         if (preview && Date.now() >= preview.expiresAt) {
             throw new InvalidTokenError('Refresh token expired - re-authorize the Zendesk connector.');
         }
-        const claim = `${live}.${randomBytes(8).toString('hex')}.claim`;
+        const claim = this.claimPath(this.hash(token), randomBytes(8).toString('hex'));
         try {
             renameSync(live, claim);
         }
         catch {
-            throw this.refuseUnclaimed(token);
+            return this.afterClaimFailed(token);
         }
         try {
             const rec = this.readOrRefuse(claim);
             try {
                 // Tombstone BEFORE anything else can refuse: if the caller crashes after this, the token is
                 // still spent, and a later replay is still recognisable as a replay rather than as unknown.
-                this.write(this.pathFor(token, SUFFIX_SPENT), rec);
+                this.writeTombstone(token, { ...rec, spentAt: Date.now() });
             }
             catch (err) {
                 // The tombstone could not be written (ENOSPC). The token is already destroyed by the claim,
@@ -112,7 +131,7 @@ export class RefreshTokenStore extends OpaqueTokenStore {
             const head = this.requireLiveMember(rec.chainId, token);
             // Between this spend and the caller's rotate() the family has no live member.
             this.writeChain(rec.chainId, { ...head, liveHash: '' });
-            return rec;
+            return { kind: 'spent', record: rec };
         }
         finally {
             this.remove(claim);
@@ -128,7 +147,7 @@ export class RefreshTokenStore extends OpaqueTokenStore {
     // The chain head carries its own expiresAt (the family's absolute deadline), so the inherited
     // sweep prunes it correctly once it is told the suffix exists.
     get expiringSuffixes() {
-        return [...super.expiringSuffixes, SUFFIX_CHAIN];
+        return [...super.expiringSuffixes, SUFFIX_CHAIN, SUFFIX_REPEAT];
     }
     // Claims are swept on staleness, not on the record's expiry: their record carries the chain's
     // deadline, which is far in the future, so the inherited prune would keep them forever. One is
@@ -139,7 +158,7 @@ export class RefreshTokenStore extends OpaqueTokenStore {
         if (!existsSync(this.dir))
             return;
         for (const name of readdirSync(this.dir)) {
-            if (!name.endsWith('.claim'))
+            if (!name.endsWith(SUFFIX_CLAIM))
                 continue;
             const path = join(this.dir, name);
             try {
@@ -158,14 +177,26 @@ export class RefreshTokenStore extends OpaqueTokenStore {
             }
         }
     }
-    // `<sha256>.enc.<hex>.claim` -> `<sha256>.spent`, carrying the claim's own record across.
+    // The claim filename is composed and decomposed in one place, so the sweep reads back exactly the
+    // structure the spend wrote rather than re-deriving it with a pattern that can drift apart from it.
+    claimPath(tokenHash, nonce) {
+        return join(this.dir, `${tokenHash}${CLAIM_INFIX}${nonce}${SUFFIX_CLAIM}`);
+    }
+    tokenHashFromClaim(name) {
+        const cut = name.indexOf(CLAIM_INFIX);
+        return cut > 0 && name.endsWith(SUFFIX_CLAIM) ? name.slice(0, cut) : null;
+    }
+    // Carries a stale claim's own record across into a tombstone before the claim is removed.
     tombstoneClaim(path, name) {
-        const spent = name.replace(/\.enc\.[0-9a-f]+\.claim$/, SUFFIX_SPENT);
-        if (spent === name || existsSync(join(this.dir, spent)))
+        const tokenHash = this.tokenHashFromClaim(name);
+        if (!tokenHash)
+            return;
+        const spent = join(this.dir, `${tokenHash}${SUFFIX_SPENT}`);
+        if (existsSync(spent))
             return;
         const rec = this.readSafely(path);
         if (rec)
-            this.write(join(this.dir, spent), rec);
+            this.write(spent, { ...rec, spentAt: Date.now() });
     }
     // Revoke the family a replayed token belongs to. O(1): the head names the one live member.
     // Returns how many live tokens that cost — 0 or 1, because a chain never holds more.
@@ -181,25 +212,77 @@ export class RefreshTokenStore extends OpaqueTokenStore {
         this.writeChain(chainId, { liveHash: '', dead: true, expiresAt: head?.expiresAt ?? Date.now() + this.ttlMs });
         return revoked;
     }
-    // The claim failed. Either the token never existed / already aged out of the store, or it was
-    // rotated earlier and left a tombstone — and only the second case is evidence of theft.
-    refuseUnclaimed(token) {
-        let spent = null;
-        try {
-            spent = this.read(this.pathFor(token, SUFFIX_SPENT));
-        }
-        catch {
-            spent = null; // a corrupt tombstone proves nothing; fall through to the plain refusal
-        }
-        if (!spent?.chainId)
-            return new InvalidTokenError('Unknown refresh token - re-authorize the Zendesk connector.');
-        // Already-dead chain: answer in O(1) without touching anything. This is the case a flood
-        // repeats, so it must stay the cheapest one — the earlier design re-swept the whole directory
-        // here, every single time, for a burnt token that cost the attacker nothing to resend.
+    // The claim failed. Three different things look alike here and used to be answered alike:
+    //   - no tombstone            -> this token never existed, or aged out. Refuse.
+    //   - tombstone, inside the window, answer stored -> the client is asking again. Repeat it.
+    //   - tombstone, inside the window, no answer yet -> somebody else is mid-spend. Refuse WITHOUT
+    //     revoking: concurrency is not theft, and revoking here took the winner's session down too.
+    //   - tombstone, past the window -> a genuine replay. Revoke, as before.
+    afterClaimFailed(token) {
+        const spent = this.readTombstone(token);
+        if (!spent)
+            throw new InvalidTokenError('Unknown refresh token - re-authorize the Zendesk connector.');
         const head = this.readChainSafely(spent.chainId);
         if (head?.dead)
-            return new RefreshTokenReplayError(spent.chainId, 0, true);
-        return new RefreshTokenReplayError(spent.chainId, this.revokeChain(spent.chainId), false);
+            throw new RefreshTokenReplayError(spent.chainId, 0, true);
+        if (Date.now() - spent.spentAt < REPEAT_GRACE_MS) {
+            const repeat = this.readRepeat(token);
+            // Revocation stays authoritative even inside the window: a family that has been killed, or
+            // whose head cannot be read, hands out nothing.
+            // `head` must be readable: a stored answer is not a way around an unverifiable family.
+            // (`dead` is already refused above, before the window is even considered.)
+            if (repeat && head)
+                return { kind: 'repeat', payload: repeat.payload, clientId: repeat.clientId };
+            throw new RefreshInFlightError();
+        }
+        return (() => {
+            throw new RefreshTokenReplayError(spent.chainId, this.revokeChain(spent.chainId), false);
+        })();
+    }
+    // Called by the caller once it has produced the response, so a repeat of the same request can be
+    // answered with the same bytes. Best-effort: a refresh that succeeded must not fail because its
+    // receipt could not be filed.
+    rememberRepeat(token, payload, clientId, chainId) {
+        try {
+            new EncryptedFile(this.pathFor(token, SUFFIX_REPEAT), this.encryptionSecret).save({
+                payload,
+                clientId,
+                chainId,
+                expiresAt: Date.now() + REPEAT_GRACE_MS,
+            });
+        }
+        catch {
+            /* no idempotency for this one request; the grant itself stands */
+        }
+    }
+    // protected: the ENOSPC path is only reachable from the outside by making this write fail.
+    writeTombstone(token, rec) {
+        new EncryptedFile(this.pathFor(token, SUFFIX_SPENT), this.encryptionSecret).save(rec);
+    }
+    readTombstone(token) {
+        try {
+            const rec = new EncryptedFile(this.pathFor(token, SUFFIX_SPENT), this.encryptionSecret).load();
+            if (!rec || typeof rec.chainId !== 'string' || rec.chainId.length === 0)
+                return null;
+            // A tombstone with no spentAt predates the window; treat it as long past, never as fresh.
+            return { ...rec, spentAt: Number.isFinite(rec.spentAt) ? rec.spentAt : 0 };
+        }
+        catch {
+            return null; // a corrupt tombstone proves nothing
+        }
+    }
+    readRepeat(token) {
+        try {
+            const rec = new EncryptedFile(this.pathFor(token, SUFFIX_REPEAT), this.encryptionSecret).load();
+            if (!rec || typeof rec.payload !== 'string' || typeof rec.clientId !== 'string')
+                return null;
+            if (!Number.isFinite(rec.expiresAt) || Date.now() >= rec.expiresAt)
+                return null;
+            return rec;
+        }
+        catch {
+            return null;
+        }
     }
     // Reading a token record must never turn a refusal into a crash on any path that has already
     // mutated something.
@@ -234,19 +317,16 @@ export class RefreshTokenStore extends OpaqueTokenStore {
         // is a safe path segment by construction.
         return new EncryptedFile(join(this.dir, `${chainId}${SUFFIX_CHAIN}`), this.encryptionSecret);
     }
-    readChain(chainId) {
-        const head = this.chainFile(chainId).load();
-        // A head that decrypts but is not a head (an older schema, a foreign plaintext) is not a head.
-        if (!head || typeof head.liveHash !== 'string' || typeof head.dead !== 'boolean')
-            return null;
-        if (!Number.isFinite(head.expiresAt))
-            return null;
-        return head;
-    }
-    // A corrupt head must not turn a refusal into a crash; it is pruned like any other torn file.
+    // A corrupt head must not turn a refusal into a crash, and a head that decrypts but is not a head
+    // (an older schema, a foreign plaintext) is not a head either.
     readChainSafely(chainId) {
         try {
-            return this.readChain(chainId);
+            const head = this.chainFile(chainId).load();
+            if (!head || typeof head.liveHash !== 'string' || typeof head.dead !== 'boolean')
+                return null;
+            if (!Number.isFinite(head.expiresAt))
+                return null;
+            return head;
         }
         catch {
             return null;

@@ -113,6 +113,12 @@ Nothing has to be deleted by hand; the refused records age out on the normal pru
 - **A damaged chain head costs a re-authorization.** The store refuses a refresh token that cannot
   prove a living family that names it. That is the fail-closed direction, chosen because every
   alternative leaves a stolen token spendable.
-- **Presenting the same refresh token twice is treated as theft**, and revokes the family. A client
-  that retries a refresh request concurrently will therefore log its user out. See the note in
-  issue #7 about a possible grace window if this shows up in practice.
+- **A repeated refresh request is answered idempotently for 10 seconds.** A client whose `200` is
+  lost — a proxy timeout, a mobile handover, a reconnect after standby — may present the same
+  refresh token again inside that window and receives the identical token pair. Nothing rotates a
+  second time. After the window the same presentation is treated as theft and revokes the family.
+  The cost of the window is deliberate and worth knowing: a stolen token replayed inside it, against
+  a chain that is still alive, receives the same pair the legitimate client got. Detection resumes
+  the moment the window closes.
+- **Concurrent presentations do not revoke anything.** Two tabs or a double-click produce one spend;
+  the others are refused as "already in progress" without touching the chain.

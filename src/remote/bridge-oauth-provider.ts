@@ -9,7 +9,7 @@ import { buildAuthorizationUrl, exchangeCodeForTokens, type OAuthConfig } from '
 import { fetchZendeskIdentity } from './zendesk-identity.js';
 import type { IdentityAuthResolver } from '../auth/identity-resolver.js';
 import type { IssuedTokenStore } from '../auth/issued-token-store.js';
-import { RefreshTokenReplayError, type RefreshTokenStore, type RefreshRecord } from '../auth/refresh-token-store.js';
+import { RefreshTokenReplayError, RefreshInFlightError, type RefreshTokenStore, type RefreshRecord } from '../auth/refresh-token-store.js';
 import { log } from './logger.js';
 import { describeAuthError } from './error-messages.js';
 
@@ -108,7 +108,16 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
 
     let rec: RefreshRecord;
     try {
-      rec = store.consume(refreshToken); // atomic single-use; unknown/expired/replayed -> throws
+      const outcome = store.consume(refreshToken); // atomic single-use; unknown/expired/replayed -> throws
+      if (outcome.kind === 'repeat') {
+        // The same request asked again inside the grace window — a lost 200, a retry, a second tab.
+        // Answering it with the SAME bytes is what keeps an ordinary OAuth client from being logged
+        // out by its own correct retry behaviour. No mint, no rotation, no new state.
+        if (outcome.clientId !== client.client_id) throw new Error('repeat presented by a different client');
+        log({ msg: 'refresh repeated: same response returned inside the grace window', outcome: '200' });
+        return JSON.parse(outcome.payload) as OAuthTokens;
+      }
+      rec = outcome.record;
     } catch (err: unknown) {
       throw this.refuseConsume(err);
     }
@@ -136,6 +145,8 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
       // Rotation stays inside the SAME chain, so a later replay revokes every descendant of the
       // token that was stolen and nothing else.
       const tokens = this.mintTokens(rec.identity, client.client_id, rec);
+      // File the receipt so the client's retry gets this same answer instead of a revoked chain.
+      store.rememberRepeat(refreshToken, JSON.stringify(tokens), client.client_id, rec.chainId);
       log({ msg: 'refresh granted: access token rotated without re-authorization', outcome: '200' });
       return tokens;
     } catch (err: unknown) {
@@ -162,6 +173,10 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
       if (!err.alreadyDead) {
         log({ msg: `refresh refused: rotation replay detected, chain revoked (${err.revoked} live token(s))`, outcome: '400' });
       }
+    } else if (err instanceof RefreshInFlightError) {
+      // Concurrency, not theft. Logged as its own outcome so a burst of these is never read as an
+      // attack, and — the part that matters — no chain was revoked to produce it.
+      log({ msg: 'refresh refused: another spend of this token is already in progress', outcome: '400' });
     } else if (err instanceof InvalidTokenError) {
       log({ msg: `refresh refused: ${describeAuthError(err)}`, outcome: '400' });
     } else {

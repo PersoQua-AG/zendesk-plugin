@@ -7,6 +7,7 @@ import type { Server } from 'node:http';
 import { buildRemoteApp } from '../../src/remote/remote-server.js';
 import { IssuedTokenStore } from '../../src/auth/issued-token-store.js';
 import { RefreshTokenStore } from '../../src/auth/refresh-token-store.js';
+import { EncryptedFile } from '../../src/auth/encrypted-file.js';
 import { IdentityTokenStore } from '../../src/auth/identity-store.js';
 import { IdentityAuthResolver } from '../../src/auth/identity-resolver.js';
 import { CONNECTOR } from '../../src/remote/connector-contract.js';
@@ -19,6 +20,21 @@ const KEY = '0+k4qZ+4xicM8rKBVMRYFikJpkLODNCh33wHb08pJyU=';
 const SECRET = 'secret-xyz';
 const IDENTITY = 'zendesk:4711';
 
+// Ages every spend past the repeat-grace window, so a later presentation is judged as a REPLAY
+// rather than as a client retry. A test that means theft has to say so.
+function pastGraceWindow(dir: string): void {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (name.endsWith('.repeat')) {
+      rmSync(path);
+      continue;
+    }
+    if (!name.endsWith('.spent')) continue;
+    const file = new EncryptedFile(path, KEY);
+    file.save({ ...(file.load<Record<string, unknown>>() ?? {}), spentAt: Date.now() - 3_600_000 });
+  }
+}
+
 const dirs: string[] = [];
 const servers: Server[] = [];
 afterEach(async () => {
@@ -28,6 +44,7 @@ afterEach(async () => {
 
 interface Started {
   base: string;
+  refreshDir: string;
   clientId: string;
   refreshToken: string;
   issued: IssuedTokenStore;
@@ -70,7 +87,7 @@ async function start({ liveSession = true, refreshGrant = true, breakMint = fals
   servers.push(server);
   await new Promise<void>((r) => server.once('listening', () => r()));
   const { port } = server.address() as AddressInfo;
-  return { base: `http://127.0.0.1:${port}`, clientId: client.client_id, refreshToken, issued };
+  return { base: `http://127.0.0.1:${port}`, refreshDir: join(dataDir, 'refresh'), clientId: client.client_id, refreshToken, issued };
 }
 
 async function postRefresh(base: string, clientId: string, refreshToken: string): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -125,8 +142,9 @@ describe('downstream refresh grant over /token (AC1–AC5)', () => {
   });
 
   it('refuses a REPLAYED refresh token with an OAuth invalid_grant body and never a 500', async () => {
-    const { base, clientId, refreshToken } = await start();
+    const { base, clientId, refreshToken, refreshDir } = await start();
     expect((await postRefresh(base, clientId, refreshToken)).status).toBe(200);
+    pastGraceWindow(refreshDir); // past the retry window, so this is theft and not a lost response
 
     const replay = await postRefresh(base, clientId, refreshToken);
     // The MCP SDK's token handler maps EVERY non-ServerError OAuthError to 400 — the status is not
@@ -182,10 +200,11 @@ describe('downstream refresh grant over /token (AC1–AC5)', () => {
   });
 
   it('revokes the whole rotation chain when a spent token is replayed (RFC 6819)', async () => {
-    const { base, clientId, refreshToken } = await start();
+    const { base, clientId, refreshToken, refreshDir } = await start();
     const first = await postRefresh(base, clientId, refreshToken);
     expect(first.status).toBe(200);
     const live = String(first.body.refresh_token);
+    pastGraceWindow(refreshDir);
 
     // Replaying the spent predecessor is the theft signal.
     expect((await postRefresh(base, clientId, refreshToken)).body.error).toBe('invalid_grant');
