@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
 import { createServer, type RequestListener, type Server } from 'node:http';
 import {
   PORT_BAND_FIRST,
@@ -10,6 +11,7 @@ import {
   closeRawSockets,
   freePort,
   portClaimPath,
+  sweepDeadClaims,
 } from './login-harness.js';
 
 // #13, structurally. The defect was a TOCTOU window: freePort() bound port 0, read the number,
@@ -103,6 +105,87 @@ describe('the port a test is given', () => {
     const ports = Array.from({ length: 32 }, () => freePort());
     expect(new Set(ports).size).toBe(ports.length);
     await Promise.all(ports.map((port) => serve(port)));
+  });
+});
+
+// The sweep is the one thing in the claim that DELETES, so the only way it can hand a port out
+// twice is by calling something live dead. The two kinds of entry it meets are judged by different
+// rules, and the reason is a defect this pins: a staging file legitimately exists with no content
+// yet, because `wx` create and the pid write are two syscalls. Judging it by content read the '' in
+// between, called it ownerless and removed it, and the owner's linkSync then failed with ENOENT.
+//
+// Each case below states one rule of the sweep against the real sweepDeadClaims(), deterministically
+// — it plants the state and calls the sweep, rather than racing for it. Only entries this test owns
+// are planted: a staging name is a UUID, and a claim is one freePort() handed us.
+describe('the sweep that reclaims the band', () => {
+  const claimDir = dirname(portClaimPath(PORT_BAND_FIRST));
+  const planted: string[] = [];
+
+  function plantStaging(contents: string, ageMs = 0): string {
+    const path = join(claimDir, `.staging-${randomUUID()}`);
+    writeFileSync(path, contents, { flag: 'wx' });
+    if (ageMs > 0) {
+      const when = (Date.now() - ageMs) / 1000;
+      utimesSync(path, when, when);
+    }
+    planted.push(path);
+    return path;
+  }
+
+  afterEach(() => {
+    for (const path of planted.splice(0)) rmSync(path, { force: true });
+  });
+
+  // The defect itself. A staging file mid-write is EMPTY and LIVE at the same time, and the sweep
+  // must keep it. Against the pre-fix rule — content for every entry alike — this case is RED.
+  it('keeps a staging file that has been created but not yet written', () => {
+    const staging = plantStaging('');
+    sweepDeadClaims();
+    expect(existsSync(staging)).toBe(true);
+  });
+
+  // The content of a staging file is never the sweep's business, so not even a garbage pid in one
+  // may condemn it. This pins the rule as "by name, then age" rather than "empty is tolerated".
+  it('keeps a staging file whose content could not name an owner', () => {
+    const staging = plantStaging('not-a-pid');
+    sweepDeadClaims();
+    expect(existsSync(staging)).toBe(true);
+  });
+
+  // Age is the ONLY thing that condemns a staging file, so an abandoned one is still reclaimed —
+  // the rule buys the owner a window, it does not leak the directory. MAX_CLAIM_AGE_MS is 30 min.
+  it('reclaims a staging file left behind by a run that died', () => {
+    const staging = plantStaging('', 31 * 60_000);
+    sweepDeadClaims();
+    expect(existsSync(staging)).toBe(false);
+  });
+
+  // And the content rule still stands where it is correct. A claim is published by link(), so it is
+  // never observable half-written: one that reads empty has no owner and must go, or the band fills
+  // up with claims nothing holds. This is the half the fix must NOT have loosened.
+  it('reclaims a claim that names no owner', () => {
+    const port = freePort();
+    const claim = portClaimPath(port);
+    truncateSync(claim, 0);
+    sweepDeadClaims();
+    expect(existsSync(claim)).toBe(false);
+  });
+
+  it('reclaims a claim whose owner has exited, and keeps one whose owner is alive', () => {
+    const dead = spawnSync(process.execPath, ['-e', '0']);
+    expect(dead.pid).toBeGreaterThan(0);
+
+    const abandonedPort = freePort();
+    const abandoned = portClaimPath(abandonedPort);
+    writeFileSync(abandoned, String(dead.pid));
+    const ours = portClaimPath(freePort());
+
+    sweepDeadClaims();
+
+    expect(existsSync(abandoned)).toBe(false);
+    // Ours names a pid that is this very process, so nothing about it can read as dead.
+    expect(readFileSync(ours, 'utf8')).toBe(String(process.pid));
+    expect(existsSync(ours)).toBe(true);
   });
 });
 

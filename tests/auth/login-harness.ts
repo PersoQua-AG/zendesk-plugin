@@ -68,17 +68,42 @@ export function portClaimPath(port: number): string {
 // and the claims ageing out there belong to earlier passes whose listeners are long closed.
 const MAX_CLAIM_AGE_MS = 30 * 60_000;
 
-// A claim stands only if it is BOTH young enough to belong to a running suite AND owned by a
+// What marks an entry as a staging file rather than a claim. Claims are named by their port number,
+// so no claim can collide with it.
+const STAGING_PREFIX = '.staging-';
+
+// Two kinds of entry live here, and they are NOT judged the same way.
+//
+// A CLAIM stands only if it is both young enough to belong to a running suite and owned by a
 // process that still exists. Either half alone leaks the band — the first to killed runs, the
 // second to reused pids. `kill(pid, 0)` sends no signal, it only asks; EPERM means the process
-// exists and is someone else's, which is alive.
-function claimIsLive(path: string): boolean {
+// exists and is someone else's, which is alive. Reading a claim's content is safe because link()
+// only ever publishes a finished one.
+//
+// A STAGING file is judged by its AGE ALONE, because it is the one entry that legitimately exists
+// with no content yet: `wx` create and the pid write are two syscalls, and a sweep that read the ''
+// in between deleted a LIVE staging file out from under its owner, whose linkSync then failed with
+// ENOENT and took freePort() down with it. Measured across two concurrent suite runs: three of five
+// failures were exactly that. A staging file carries its purpose in its NAME; its content is
+// nobody's business but its owner's.
+function entryIsLive(entry: string, path: string): boolean {
+  let age: number;
+  try {
+    age = Date.now() - statSync(path).mtimeMs;
+  } catch {
+    // Swept by another run between the readdir and the stat. Nothing left to keep.
+    return false;
+  }
+  // A clock that moved backwards makes `age` negative: young, which keeps the entry and lets the
+  // owner rule below decide. Never dead by arithmetic.
+  if (age >= MAX_CLAIM_AGE_MS) return false;
+  if (entry.startsWith(STAGING_PREFIX)) return true;
+
   let pid: number;
   try {
-    if (Date.now() - statSync(path).mtimeMs >= MAX_CLAIM_AGE_MS) return false;
     pid = Number.parseInt(readFileSync(path, 'utf8'), 10);
   } catch {
-    // Swept by another run between the readdir and the read, or not a claim at all.
+    // Gone, unreadable, or a directory: the mkdir-shaped claim this replaced reads as EISDIR here.
     return false;
   }
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -94,7 +119,7 @@ function claimIsLive(path: string): boolean {
 // claim at the end of a case. Reclamation is therefore the ONLY release: every process sweeps what
 // dead ones left before it takes anything. Measured without it: 779 claims after seven runs, and a
 // band exhausted after roughly ninety.
-function sweepDeadClaims(): void {
+export function sweepDeadClaims(): void {
   let entries: string[];
   try {
     entries = readdirSync(CLAIM_DIR);
@@ -106,9 +131,9 @@ function sweepDeadClaims(): void {
   for (const entry of entries) {
     const path = join(CLAIM_DIR, entry);
     try {
-      // Every entry here holds its owner's pid — a claim and a staging file alike — so one rule
-      // covers both. `recursive` also clears a claim left by the mkdir shape this replaced.
-      if (!claimIsLive(path)) rmSync(path, { recursive: true, force: true });
+      // `force` so an entry another sweep removed first is not an error, and `recursive` so a claim
+      // left by the mkdir shape this replaced goes too.
+      if (!entryIsLive(entry, path)) rmSync(path, { recursive: true, force: true });
     } catch {
       // A concurrent run swept the same entry first. Not ours to report.
     }
@@ -125,9 +150,11 @@ sweepDeadClaims();
 // `printf "" > $T/20002/pid` was swept despite a fresh mtime.) Hard links need one filesystem, so
 // staging lives in CLAIM_DIR; on Windows they are not universal, and CI is ubuntu-latest.
 //
-// The staging name is random AND created exclusively. A reused name would be a reused inode, and
-// the claim already linked from it would take a fresh mtime and a live owner from a write meant for
-// another port — measured on a hand-built collision: `mtime moved: true`. `wx` is what makes that
+// The staging name is random AND created exclusively, and it starts with STAGING_PREFIX so the
+// sweep above can tell it from a claim and never read its content. A reused name would be a reused
+// inode, and the claim already linked from it would take a fresh mtime and a live owner from a
+// write meant for another port — measured on a hand-built collision: `mtime moved: true`. `wx` is
+// what makes that
 // impossible rather than improbable: the OS refuses the second create instead of the RNG not
 // repeating.
 function claimPort(port: number): boolean {
@@ -135,7 +162,7 @@ function claimPort(port: number): boolean {
   // recovery from macOS pruning its per-user temp dir under a running suite — which it did in this
   // session, after which every freePort() threw ENOENT with no way back.
   mkdirSync(CLAIM_DIR, { recursive: true });
-  const staging = join(CLAIM_DIR, `.staging-${randomUUID()}`);
+  const staging = join(CLAIM_DIR, `${STAGING_PREFIX}${randomUUID()}`);
   writeFileSync(staging, String(process.pid), { flag: 'wx' });
   try {
     linkSync(staging, portClaimPath(port));
