@@ -2,10 +2,10 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { buildRemoteApp } from '../../src/remote/remote-server.js';
 import { IssuedTokenStore } from '../../src/auth/issued-token-store.js';
+import { listenLoopback } from './harness.js';
 
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -26,11 +26,9 @@ async function boot(): Promise<{ base: string; issued: IssuedTokenStore }> {
   };
   const issued = new IssuedTokenStore(join(dataDir, 'issued'), 'enc-key-123');
   const { app } = buildRemoteApp(env, { issued });
-  const server = (app as unknown as { listen: (p: number) => Server }).listen(0);
+  const { server, base } = await listenLoopback(app);
   servers.push(server);
-  await new Promise<void>((r) => server.once('listening', () => r()));
-  const { port } = server.address() as AddressInfo;
-  return { base: `http://127.0.0.1:${port}`, issued };
+  return { base, issued };
 }
 
 const DOWNSTREAM = 'https://claude.ai/cb';

@@ -2,7 +2,6 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -15,6 +14,7 @@ import { IdentityTokenStore } from '../../src/auth/identity-store.js';
 import { IdentityAuthResolver } from '../../src/auth/identity-resolver.js';
 import { IssuedTokenStore } from '../../src/auth/issued-token-store.js';
 import type { OAuthConfig } from '../../src/auth/oauth-flow.js';
+import { listenLoopback } from './harness.js';
 
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -124,11 +124,9 @@ async function bootTwoIdentity(zdTokens: Record<string, string>): Promise<{
   }) as unknown as typeof fetch;
 
   const { app } = buildRemoteApp(env, { resolver, issued, fetchImpl });
-  const server = (app as unknown as { listen: (p: number) => Server }).listen(0);
+  const { server, base } = await listenLoopback(app);
   servers.push(server);
-  await new Promise<void>((r) => server.once('listening', () => r()));
-  const { port } = server.address() as AddressInfo;
-  return { base: `http://127.0.0.1:${port}`, issued, zdBearers, dataDir };
+  return { base, issued, zdBearers, dataDir };
 }
 
 describe('cross-identity session hijack (REQ security)', () => {
