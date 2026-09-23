@@ -243,7 +243,8 @@ describe('downstream refresh grant over /token (AC1–AC5)', () => {
     const stale = new RefreshTokenStore(join(dataDir, 'refresh'), KEY, 1); // 1 ms lifetime
     stale.mint('zendesk:4711', 'claude.ai');
     await new Promise((r) => setTimeout(r, 5)); // let it actually expire; prune compares now >= expiresAt
-    expect(readdirSync(join(dataDir, 'refresh'))).toHaveLength(1);
+    // The token record and its chain head — both expire with the family, both must be swept.
+    expect(readdirSync(join(dataDir, 'refresh'))).toHaveLength(2);
 
     buildRemoteApp(
       { ZENDESK_SUBDOMAIN: 'acme', ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_OAUTH_CLIENT_SECRET: SECRET, REMOTE_TOKEN_ENC_KEY: KEY, CLAUDE_PLUGIN_DATA: dataDir },

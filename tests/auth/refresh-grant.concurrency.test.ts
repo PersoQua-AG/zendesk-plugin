@@ -14,7 +14,12 @@ import { RefreshTokenStore } from '../../src/auth/refresh-token-store.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST_STORE = resolve(HERE, '../../dist/auth/refresh-token-store.js');
-const SRC_STORE = resolve(HERE, '../../src/auth/refresh-token-store.ts');
+// consume() reaches through opaque-token-store and encrypted-file, so a local edit to EITHER would
+// otherwise leave this guard silent while the children measured the old mechanism. CI's
+// `git diff --exit-code dist/` catches it; a local run would not.
+const SRC_FILES = ['refresh-token-store.ts', 'opaque-token-store.ts', 'encrypted-file.ts'].map((f) =>
+  resolve(HERE, '../../src/auth', f),
+);
 const SECRET = 'concurrency-secret-that-is-long-enough';
 const WORKERS = 8;
 
@@ -27,8 +32,10 @@ beforeAll(() => {
   if (!existsSync(DIST_STORE)) {
     throw new Error(`${DIST_STORE} is missing - run \`npm run build\` before the suite (CI builds first).`);
   }
-  if (statSync(DIST_STORE).mtimeMs < statSync(SRC_STORE).mtimeMs) {
-    throw new Error(`${DIST_STORE} is older than its source - run \`npm run build\`; this test would measure stale code.`);
+  const built = statSync(DIST_STORE).mtimeMs;
+  const stale = SRC_FILES.filter((f) => statSync(f).mtimeMs > built);
+  if (stale.length > 0) {
+    throw new Error(`dist/ is older than ${stale.join(', ')} - run \`npm run build\`; this test would measure stale code.`);
   }
 });
 
@@ -92,11 +99,7 @@ describe('AC3 — single-use holds across PROCESSES, not just within one', () =>
     console.log(`cross-process race: ok=${r.ok} refused=${r.refused} of ${r.lines.length} workers`);
     expect(r.ok).toBe(1);
     expect(r.refused).toBe(WORKERS - 1);
-  }, 30_000);
 
-  it('leaves exactly one tombstone, no live token, and no leaked claim file', async () => {
-    const r = await race(4);
-    expect(r.ok).toBe(1);
     const names = readdirSync(r.dir);
     expect(names.filter((n) => n.endsWith('.enc'))).toHaveLength(0); // the token is spent
     expect(names.filter((n) => n.endsWith('.spent'))).toHaveLength(1); // and provably so, for replay detection

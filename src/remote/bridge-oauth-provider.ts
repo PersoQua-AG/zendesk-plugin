@@ -9,7 +9,7 @@ import { buildAuthorizationUrl, exchangeCodeForTokens, type OAuthConfig } from '
 import { fetchZendeskIdentity } from './zendesk-identity.js';
 import type { IdentityAuthResolver } from '../auth/identity-resolver.js';
 import type { IssuedTokenStore } from '../auth/issued-token-store.js';
-import { RefreshTokenReplayError, type RefreshTokenStore } from '../auth/refresh-token-store.js';
+import { RefreshTokenReplayError, type RefreshTokenStore, type RefreshRecord } from '../auth/refresh-token-store.js';
 import { log } from './logger.js';
 import { describeAuthError } from './error-messages.js';
 
@@ -106,7 +106,7 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
       throw new InvalidScopeError('Requested scope exceeds the scope granted to this connector.');
     }
 
-    let rec: { identity: string; clientId: string; chainId: string };
+    let rec: RefreshRecord;
     try {
       rec = store.consume(refreshToken); // atomic single-use; unknown/expired/replayed -> throws
     } catch (err: unknown) {
@@ -135,7 +135,7 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
     try {
       // Rotation stays inside the SAME chain, so a later replay revokes every descendant of the
       // token that was stolen and nothing else.
-      const tokens = this.mintTokens(rec.identity, client.client_id, rec.chainId);
+      const tokens = this.mintTokens(rec.identity, client.client_id, rec);
       log({ msg: 'refresh granted: access token rotated without re-authorization', outcome: '200' });
       return tokens;
     } catch (err: unknown) {
@@ -156,7 +156,12 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
     if (err instanceof RefreshTokenReplayError) {
       // A rotated token presented a second time is the classic stolen-chain indicator
       // (RFC 6819 5.2.2.3). consume() has already revoked the family; say how much it took.
-      log({ msg: `refresh refused: rotation replay detected, chain revoked (${err.revoked} live token(s))`, outcome: '400' });
+      // Repeats against an ALREADY-dead chain are not logged: the chain was recorded as dead at the
+      // first detection, so every further attempt adds no information — and this path is reachable
+      // without credentials, so one log line per attempt is an amplifier of its own.
+      if (!err.alreadyDead) {
+        log({ msg: `refresh refused: rotation replay detected, chain revoked (${err.revoked} live token(s))`, outcome: '400' });
+      }
     } else if (err instanceof InvalidTokenError) {
       log({ msg: `refresh refused: ${describeAuthError(err)}`, outcome: '400' });
     } else {
@@ -169,14 +174,21 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
 
   // expires_in is the lifetime the issued store actually enforces, read from the store itself, so
   // the advertised number cannot drift away from the one that expires the token.
-  private mintTokens(identity: string, clientId: string, chainId?: string): OAuthTokens {
+  private mintTokens(identity: string, clientId: string, rotating?: RefreshRecord): OAuthTokens {
     const tokens: OAuthTokens = {
       access_token: this.issued.mint(identity, clientId),
       token_type: 'Bearer',
       expires_in: this.issued.ttlSeconds,
       scope: this.config.scopes.join(' '),
     };
-    if (this.refreshTokens) tokens.refresh_token = this.refreshTokens.mint(identity, clientId, chainId);
+    // Rotation stays inside the SAME family and inherits its absolute deadline; a fresh login
+    // starts a new one. Either way a family holds exactly one live token, which is what lets a
+    // replay be answered without reading the directory.
+    if (this.refreshTokens) {
+      tokens.refresh_token = rotating
+        ? this.refreshTokens.rotate(rotating, clientId)
+        : this.refreshTokens.mint(identity, clientId);
+    }
     return tokens;
   }
 
