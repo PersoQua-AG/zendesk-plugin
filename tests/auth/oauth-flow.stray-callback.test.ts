@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { startCallbackListener } from '../../src/auth/oauth-flow.js';
-import { closeRawSockets, freePort, rawRequest, rebind, settlesWithin } from './login-harness.js';
+import { answerFromOurListener, closeRawSockets, freePort, rebind, settlesWithin } from './login-harness.js';
 
 // Two properties of the callback listener that a raw socket, and only a raw socket, can state.
 //
@@ -25,10 +25,10 @@ afterEach(closeRawSockets);
 // The rejection message for an `error=` callback carrying `raw` (already percent-encoded), read
 // back from a listener that is then closed.
 async function errorMessage(raw: string): Promise<string> {
-  const port = await freePort();
+  const port = freePort();
   const listener = await startCallbackListener(port, 'state-abc', 60_000);
   const assertion = settlesWithin('the error callback', listener.promise).catch((err: Error) => err.message);
-  await settlesWithin('the raw request', rawRequest(port, `/callback?state=state-abc&error=${raw}`));
+  await answerFromOurListener(port, `/callback?state=state-abc&error=${raw}`);
   const message = await assertion;
   listener.close();
   return message;
@@ -36,18 +36,20 @@ async function errorMessage(raw: string): Promise<string> {
 
 describe('a callback without the expected state', () => {
   it('cannot end the pending authorization, so the real callback still completes it', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 60_000);
     try {
       // The reproduction verbatim: no `state` at all, and an `error` value written to inject text.
-      expect(await settlesWithin('the stray error', rawRequest(port, `/callback?error=${ATTACK}`))).toMatch(
-        /^HTTP\/1\.1 400\b/,
-      );
+      expect(await answerFromOurListener(port, `/callback?error=${ATTACK}`)).toEqual({
+        statusLine: 'HTTP/1.1 400 Bad Request',
+        body: 'State mismatch',
+      });
       // And the same with a state that is merely wrong, plus a callback that would otherwise have
       // been accepted — a foreign `code` must not be exchangeable either.
-      expect(await settlesWithin('a foreign state', rawRequest(port, '/callback?state=other&code=foreign'))).toMatch(
-        /^HTTP\/1\.1 400\b/,
-      );
+      expect(await answerFromOurListener(port, '/callback?state=other&code=foreign')).toEqual({
+        statusLine: 'HTTP/1.1 400 Bad Request',
+        body: 'State mismatch',
+      });
 
       await fetch(`http://localhost:${port}/callback?code=the-code&state=state-abc`);
       await expect(settlesWithin('the real callback', listener.promise)).resolves.toEqual({
@@ -60,10 +62,10 @@ describe('a callback without the expected state', () => {
   });
 
   it('puts no text of its own into the rejection the model would read', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 10_000);
     const assertion = settlesWithin('the closed listener', listener.promise).catch((err: Error) => err.message);
-    await settlesWithin('the stray error', rawRequest(port, `/callback?error=${ATTACK}`));
+    await answerFromOurListener(port, `/callback?error=${ATTACK}`);
     listener.close();
     // The flow ends on the close() this test performs, with this listener's own wording — nothing
     // the stray request sent survives into it.
@@ -85,12 +87,13 @@ describe('a denial that does carry the expected state', () => {
   });
 
   it('answers the browser rather than leaving the tab hanging', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 60_000);
     const assertion = expect(listener.promise).rejects.toThrow(/access_denied/);
-    expect(await settlesWithin('the denial', rawRequest(port, '/callback?state=state-abc&error=access_denied'))).toMatch(
-      /^HTTP\/1\.1 400\b/,
-    );
+    expect(await answerFromOurListener(port, '/callback?state=state-abc&error=access_denied')).toEqual({
+      statusLine: 'HTTP/1.1 400 Bad Request',
+      body: 'Authorization failed: access_denied',
+    });
     await assertion;
   });
 
@@ -138,15 +141,16 @@ describe('a denial that does carry the expected state', () => {
 // the timeout must still be the reason the flow ends, not a stray request's.
 describe('the timeout under a burst of stray callbacks', () => {
   it('still fires, and still with its own wording', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 300);
     const assertion = settlesWithin('the timed-out listener', listener.promise).catch((err: Error) => err.message);
 
     // Enough requests to span the whole window, each one a fresh connection the handler must answer.
     for (let i = 0; i < 25; i += 1) {
-      expect(await settlesWithin(`stray #${i}`, rawRequest(port, `/callback?error=denied&state=wrong-${i}`))).toMatch(
-        /^HTTP\/1\.1 400\b/,
-      );
+      expect(await answerFromOurListener(port, `/callback?error=denied&state=wrong-${i}`)).toEqual({
+        statusLine: 'HTTP/1.1 400 Bad Request',
+        body: 'State mismatch',
+      });
     }
 
     expect(await assertion).toBe('OAuth callback timed out after 300ms');

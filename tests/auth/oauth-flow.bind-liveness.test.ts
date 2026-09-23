@@ -140,7 +140,7 @@ describe('the login queue survives every unusable port in the table', () => {
       expect(text, `runLogin(${port})`).toContain('oauth_callback_port');
     }
 
-    const port = await freePort();
+    const port = freePort();
     const after = await settlesWithin('the next runLogin', runLogin(deps(port, { callbackTimeoutMs: 60_000 })));
     expect(after).toMatch(/authorization started/i);
   });

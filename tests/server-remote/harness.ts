@@ -22,6 +22,46 @@ export interface RemoteHarness {
   dispose(): Promise<void>;
 }
 
+// The ONE way a test server in this repo is put on a port. It stood as a comment inside startRemote
+// and four other suites booted their own server without it (#13): callback.test.ts, rate-limit.test.ts,
+// isolation.test.ts and remote-init.test.ts each called `.listen(0)` and then dialled 127.0.0.1.
+//
+// Those are not the same reservation. listen(0) alone binds `::` (measured on macOS/node v22:
+// address() -> {"address":"::","family":"IPv6"}), and a FOREIGN process can then bind
+// 127.0.0.1:<that same port> at the same time — the second bind succeeds, no EADDRINUSE. The
+// client's request then goes to whichever process owns the IPv4 socket, which is how this harness
+// produced `Error POSTing to endpoint: Client sent an HTTP request to an HTTPS server` and
+// `SocketError: other side closed` in roughly one run in four, and callback.test.ts its
+// `rejects an unknown state`. Binding the address the client dials makes the ephemeral port a real
+// reservation: the socket is held from the bind until dispose, with no moment in between at which
+// the port is free.
+//
+// The address check is cheap and load-bearing: if a future edit drops the host argument, it fails
+// HERE, by name, instead of coming back as an intermittent failure in an unrelated suite.
+export function listenLoopback(app: unknown): Promise<{ server: Server; port: number; base: string }> {
+  return new Promise((bound, failed) => {
+    const server = (app as { listen: (p: number, host: string) => Server }).listen(0, '127.0.0.1');
+    // Without this the promise never settles when the bind fails, and a hung await is indis-
+    // tinguishable from a slow test until the suite timeout — the liveness defect #9 was about,
+    // one directory over.
+    server.on('error', failed);
+    server.once('listening', () => {
+      const addr = server.address() as AddressInfo;
+      if (addr.address !== '127.0.0.1') {
+        // Closed before the throw: the caller never receives this server, so nobody else can.
+        server.close();
+        failed(
+          new Error(
+            `test server bound ${addr.address}, not 127.0.0.1 — the client dials 127.0.0.1, and a wildcard bind does not reserve it`,
+          ),
+        );
+        return;
+      }
+      bound({ server, port: addr.port, base: `http://127.0.0.1:${addr.port}` });
+    });
+  });
+}
+
 // Boot buildRemoteApp with an injected mocked Zendesk fetch, a resolver pre-seeded with a valid
 // per-user token for `identity`, and an MCP client already connected over Streamable HTTP.
 export async function startRemote(
@@ -54,23 +94,7 @@ export async function startRemote(
 
   const { app } = buildRemoteApp(env, { resolver, issued, audit, fetchImpl });
   const token = issued.mint(identity);
-  // Bound to 127.0.0.1, not to the wildcard, because the client below dials 127.0.0.1 and those are
-  // not the same reservation. listen(0) alone binds `::` (measured on macOS/node v22:
-  // address() -> {"address":"::","family":"IPv6"}), and a FOREIGN process can then bind
-  // 127.0.0.1:<that same port> at the same time — the second bind succeeds, no EADDRINUSE. The
-  // client's request goes to whichever process owns the IPv4 socket, which is how this harness
-  // produced `Error POSTing to endpoint: Client sent an HTTP request to an HTTPS server` and
-  // `SocketError: other side closed` in roughly one run in four. Binding the address the client
-  // dials makes the ephemeral port a real reservation, so no other process can shadow it.
-  const server = (app as unknown as { listen: (p: number, host: string) => Server }).listen(0, '127.0.0.1');
-  await new Promise<void>((r) => server.once('listening', () => r()));
-  const addr = server.address() as AddressInfo;
-  const { port } = addr;
-  // Cheap and load-bearing: if a future edit drops the host argument, the flake comes back as an
-  // intermittent failure in an unrelated suite instead of failing here.
-  if (addr.address !== '127.0.0.1') {
-    throw new Error(`remote harness bound ${addr.address}, not 127.0.0.1 — the client dials 127.0.0.1`);
-  }
+  const { server, port } = await listenLoopback(app);
 
   const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
