@@ -8,17 +8,23 @@ import { EncryptedFile } from './encrypted-file.js';
 // bearer, one AES-256-GCM record per token, filename = sha256(token) so the bearer never lands on
 // disk raw and no caller-supplied string ever reaches a path. Subclasses add the role —
 // IssuedTokenStore the authorize/CSRF state, RefreshTokenStore the single-use spend and rotation.
-export interface OpaqueRecord {
+// Everything this store keeps on disk expires, and prune is the only reader that cares about
+// nothing else. Stating that as its own contract stops the sweep from depending on the accident
+// that a chain head happens to carry an expiry too.
+export interface Expiring {
+  expiresAt: number;
+}
+
+export interface OpaqueRecord extends Expiring {
   identity: string;
   clientId: string;
-  expiresAt: number;
   // The rotation family. Only RefreshTokenStore sets it; the access-token role has no chain and
   // leaves it empty, which is why it is optional rather than a fourth mandatory slot.
   chainId?: string;
 }
 
 const SUFFIX_LIVE = '.enc';
-const SUFFIX_SPENT = '.spent';
+export const SUFFIX_SPENT = '.spent';
 
 export class OpaqueTokenStore {
   constructor(
@@ -57,7 +63,7 @@ export class OpaqueTokenStore {
       if (!this.expiringSuffixes.some((s) => name.endsWith(s))) continue;
       const path = join(this.dir, name);
       try {
-        const rec = this.read(path);
+        const rec = this.readExpiring(path);
         if (!rec || now >= rec.expiresAt) this.remove(path);
       } catch {
         this.remove(path);
@@ -94,7 +100,22 @@ export class OpaqueTokenStore {
   // Returns null for a missing file; a decrypt/integrity failure propagates so callers can decide
   // (prune unlinks it, the token paths refuse the token) rather than silently treating it as absent.
   protected read(path: string): OpaqueRecord | null {
-    return new EncryptedFile(path, this.encryptionSecret).load<OpaqueRecord>();
+    const rec = new EncryptedFile(path, this.encryptionSecret).load<Partial<OpaqueRecord>>();
+    // load<T>() is an unchecked cast over whatever JSON the file held, so the shape is checked here
+    // rather than trusted. An older release wrote {accessToken, refreshToken, expiresAt}; without
+    // this that record is ACCEPTED with identity undefined, and a record with no expiresAt is
+    // immortal, because `now >= undefined` is false. A record that is not one is not a record.
+    if (!rec || typeof rec.identity !== 'string' || rec.identity.length === 0) return null;
+    if (!Number.isFinite(rec.expiresAt)) return null;
+    return rec as OpaqueRecord;
+  }
+
+  // The sweep's reader: it needs an expiry and nothing else, so it accepts every record kind this
+  // directory holds — token records and chain heads alike.
+  protected readExpiring(path: string): Expiring | null {
+    const rec = new EncryptedFile(path, this.encryptionSecret).load<Partial<Expiring>>();
+    if (!rec || !Number.isFinite(rec.expiresAt)) return null;
+    return rec as Expiring;
   }
 
   // Best-effort unlink: a concurrent sweep or consume may have removed the file already, and that

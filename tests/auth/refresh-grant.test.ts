@@ -9,12 +9,24 @@ import { IdentityTokenStore } from '../../src/auth/identity-store.js';
 import { IdentityAuthResolver } from '../../src/auth/identity-resolver.js';
 import { IssuedTokenStore } from '../../src/auth/issued-token-store.js';
 import { EncryptedFile } from '../../src/auth/encrypted-file.js';
-import { RefreshTokenStore, RefreshTokenReplayError } from '../../src/auth/refresh-token-store.js';
+import { RefreshTokenStore, RefreshTokenReplayError, type RefreshRecord, type ChainHead } from '../../src/auth/refresh-token-store.js';
+import type { OpaqueRecord } from '../../src/auth/opaque-token-store.js';
 import { ZendeskBridgeOAuthProvider } from '../../src/remote/bridge-oauth-provider.js';
 import { CONNECTOR } from '../../src/remote/connector-contract.js';
 import { log } from '../../src/remote/logger.js';
 import type { OAuthConfig } from '../../src/auth/oauth-flow.js';
 import { settlesWithin } from './login-harness.js';
+
+// Captures the instance a call throws, so an assertion can be made about its TYPE and fields.
+// expect(...).toThrow() only matches a message or a class, which is not enough for the chain flags.
+function thrown<T>(fn: () => unknown): T {
+  try {
+    fn();
+  } catch (e: unknown) {
+    return e as T;
+  }
+  throw new Error('expected the call to throw, and it did not');
+}
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -422,14 +434,7 @@ describe('RefreshTokenStore — the paths that only a damaged store reaches', ()
     s.consume(token); // leaves a real tombstone
     const spent = readdirSync(dir).find((n) => n.endsWith('.spent'))!;
     writeFileSync(join(dir, spent), 'not-base64-ciphertext');
-    const err = (() => {
-      try {
-        s.consume(token);
-        return null;
-      } catch (e: unknown) {
-        return e;
-      }
-    })();
+    const err = thrown<Error>(() => s.consume(token));
     // Still refused — but NOT escalated to a chain revocation on evidence that cannot be read.
     expect(err).toBeInstanceOf(InvalidTokenError);
     expect(err).not.toBeInstanceOf(RefreshTokenReplayError);
@@ -444,14 +449,51 @@ describe('RefreshTokenStore — the paths that only a damaged store reaches', ()
     expect(readdirSync(dir).filter((n) => n.endsWith('.claim'))).toHaveLength(0);
   });
 
-  it('reads a record written without a chainId as an empty chain rather than undefined', () => {
-    const { s, dir } = store('legacy');
-    // A record from the access-token role, which has no rotation family: it must not produce an
-    // `undefined` chain that then indexes a file path.
+  it('refuses a record that belongs to no family at all', () => {
+    const { s, dir } = store('chainless');
+    // A well-formed record with no rotation family: nothing vouches for it, so under fail-closed
+    // membership it is not spendable, rather than spendable with an empty chain.
     const token = 'a'.repeat(64);
     const path = join(dir, `${createHash('sha256').update(token).digest('hex')}.enc`);
     new EncryptedFile(path, config.clientSecret).save({ identity: 'zendesk:777', clientId: 'claude.ai', expiresAt: Date.now() + 60_000 });
-    expect(s.consume(token)).toMatchObject({ identity: 'zendesk:777', clientId: 'claude.ai', chainId: '' });
+    expect(() => s.consume(token)).toThrow(InvalidTokenError);
+  });
+
+  it('refuses a record written by an older release, instead of accepting it with no identity', () => {
+    const { s, dir } = store('old-schema');
+    // The shape main shipped: {accessToken, refreshToken, expiresAt}. Accepting it yields
+    // identity === undefined, which only fails two layers later at the Zendesk lookup. A record
+    // that is not a record is refused here.
+    const token = 'b'.repeat(64);
+    const hash = createHash('sha256').update(token).digest('hex');
+    new EncryptedFile(join(dir, `${hash}.enc`), config.clientSecret).save({
+      accessToken: 'zendesk:777',
+      refreshToken: 'claude.ai',
+      expiresAt: Date.now() + 60_000,
+    });
+    expect(() => s.consume(token)).toThrow(InvalidTokenError);
+
+    // A SEPARATE token for the access-token path: consume() above renamed the first one away, so
+    // reusing it here would assert "unknown file" and pass no matter what the validation does.
+    const bearer = 'd'.repeat(64);
+    new EncryptedFile(join(dir, `${createHash('sha256').update(bearer).digest('hex')}.enc`), config.clientSecret).save({
+      accessToken: 'zendesk:777',
+      refreshToken: 'claude.ai',
+      expiresAt: Date.now() + 60_000,
+    });
+    const issued = new IssuedTokenStore(dir, config.clientSecret, 60_000);
+    // Accepting this yields identity === undefined and a bearer that only fails two layers later.
+    expect(() => issued.identityFor(bearer)).toThrow(InvalidTokenError);
+  });
+
+  it('a record with no expiry is refused rather than immortal', () => {
+    const { s, dir } = store('no-expiry');
+    const token = 'c'.repeat(64);
+    const hash = createHash('sha256').update(token).digest('hex');
+    new EncryptedFile(join(dir, `${hash}.enc`), config.clientSecret).save({ identity: 'zendesk:777', clientId: 'claude.ai' });
+    expect(() => s.consume(token)).toThrow(InvalidTokenError);
+    s.prune(Date.now() + 100 * 365 * 24 * 3600_000); // a century on
+    expect(readdirSync(dir).filter((n) => n.endsWith('.enc'))).toHaveLength(0);
   });
 });
 
@@ -524,30 +566,16 @@ describe('rotation chains, as the provider actually builds them', () => {
     const token = store.mint('zendesk:777', 'claude.ai');
     store.consume(token);
 
-    const firstReplay = (() => {
-      try {
-        store.consume(token);
-        return null;
-      } catch (e: unknown) {
-        return e as RefreshTokenReplayError;
-      }
-    })();
+    const firstReplay = thrown<RefreshTokenReplayError>(() => store.consume(token));
     expect(firstReplay).toBeInstanceOf(RefreshTokenReplayError);
-    expect(firstReplay!.alreadyDead).toBe(false); // this one did the revoking
+    expect(firstReplay.alreadyDead).toBe(false); // this one did the revoking
 
     for (let i = 0; i < 3; i++) {
-      const again = (() => {
-        try {
-          store.consume(token);
-          return null;
-        } catch (e: unknown) {
-          return e as RefreshTokenReplayError;
-        }
-      })();
+      const again = thrown<RefreshTokenReplayError>(() => store.consume(token));
       // Without this the provider logs one line per attempt on an unauthenticated path, and the
       // chain's dead state is never recorded at all.
-      expect(again!.alreadyDead).toBe(true);
-      expect(again!.revoked).toBe(0);
+      expect(again.alreadyDead).toBe(true);
+      expect(again.revoked).toBe(0);
     }
   });
 
@@ -557,9 +585,9 @@ describe('rotation chains, as the provider actually builds them', () => {
   it('a replay costs a fixed number of record reads, whatever the directory holds', () => {
     class CountingStore extends RefreshTokenStore {
       reads = 0;
-      protected read(path: string): ReturnType<RefreshTokenStore['consume']> | null {
+      protected read(path: string): OpaqueRecord | null {
         this.reads += 1;
-        return super.read(path) as ReturnType<RefreshTokenStore['consume']> | null;
+        return super.read(path);
       }
     }
     const dir = mkdtempSync(join(tmpdir(), 'zd-cost-'));
@@ -632,16 +660,19 @@ describe('RefreshTokenStore — when the chain machinery itself fails', () => {
     expect(() => store.consume(token)).toThrow(/ENOSPC/);
   });
 
-  it('spends and rotates even when the chain head has been lost', () => {
+  it('refuses to spend when the chain head has been lost, and refuses to rotate a closed family', () => {
     const dir = dirFor('headless');
     const store = new RefreshTokenStore(dir, config.clientSecret, 60_000);
     const token = store.mint('zendesk:777', 'claude.ai');
     rmSync(join(dir, readdirSync(dir).find((n) => n.endsWith('.chain'))!));
-    // A partial restore, or a head pruned early: the spend must still work and rebuild the head
-    // rather than throwing at a user who did nothing wrong.
-    const rec = store.consume(token);
-    const next = store.rotate(rec, 'claude.ai');
-    expect(store.consume(next)).toMatchObject({ identity: 'zendesk:777' });
+    // Last round this asserted the opposite, on an availability argument. It was wrong: while a
+    // token could be spent without a head vouching for it, every way of damaging a head left a
+    // stolen successor fully spendable. A broken head now costs a re-authorization, which is the
+    // trade an auth surface takes.
+    expect(() => store.consume(token)).toThrow(InvalidTokenError);
+    expect(() => store.rotate({ identity: 'zendesk:777', clientId: 'claude.ai', chainId: 'gone', expiresAt: Date.now() + 60_000 }, 'claude.ai')).toThrow(
+      InvalidTokenError,
+    );
   });
 
   it('revoking a family whose live token file is already gone costs nothing and reports zero', () => {
@@ -662,5 +693,169 @@ describe('RefreshTokenStore — when the chain machinery itself fails', () => {
     // removed by a concurrent sweep, without needing to win a real race.
     symlinkSync(join(dir, 'nothing-here'), join(dir, 'ghost.claim'));
     expect(() => store.prune()).not.toThrow();
+  });
+});
+
+// The inversion this round forced: revocation no longer has to FIND the stolen successor; the
+// token has to prove a living family that names it. Every way a head can lose the truth is a
+// refusal. These are the five damage pictures from the torn-head probe, as a suite.
+describe('fail-closed membership — a damaged chain head never frees a stolen token', () => {
+  function chainWithLiveSuccessor(name: string): { store: RefreshTokenStore; dir: string; ancestor: string; successor: string } {
+    const dir = mkdtempSync(join(tmpdir(), `zd-fc-${name}-`));
+    dirs.push(dir);
+    const store = new RefreshTokenStore(dir, config.clientSecret, 3_600_000);
+    const ancestor = store.mint('zendesk:777', 'claude.ai');
+    const successor = store.rotate(store.consume(ancestor), 'claude.ai');
+    return { store, dir, ancestor, successor };
+  }
+
+  const headOf = (dir: string): string => join(dir, readdirSync(dir).find((n) => n.endsWith('.chain'))!);
+
+  it.each([
+    ['head intact (control)', (_dir: string) => undefined],
+    ['head emptied', (dir: string) => writeFileSync(headOf(dir), '')],
+    ['head is garbage bytes', (dir: string) => writeFileSync(headOf(dir), 'not-base64-ciphertext')],
+    ['head is valid ciphertext, foreign plaintext', (dir: string) => new EncryptedFile(headOf(dir), config.clientSecret).save({ something: 'else' })],
+    ['head deleted', (dir: string) => rmSync(headOf(dir))],
+  ])('%s: the replay is refused AND the stolen successor is dead', (_label, damage) => {
+    const { store, dir, ancestor, successor } = chainWithLiveSuccessor(String(_label).slice(0, 8));
+    damage(dir);
+    expect(() => store.consume(ancestor)).toThrow(InvalidTokenError);
+    // THE acceptance condition. Three of these five damage pictures used to leave this spendable
+    // while still reporting the replay as detected.
+    expect(() => store.consume(successor)).toThrow(InvalidTokenError);
+    // And the family is left PROVABLY dead rather than merely unverifiable, whatever shape the old
+    // head was in — otherwise a later restore of the directory could resurrect it.
+    const head = readdirSync(dir).find((n) => n.endsWith('.chain'));
+    expect(head).toBeDefined();
+    expect(new EncryptedFile(join(dir, head!), config.clientSecret).load<{ dead: boolean }>()?.dead).toBe(true);
+  });
+
+  it('writes the head BEFORE the record it names', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zd-wo-'));
+    dirs.push(dir);
+    const order: string[] = [];
+    class RecordingStore extends RefreshTokenStore {
+      protected write(path: string, rec: RefreshRecord): void {
+        if (path.endsWith('.enc')) order.push('record');
+        super.write(path, rec);
+      }
+      protected writeChain(chainId: string, head: ChainHead): void {
+        order.push('head');
+        super.writeChain(chainId, head);
+      }
+    }
+    const store = new RecordingStore(dir, config.clientSecret, 3_600_000);
+    store.mint('zendesk:777', 'claude.ai');
+    // Record-then-head would leave a LIVE record no head names when a crash lands between the two:
+    // an orphan revocation can never find. The order is the only thing standing between those two
+    // half-finished states, so it is asserted directly rather than inferred from a crash test.
+    expect(order).toEqual(['head', 'record']);
+  });
+
+  it('a crash between the head write and the record write leaves no spendable orphan', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zd-order-'));
+    dirs.push(dir);
+    class CrashAfterHead extends RefreshTokenStore {
+      protected write(path: string, rec: RefreshRecord): void {
+        if (path.endsWith('.enc') && this.armed) throw new Error('CRASH between the two writes');
+        super.write(path, rec);
+      }
+      armed = false;
+    }
+    const store = new CrashAfterHead(dir, config.clientSecret, 3_600_000);
+    const rec = store.consume(store.mint('zendesk:777', 'claude.ai'));
+    store.armed = true;
+    expect(() => store.rotate(rec, 'claude.ai')).toThrow(/CRASH/);
+    store.armed = false;
+    // Head-first ordering: the crash leaves a head naming a record that does not exist, which is a
+    // refusal. Record-first would have left a live record no head names — a token nobody can revoke.
+    expect(readdirSync(dir).filter((n) => n.endsWith('.enc'))).toHaveLength(0);
+  });
+
+  it('a clock that jumps past the deadline and back does not burn an honest token', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zd-clock-'));
+    dirs.push(dir);
+    const store = new RefreshTokenStore(dir, config.clientSecret, 60_000);
+    const token = store.mint('zendesk:777', 'claude.ai');
+    // try/finally, not bare assignment: a failing assertion in between would otherwise leave the
+    // global clock an hour fast for every later test that happens to share this worker. That is
+    // exactly what it did on the first run of this suite — three unrelated files went red.
+    const real = Date.now;
+    try {
+      Date.now = () => real() + 3_600_000; // the clock steps an hour forward
+      expect(() => store.consume(token)).toThrow(/expired/);
+    } finally {
+      Date.now = real; // ...and NTP corrects it
+    }
+    // Expiry is judged before anything is destroyed, so the token survives the excursion instead of
+    // coming back as a replay that revokes the user's whole chain.
+    expect(store.consume(token)).toMatchObject({ identity: 'zendesk:777' });
+  });
+
+  it('a swept stale claim still leaves evidence, so a later replay reads as a replay', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zd-claimev-'));
+    dirs.push(dir);
+    const store = new RefreshTokenStore(dir, config.clientSecret, 3_600_000);
+    const token = store.mint('zendesk:777', 'claude.ai');
+    const live = readdirSync(dir).find((n) => n.endsWith('.enc'))!;
+    const claim = `${live}.deadbeef.claim`;
+    renameSync(join(dir, live), join(dir, claim)); // a process died mid-spend
+    const old = Date.now() / 1000 - 3600;
+    utimesSync(join(dir, claim), old, old);
+
+    store.prune();
+    // mtime is a weak liveness signal, so the sweep is made harmless to DETECTION even when it is
+    // wrong: the grant is gone either way, but the tombstone survives it.
+    expect(readdirSync(dir).filter((n) => n.endsWith('.spent'))).toHaveLength(1);
+    expect(thrown<Error>(() => store.consume(token))).toBeInstanceOf(RefreshTokenReplayError);
+  });
+});
+
+// The last structural guards. Each is a way a file on disk can be well-encrypted and still not be
+// the thing its name claims, which is precisely where an unchecked cast used to let it through.
+describe('record validation — encrypted is not the same as valid', () => {
+  function freshDir(name: string): string {
+    const dir = mkdtempSync(join(tmpdir(), `zd-val-${name}-`));
+    dirs.push(dir);
+    return dir;
+  }
+
+  it('prune removes a record whose plaintext carries no expiry at all', () => {
+    const dir = freshDir('no-exp');
+    const store = new RefreshTokenStore(dir, config.clientSecret, 60_000);
+    new EncryptedFile(join(dir, `${'0'.repeat(64)}.enc`), config.clientSecret).save({ identity: 'zendesk:777' });
+    // Without the expiry check `now >= undefined` is false forever and the record is immortal.
+    store.prune(Date.now() + 1);
+    expect(readdirSync(dir)).toHaveLength(0);
+  });
+
+  it('a chain head with a non-numeric expiry is not a head', () => {
+    const dir = freshDir('head-exp');
+    const store = new RefreshTokenStore(dir, config.clientSecret, 60_000);
+    const token = store.mint('zendesk:777', 'claude.ai');
+    const head = readdirSync(dir).find((n) => n.endsWith('.chain'))!;
+    new EncryptedFile(join(dir, head), config.clientSecret).save({ liveHash: 'x', dead: false, expiresAt: 'soon' });
+    expect(() => store.consume(token)).toThrow(InvalidTokenError);
+  });
+
+  it('the claim sweep does not overwrite a tombstone that already exists', () => {
+    const dir = freshDir('twice');
+    const store = new RefreshTokenStore(dir, config.clientSecret, 3_600_000);
+    const token = store.mint('zendesk:777', 'claude.ai');
+    const rec = store.consume(token); // writes the real tombstone
+    const spentBefore = readFileSync(join(dir, readdirSync(dir).find((n) => n.endsWith('.spent'))!), 'utf8');
+
+    // A stale claim for the SAME token turns up (a crashed retry). Its conversion must not clobber
+    // the tombstone the successful spend already wrote.
+    const claim = `${createHash('sha256').update(token).digest('hex')}.enc.deadbeef.claim`;
+    new EncryptedFile(join(dir, claim), config.clientSecret).save({ ...rec, identity: 'zendesk:impostor' });
+    const old = Date.now() / 1000 - 3600;
+    utimesSync(join(dir, claim), old, old);
+    store.prune();
+
+    const spentAfter = readFileSync(join(dir, readdirSync(dir).find((n) => n.endsWith('.spent'))!), 'utf8');
+    expect(spentAfter).toBe(spentBefore);
+    expect(readdirSync(dir).filter((n) => n.endsWith('.claim'))).toHaveLength(0);
   });
 });

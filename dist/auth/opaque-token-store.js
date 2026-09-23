@@ -4,7 +4,7 @@ import { readdirSync, unlinkSync, existsSync } from 'node:fs';
 import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { EncryptedFile } from './encrypted-file.js';
 const SUFFIX_LIVE = '.enc';
-const SUFFIX_SPENT = '.spent';
+export const SUFFIX_SPENT = '.spent';
 export class OpaqueTokenStore {
     dir;
     encryptionSecret;
@@ -45,7 +45,7 @@ export class OpaqueTokenStore {
                 continue;
             const path = join(this.dir, name);
             try {
-                const rec = this.read(path);
+                const rec = this.readExpiring(path);
                 if (!rec || now >= rec.expiresAt)
                     this.remove(path);
             }
@@ -78,7 +78,24 @@ export class OpaqueTokenStore {
     // Returns null for a missing file; a decrypt/integrity failure propagates so callers can decide
     // (prune unlinks it, the token paths refuse the token) rather than silently treating it as absent.
     read(path) {
-        return new EncryptedFile(path, this.encryptionSecret).load();
+        const rec = new EncryptedFile(path, this.encryptionSecret).load();
+        // load<T>() is an unchecked cast over whatever JSON the file held, so the shape is checked here
+        // rather than trusted. An older release wrote {accessToken, refreshToken, expiresAt}; without
+        // this that record is ACCEPTED with identity undefined, and a record with no expiresAt is
+        // immortal, because `now >= undefined` is false. A record that is not one is not a record.
+        if (!rec || typeof rec.identity !== 'string' || rec.identity.length === 0)
+            return null;
+        if (!Number.isFinite(rec.expiresAt))
+            return null;
+        return rec;
+    }
+    // The sweep's reader: it needs an expiry and nothing else, so it accepts every record kind this
+    // directory holds — token records and chain heads alike.
+    readExpiring(path) {
+        const rec = new EncryptedFile(path, this.encryptionSecret).load();
+        if (!rec || !Number.isFinite(rec.expiresAt))
+            return null;
+        return rec;
     }
     // Best-effort unlink: a concurrent sweep or consume may have removed the file already, and that
     // is the same outcome we wanted. Callers that need the removal to MEAN something (the single-use
