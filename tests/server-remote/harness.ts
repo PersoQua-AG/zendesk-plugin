@@ -38,16 +38,28 @@ export interface RemoteHarness {
 //
 // The address check is cheap and load-bearing: if a future edit drops the host argument, it fails
 // HERE, by name, instead of coming back as an intermittent failure in an unrelated suite.
-export async function listenLoopback(app: unknown): Promise<{ server: Server; port: number; base: string }> {
-  const server = (app as { listen: (p: number, host: string) => Server }).listen(0, '127.0.0.1');
-  await new Promise<void>((r) => server.once('listening', () => r()));
-  const addr = server.address() as AddressInfo;
-  if (addr.address !== '127.0.0.1') {
-    throw new Error(
-      `test server bound ${addr.address}, not 127.0.0.1 — the client dials 127.0.0.1, and a wildcard bind does not reserve it`,
-    );
-  }
-  return { server, port: addr.port, base: `http://127.0.0.1:${addr.port}` };
+export function listenLoopback(app: unknown): Promise<{ server: Server; port: number; base: string }> {
+  return new Promise((bound, failed) => {
+    const server = (app as { listen: (p: number, host: string) => Server }).listen(0, '127.0.0.1');
+    // Without this the promise never settles when the bind fails, and a hung await is indis-
+    // tinguishable from a slow test until the suite timeout — the liveness defect #9 was about,
+    // one directory over.
+    server.on('error', failed);
+    server.once('listening', () => {
+      const addr = server.address() as AddressInfo;
+      if (addr.address !== '127.0.0.1') {
+        // Closed before the throw: the caller never receives this server, so nobody else can.
+        server.close();
+        failed(
+          new Error(
+            `test server bound ${addr.address}, not 127.0.0.1 — the client dials 127.0.0.1, and a wildcard bind does not reserve it`,
+          ),
+        );
+        return;
+      }
+      bound({ server, port: addr.port, base: `http://127.0.0.1:${addr.port}` });
+    });
+  });
 }
 
 // Boot buildRemoteApp with an injected mocked Zendesk fetch, a resolver pre-seeded with a valid

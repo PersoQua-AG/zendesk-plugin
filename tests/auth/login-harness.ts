@@ -3,7 +3,7 @@
 // particular is load-bearing — runLogin keeps its flow in module state, so a case that leaves a
 // listener bound makes the NEXT case depend on the order it ran in.
 import { expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createHttpServer } from 'node:http';
@@ -32,9 +32,12 @@ export let tokensPath: string;
 //   1. drawing it from a band no OS ephemeral allocator draws from (macOS and Windows start at
 //      49152, Linux at 32768), so no listen(0) — in this run, in a parallel `vitest run`, or in any
 //      other process on this machine — can ever be given one of these numbers; and
-//   2. claiming it with mkdir, which is the atomic test-and-set every platform agrees on, in a
-//      directory under the system temp dir. The claim is machine-wide because the collision was:
-//      vitest runs each test file in its own process, and a second checkout runs its own vitest.
+//   2. claiming it in a directory under the system temp dir, with an atomic test-and-set, because
+//      the collision spanned processes: vitest runs each test file in its own process, and a second
+//      checkout runs its own vitest. The reach of that claim is every run of THIS USER on this
+//      machine — tmpdir() is per-user on macOS (/var/folders/…/T) — so two different users can
+//      still be handed the same number. That surfaces as a named EADDRINUSE on the production
+//      bind, not as the silent wrong-listener answer this issue is about.
 //
 // Handing the BOUND listener through instead — the other shape #13 offers — is not available: two
 // sockets cannot hold one port, and the production listener binds the number itself
@@ -49,38 +52,26 @@ const PORT_BAND_SIZE = PORT_BAND_LAST - PORT_BAND_FIRST + 1;
 
 const CLAIM_DIR = join(tmpdir(), 'zendesk-plugin-test-ports');
 
-// The proof that a port is held, as a path a test can stat: `freePort` returns only after this
-// directory exists, and it is removed at process exit, not at the end of the case.
+// The proof that a port is held, as a path a test can read: freePort() returns only once this file
+// exists and names the process that owns it.
 export function portClaimPath(port: number): string {
   return join(CLAIM_DIR, String(port));
 }
 
-// Who holds a claim, so the next run can tell a live reservation from the wreckage of a killed one.
-// Measured, and the reason the exit hook below is not enough on its own: after seven runs the claim
-// dir held 779 entries — vitest ends its worker processes with a signal, and 'exit' does not run
-// then. Without reclamation the band is exhausted after roughly ninety runs.
-const OWNER_FILE = 'pid';
-
-// The only window in which a claim has no owner file is between the mkdir and the write a few
-// microseconds later. A minute of grace closes it: a sweep must never take a claim a live process
-// is in the middle of making — that would hand the same port out twice, which is the very defect
-// this replaces.
-const OWNERLESS_GRACE_MS = 60_000;
-
-const heldClaims: string[] = [];
+// No run of this suite lasts anywhere near this long, so a claim older than it is wreckage even
+// when its pid still answers — pids are reused, and a claim held by an unrelated live process would
+// otherwise hold its port for the lifetime of the machine. Measured before this ceiling existed:
+// `mkdir $T/20001; echo 1 > $T/20001/pid` survived every later load.
+const MAX_CLAIM_AGE_MS = 30 * 60_000;
 
 // `kill(pid, 0)` sends no signal, it only asks. EPERM means the process exists and is someone
-// else's — alive. ESRCH, and anything unreadable, means there is nobody to hold this claim.
-function claimIsLive(path: string): boolean {
+// else's — alive. ESRCH, an unreadable claim, or content that is not a pid means nobody holds it.
+function ownerAlive(path: string): boolean {
   let pid: number;
   try {
-    pid = Number.parseInt(readFileSync(join(path, OWNER_FILE), 'utf8'), 10);
+    pid = Number.parseInt(readFileSync(path, 'utf8'), 10);
   } catch {
-    try {
-      return statSync(path).mtimeMs >= Date.now() - OWNERLESS_GRACE_MS;
-    } catch {
-      return false;
-    }
+    return false;
   }
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -91,18 +82,37 @@ function claimIsLive(path: string): boolean {
   }
 }
 
+// Both halves are required: young enough to belong to a running suite, AND owned by a process that
+// still exists. Either alone leaks the band — the first to killed runs, the second to reused pids.
+function claimIsLive(path: string): boolean {
+  let age: number;
+  try {
+    age = Date.now() - statSync(path).mtimeMs;
+  } catch {
+    // Gone between the readdir and the stat: another run swept it, and there is nothing to keep.
+    return false;
+  }
+  return age < MAX_CLAIM_AGE_MS && ownerAlive(path);
+}
+
+// Vitest ends its worker processes with a signal, so 'exit' hooks do not run and nothing releases a
+// claim at the end of a case. Reclamation is therefore the ONLY release: every process sweeps what
+// dead ones left before it takes anything. Measured without it: 779 claims after seven runs, and a
+// band exhausted after roughly ninety.
 function sweepDeadClaims(): void {
   let entries: string[];
   try {
     entries = readdirSync(CLAIM_DIR);
   } catch {
-    // No claim dir yet, or it is unreadable: nothing to sweep, and freePort's own mkdir reports the
-    // unreadable case with the path in the message.
+    // No claim dir yet, or it is unreadable: nothing to sweep, and claimPort reports the unreadable
+    // case with the path in the message.
     return;
   }
   for (const entry of entries) {
     const path = join(CLAIM_DIR, entry);
     try {
+      // Every entry here carries its owner's pid — a claim and a staging file alike — so one rule
+      // covers both. `recursive` also clears a claim left by the mkdir shape this replaced.
       if (!claimIsLive(path)) rmSync(path, { recursive: true, force: true });
     } catch {
       // A concurrent run swept the same entry first. Not ours to report.
@@ -112,27 +122,51 @@ function sweepDeadClaims(): void {
 
 mkdirSync(CLAIM_DIR, { recursive: true });
 sweepDeadClaims();
-process.on('exit', () => {
-  for (const path of heldClaims.splice(0)) rmSync(path, { recursive: true, force: true });
-});
 
-// mkdir with no `recursive` fails with EEXIST when the name is taken — atomically, across processes.
-// Every other failure (an unwritable temp dir, say) is reported rather than read as "taken", which
-// would spin the scan below through all 10 000 candidates and then blame exhaustion.
-function claimPort(port: number): boolean {
-  const path = portClaimPath(port);
+// A claim must NEVER be observable without its owner: a claim that can be read empty is a claim a
+// concurrent sweep calls ownerless and removes, and then the port goes out twice — the very defect
+// this replaces, in a narrower window. So the pid is written under a private staging name FIRST and
+// the finished file is then hard-linked into place; link() fails with EEXIST when the name is
+// taken, which makes publication and test-and-set one step. (Create-then-write, mkdir-then-write
+// included, cannot do that: measured, `printf "" > $T/20002/pid` was swept despite a fresh mtime.)
+// Each claim gets its own staging file, and so its own inode: hard links share an mtime, and a
+// reused staging file would keep refreshing the age of every claim already linked from it.
+let stagingSeq = 0;
+
+function tryClaim(port: number): boolean {
+  const staging = join(CLAIM_DIR, `.staging-${process.pid}-${(stagingSeq += 1)}`);
+  writeFileSync(staging, String(process.pid));
   try {
-    mkdirSync(path);
+    linkSync(staging, portClaimPath(port));
+    return true;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
-    throw new Error(`could not claim test port ${port} at ${path}: ${(err as Error).message}`);
+    throw err;
+  } finally {
+    rmSync(staging, { force: true });
   }
-  // Immediately after the mkdir, so the window in which this claim looks ownerless is as short as
-  // a write. A failure here leaves a claim nobody can attribute; it is swept a minute later, and
-  // the throw reaches the test rather than being read as "port taken".
-  writeFileSync(join(path, OWNER_FILE), String(process.pid));
-  heldClaims.push(path);
-  return true;
+}
+
+function claimError(port: number, err: unknown): Error {
+  return new Error(`could not claim test port ${port} at ${portClaimPath(port)}: ${(err as Error).message}`);
+}
+
+// Only EEXIST means "taken". Anything else is reported with the path rather than read as taken,
+// which would spin the scan below through all 10 000 candidates and then blame exhaustion.
+function claimPort(port: number): boolean {
+  try {
+    return tryClaim(port);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw claimError(port, err);
+    // macOS prunes its per-user temp dir, and in this session it did — every later freePort() threw
+    // ENOENT with no way back. Rebuild the directory and try once; a second failure is real.
+    try {
+      mkdirSync(CLAIM_DIR, { recursive: true });
+      return tryClaim(port);
+    } catch (retry) {
+      throw claimError(port, retry);
+    }
+  }
 }
 
 // Where this process starts scanning. Only an optimization — the claims, not the offset, are what
@@ -179,8 +213,11 @@ export async function hitCallback(port: number, query: string): Promise<void> {
 // A raw HTTP/1.1 request written to the socket verbatim — no client library in between. fetch()
 // normalizes its target and its query before either reaches the wire, so it can express neither an
 // unparseable request target nor a percent-encoded NUL that survives to the handler; both defects
-// that reached this listener came in through a socket no test was holding. Resolves with the status
-// line, or '' if the peer hung up without answering (what a crashed handler looks like from here).
+// that reached this listener came in through a socket no test was holding.
+//
+// A peer that closes cleanly without answering resolves with an empty status line — what a crashed
+// handler looks like from here. A peer that ABORTS rejects instead (measured: `read ECONNRESET`);
+// the promise settles either way, which is what the caller needs.
 const rawSockets: Socket[] = [];
 
 export interface RawAnswer {
@@ -229,28 +266,46 @@ function splitAnswer(received: string): RawAnswer {
   }
 }
 
-// Everything src/auth/oauth-flow.ts can answer on a /callback target, verbatim: 400 with one of
-// these bodies, 200 with that one. It answers 404 ONLY on a path that is not /callback.
+// Everything src/auth/oauth-flow.ts can answer, verbatim. On /callback: 400 with one of these
+// bodies (or "Authorization failed: <code>"), or 200 with that last one. On any OTHER path: 404 with
+// no body at all (src/auth/oauth-flow.ts, the pathname guard). The asymmetry is the fingerprint —
+// our listener never answers /callback with 404, which is how #13 was spotted.
 const OUR_BODIES = ['State mismatch', 'Bad request target', 'Missing code', 'Authorized. You can close this tab.'];
 
-function couldBeOurs({ statusLine, body }: RawAnswer): boolean {
-  return (
-    (statusLine.startsWith('HTTP/1.1 400') && (OUR_BODIES.includes(body) || body.startsWith('Authorization failed: '))) ||
-    (statusLine.startsWith('HTTP/1.1 200') && OUR_BODIES.includes(body))
-  );
+function requestPath(target: string): string {
+  return target.split('?')[0];
 }
 
-// The answer to a /callback request, having first established that OUR listener is the one that
-// gave it (#13, AC5). Without this, a port collision reads as "expected 400, got 404" and sends the
-// reader hunting a status bug in code that never ran — that is how #13 was nearly mis-filed.
+function couldBeOurs(target: string, { statusLine, body }: RawAnswer): boolean {
+  if (statusLine.startsWith('HTTP/1.1 400')) {
+    return OUR_BODIES.includes(body) || body.startsWith('Authorization failed: ');
+  }
+  if (statusLine.startsWith('HTTP/1.1 200')) return body === 'Authorized. You can close this tab.';
+  // Our own 404 — the unknown-path answer, and OURS on any path but /callback.
+  return statusLine.startsWith('HTTP/1.1 404') && body === '' && requestPath(target) !== '/callback';
+}
+
+// The answer to a raw request, having first established that OUR listener is the one that gave it
+// (#13, AC5). Without this, a port collision reads as "expected 400, got 404" and sends the reader
+// hunting a status bug in code that never ran — that is how #13 was nearly mis-filed. The reverse
+// mis-diagnosis is guarded too: a peer that answered nothing at all is OUR handler having died, and
+// blaming a stranger for it would be the same error pointed the other way.
 export async function answerFromOurListener(port: number, target: string): Promise<RawAnswer> {
   const answer = await settlesWithin(`the raw request ${target}`, rawExchange(port, target));
-  if (couldBeOurs(answer)) return answer;
+  if (couldBeOurs(target, answer)) return answer;
+  if (answer.statusLine === '') {
+    return expect.fail(
+      `the peer on port ${port} closed the connection without answering ${target} — no status line at ` +
+        `all. That is OUR listener with a handler that died, not a stranger: read the request handler ` +
+        `in src/auth/oauth-flow.ts.`,
+    );
+  }
   return expect.fail(
     `the answer on port ${port} did not come from our callback listener — a FOREIGN listener holds ` +
       `this port. It answered ${JSON.stringify(answer.statusLine)} with body ${JSON.stringify(answer.body)}; ` +
-      `ours answers ${target} with 400 or 200 and one of ${JSON.stringify(OUR_BODIES)}. Read this as a port ` +
-      `collision (#13), not as a wrong status from our own code.`,
+      `ours answers ${target} with 400 or 200 and one of ${JSON.stringify(OUR_BODIES)}, and 404 only on a ` +
+      `path that is not /callback. Read this as a port collision (#13), not as a wrong status from our ` +
+      `own code.`,
   );
 }
 

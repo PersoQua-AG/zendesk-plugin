@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { listenLoopback } from './harness.js';
+import { settlesWithin } from '../auth/login-harness.js';
 
 // #13, second site of the same class: a port reservation that is not exclusive.
 //
@@ -59,19 +60,45 @@ describe('the port a remote test server is put on', () => {
     const droppingHost = { listen: (p: number, _host: string) => wildcard.listen(p) };
 
     await expect(listenLoopback(droppingHost)).rejects.toThrow(/not 127\.0\.0\.1/);
-    expect((wildcard.address() as AddressInfo).address).not.toBe('127.0.0.1');
+    // And the refused server is not left listening: the caller never got a handle to close.
+    expect(wildcard.listening).toBe(false);
   });
 
-  it('is acquired through listenLoopback by every suite in this directory', () => {
-    // The lesson lived in a comment inside harness.ts and four suites never read it. A comment
-    // cannot fail; this can. Written as a concatenation so this file does not match itself.
-    const WILDCARD_BIND = `.listen${'(0)'}`;
+  // A bind that fails must REJECT, not hang. A pending promise here looks exactly like a slow test
+  // until the suite timeout, and the whole file it sits in stops reporting anything useful — the
+  // liveness class #9 was about. settlesWithin states it as liveness rather than as a slow assert.
+  it('settles when the bind fails, instead of hanging on a promise nobody resolves', async () => {
+    const taken = track(createServer());
+    await new Promise<void>((r) => taken.listen(0, '127.0.0.1', r));
+    const occupied = (taken.address() as AddressInfo).port;
+    // An app whose listen ignores the port it is given and walks into an EADDRINUSE.
+    const refusing = { listen: (_p: number, host: string) => track(createServer()).listen(occupied, host) };
+
+    await expect(settlesWithin('listenLoopback on a refused bind', listenLoopback(refusing), 1_500)).rejects.toThrow(
+      /EADDRINUSE/,
+    );
+  });
+
+  // The lesson lived in a comment inside harness.ts and four suites never read it. A comment cannot
+  // fail; this can. Matches an ephemeral bind that does NOT name the loopback address — `.listen(0)`,
+  // `.listen( 0 )`, `.listen(0, cb)` and `.listen(0, '0.0.0.0')` alike — across both test trees,
+  // because the class is not confined to one directory.
+  const WILDCARD_BIND = /\.listen\(\s*0\s*(?!,\s*'127\.0\.0\.1')/;
+
+  // harness.ts owns the correct bind; this file demonstrates the wrong one on purpose; and
+  // oauth-flow.bind-liveness.test.ts binds the wildcard DELIBERATELY — it needs the collision with
+  // the production listener's own wildcard bind, and a loopback host would make it prove nothing.
+  const EXEMPT = new Set(['harness.ts', 'listen-loopback.test.ts', 'oauth-flow.bind-liveness.test.ts']);
+
+  it('is acquired without a wildcard bind by every suite in tests/', () => {
     const here = dirname(fileURLToPath(import.meta.url));
-    // harness.ts owns the correct bind; this file demonstrates the wrong one on purpose.
-    const exempt = ['harness.ts', 'listen-loopback.test.ts'];
-    const offenders = readdirSync(here)
-      .filter((name) => name.endsWith('.ts') && !exempt.includes(name))
-      .filter((name) => readFileSync(join(here, name), 'utf8').includes(WILDCARD_BIND));
+    const trees = [here, join(here, '..', 'auth')];
+    const offenders = trees.flatMap((dir) =>
+      readdirSync(dir)
+        .filter((name) => name.endsWith('.ts') && !EXEMPT.has(name))
+        .filter((name) => WILDCARD_BIND.test(readFileSync(join(dir, name), 'utf8')))
+        .map((name) => join(dir, name)),
+    );
     expect(offenders).toEqual([]);
   });
 });

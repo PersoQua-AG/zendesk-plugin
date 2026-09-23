@@ -25,7 +25,7 @@ afterEach(closeRawSockets);
 // The rejection message for an `error=` callback carrying `raw` (already percent-encoded), read
 // back from a listener that is then closed.
 async function errorMessage(raw: string): Promise<string> {
-  const port = await freePort();
+  const port = freePort();
   const listener = await startCallbackListener(port, 'state-abc', 60_000);
   const assertion = settlesWithin('the error callback', listener.promise).catch((err: Error) => err.message);
   await answerFromOurListener(port, `/callback?state=state-abc&error=${raw}`);
@@ -36,7 +36,7 @@ async function errorMessage(raw: string): Promise<string> {
 
 describe('a callback without the expected state', () => {
   it('cannot end the pending authorization, so the real callback still completes it', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 60_000);
     try {
       // The reproduction verbatim: no `state` at all, and an `error` value written to inject text.
@@ -62,7 +62,7 @@ describe('a callback without the expected state', () => {
   });
 
   it('puts no text of its own into the rejection the model would read', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 10_000);
     const assertion = settlesWithin('the closed listener', listener.promise).catch((err: Error) => err.message);
     await answerFromOurListener(port, `/callback?error=${ATTACK}`);
@@ -87,7 +87,7 @@ describe('a denial that does carry the expected state', () => {
   });
 
   it('answers the browser rather than leaving the tab hanging', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 60_000);
     const assertion = expect(listener.promise).rejects.toThrow(/access_denied/);
     expect(await answerFromOurListener(port, '/callback?state=state-abc&error=access_denied')).toEqual({
@@ -141,7 +141,7 @@ describe('a denial that does carry the expected state', () => {
 // the timeout must still be the reason the flow ends, not a stray request's.
 describe('the timeout under a burst of stray callbacks', () => {
   it('still fires, and still with its own wording', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 300);
     const assertion = settlesWithin('the timed-out listener', listener.promise).catch((err: Error) => err.message);
 

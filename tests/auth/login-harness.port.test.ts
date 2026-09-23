@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer, type RequestListener, type Server } from 'node:http';
 import {
@@ -35,7 +35,7 @@ afterEach(() => {
   closeRawSockets();
 });
 
-function serve(port: number, handler: RequestListener): Promise<void> {
+function serve(port: number, handler?: RequestListener): Promise<void> {
   const server = createServer(handler);
   listeners.push(server);
   return new Promise((listening, failed) => {
@@ -81,29 +81,28 @@ describe('the port a test is given', () => {
     expect(PORT_BAND_LAST).toBeLessThan(measured);
   });
 
-  it('is already claimed when the caller receives it, and stays claimed', () => {
+  it('is already claimed when the caller receives it, and the claim names its owner', () => {
     const port = freePort();
     const claim = portClaimPath(port);
-    expect(existsSync(claim)).toBe(true);
-    // A second acquirer — another vitest worker, another `vitest run`, this line — is refused.
-    // Atomically: mkdir without `recursive` is the test-and-set, so there is no moment between the
-    // check and the claim in which both could succeed.
-    expect(() => mkdirSync(claim)).toThrow(/EEXIST/);
-    // And the claim names its owner, which is what lets the next run tell a live reservation from
-    // the wreckage of a killed one instead of exhausting the band.
-    expect(readFileSync(join(claim, 'pid'), 'utf8')).toBe(String(process.pid));
+    // The claim is never observable without its owner — it is published by link(), not created and
+    // then filled in. A claim that could be read empty is one a concurrent sweep calls ownerless and
+    // removes, and then the port goes out twice.
+    expect(readFileSync(claim, 'utf8')).toBe(String(process.pid));
+    // A second acquirer — another vitest worker, another `vitest run`, this line — is refused, and
+    // atomically: there is no moment between the check and the claim in which both could succeed.
+    expect(() => writeFileSync(claim, 'someone else', { flag: 'wx' })).toThrow(/EEXIST/);
   });
 
-  it('is never the port another acquisition is given', async () => {
+  // The concurrency scenario of #13, and the one case that needs a real bind: that nobody else holds
+  // the number is what a bind proves and an assertion about the number cannot. No request is sent
+  // over these sockets — that would test the OS, not the acquisition.
+  // Within one process. Across processes — the case #13 actually failed on, another vitest worker —
+  // no in-process test can state it; that one is measured in the PR's control run, where the pre-fix
+  // shape hands the same number to two processes and this one does not.
+  it('is never the port another acquisition is given, and is free when the caller binds', async () => {
     const ports = Array.from({ length: 32 }, () => freePort());
     expect(new Set(ports).size).toBe(ports.length);
-
-    // And each is usable: no acquisition hands out a number that is already bound.
-    await Promise.all(
-      ports.map((port) => serve(port, (_req, res) => res.writeHead(200, { 'Content-Type': 'text/plain' }).end(String(port)))),
-    );
-    const answers = await Promise.all(ports.map(async (port) => (await fetch(`http://127.0.0.1:${port}/`)).text()));
-    expect(answers).toEqual(ports.map(String));
+    await Promise.all(ports.map((port) => serve(port)));
   });
 });
 
