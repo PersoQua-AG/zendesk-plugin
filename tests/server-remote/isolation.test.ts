@@ -107,7 +107,9 @@ async function bootTwoIdentity(zdTokens: Record<string, string>): Promise<{
     ZENDESK_SUBDOMAIN: 'acme',
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: SECRET,
-    REMOTE_TOKEN_ENC_KEY: 'enc-key-123',
+    // 32 base64 bytes: buildRemoteApp now constructs the refresh-token store from env, and a
+    // sub-32-byte key is refused fail-closed (M3).
+    REMOTE_TOKEN_ENC_KEY: '0+k4qZ+4xicM8rKBVMRYFikJpkLODNCh33wHb08pJyU=',
     CLAUDE_PLUGIN_DATA: dataDir,
   };
   const config: OAuthConfig = { subdomain: 'acme', clientId: 'client-abc', clientSecret: SECRET, callbackPort: 8976, scopes: ['read', 'write'] };

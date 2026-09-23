@@ -51,6 +51,12 @@ export const CONNECTOR = {
   resourceUrl: `${PUBLIC_BASE_URL}/mcp`,
   // The upstream Zendesk redirect_uri: must be identical at authorize and at token exchange.
   callbackUrl: `${PUBLIC_BASE_URL}/callback`,
+  // Does claude.ai use the downstream refresh grant? Pinned true by the Task-0 spike: the SDK's
+  // own metadata already advertises grant_types_supported: ['authorization_code','refresh_token'],
+  // so claude.ai is told the grant exists and without it forces a full browser authorize every
+  // time the issued access token expires. Flip this to false and the grant goes inert — no
+  // refresh_token is minted and every refresh is refused — with no change anywhere downstream.
+  refreshGrant: true,
   // One store instance for the process — registrations must survive across authorize/token calls.
   clientsStore(): OAuthRegisteredClientsStore {
     return (clientsStoreSingleton ??= new InMemoryClientsStore());

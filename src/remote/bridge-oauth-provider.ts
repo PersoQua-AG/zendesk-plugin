@@ -4,6 +4,7 @@ import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprot
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { buildAuthorizationUrl, exchangeCodeForTokens, type OAuthConfig } from '../auth/oauth-flow.js';
 import { fetchZendeskIdentity } from './zendesk-identity.js';
 import type { IdentityAuthResolver } from '../auth/identity-resolver.js';
@@ -27,6 +28,12 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
     // Server's PUBLIC upstream redirect_uri — MUST be byte-identical at authorize and at exchange
     // or Zendesk rejects the token request (redirect_uri mismatch).
     private readonly callbackUrl: string = '',
+    // Downstream refresh grant (M9). Its PRESENCE is the contract gate: when the pinned connector
+    // contract says claude.ai does not use a refresh grant, remote-server passes nothing and the
+    // grant is inert — no refresh_token is minted and every refresh attempt is refused.
+    // A store SEPARATE from `issued`: two namespaces on disk, so an access token can never be
+    // spent as a refresh token nor a refresh token presented as a bearer.
+    private readonly refreshTokens?: IssuedTokenStore,
   ) {}
 
   get clientsStore(): OAuthRegisteredClientsStore {
@@ -64,13 +71,44 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
       refreshToken: tokens.refreshToken,
       expiresAt: Date.now() + tokens.expiresIn * 1000,
     });
-    return { access_token: this.issued.mint(identity, client.client_id), token_type: 'Bearer', expires_in: 3600 };
+    return this.mintTokens(identity, client.client_id);
   }
 
-  async exchangeRefreshToken(): Promise<OAuthTokens> {
-    // Downstream (claude.ai) refresh re-runs authorize; Zendesk-side refresh is transparent via the
-    // per-user AuthManager. Pinned by Task 0 if claude.ai turns out to require a refresh grant.
-    throw new Error('downstream refresh handled by session re-auth — see connector-contract.ts.');
+  // Lets claude.ai renew its opaque access token without a browser authorize, for as long as the
+  // underlying per-user Zendesk session is still usable. Single-use with rotation: the presented
+  // token is spent BEFORE anything else can fail, so a refused refresh leaves no replay window.
+  async exchangeRefreshToken(client: OAuthClientInformationFull, refreshToken: string): Promise<OAuthTokens> {
+    if (!this.refreshTokens) {
+      throw new InvalidGrantError('Refresh grant is not enabled - re-authorize the Zendesk connector.');
+    }
+    let identity: string;
+    try {
+      const rec = this.refreshTokens.consume(refreshToken); // unknown/expired/reused -> throws
+      // Token substitution: a grant minted for one registered client must not be spendable by another.
+      if (rec.clientId !== client.client_id) throw new Error('refresh token was issued to a different client');
+      // Liveness: the mapped identity must still resolve to a usable Zendesk session. getAccessToken()
+      // can reject (dead upstream grant) OR throw synchronously (store construction) — both are a
+      // refusal, never a 500.
+      await this.resolver.forIdentity(rec.identity).getAccessToken();
+      identity = rec.identity;
+    } catch {
+      // One opaque message for every refusal: it must not tell an attacker which check failed, and
+      // it carries no token material. ASCII only (it rides in an OAuth error body).
+      throw new InvalidGrantError('Refresh token is invalid, expired, already used, or the Zendesk session ended - re-authorize the Zendesk connector.');
+    }
+    return this.mintTokens(identity, client.client_id);
+  }
+
+  // expires_in is the lifetime the issued store actually enforces, read from the store itself, so
+  // the advertised number cannot drift away from the one that expires the token.
+  private mintTokens(identity: string, clientId: string): OAuthTokens {
+    const tokens: OAuthTokens = {
+      access_token: this.issued.mint(identity, clientId),
+      token_type: 'Bearer',
+      expires_in: this.issued.ttlSeconds,
+    };
+    if (this.refreshTokens) tokens.refresh_token = this.refreshTokens.mint(identity, clientId);
+    return tokens;
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {

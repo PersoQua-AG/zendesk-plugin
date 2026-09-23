@@ -8,7 +8,7 @@ import { RateLimiter } from '../client/rate-limiter.js';
 import { DEFAULT_RATE_LIMIT_RPM, INCREMENTAL_RATE_LIMIT_RPM } from '../server.js';
 import { IdentityAuthResolver } from '../auth/identity-resolver.js';
 import { IdentityTokenStore } from '../auth/identity-store.js';
-import { IssuedTokenStore } from '../auth/issued-token-store.js';
+import { IssuedTokenStore, REFRESH_TTL_MS } from '../auth/issued-token-store.js';
 import { ZendeskBridgeOAuthProvider } from './bridge-oauth-provider.js';
 import { SessionManager } from './session-manager.js';
 import { WriteAuditLog } from './audit-log.js';
@@ -64,6 +64,11 @@ export function buildRemoteApp(env = process.env, deps = {}) {
     };
     const resolver = deps.resolver ?? new IdentityAuthResolver(new IdentityTokenStore(`${dataDir}/users`, requireEncKey()), config);
     const issued = deps.issued ?? new IssuedTokenStore(`${dataDir}/issued`, requireEncKey());
+    // Downstream refresh tokens live in their OWN directory with their own (longer) TTL, so an access
+    // token and a refresh token are never interchangeable. Contract-gated: no store, no grant.
+    const refreshTokens = CONNECTOR.refreshGrant
+        ? (deps.refreshTokens ?? new IssuedTokenStore(`${dataDir}/refresh`, requireEncKey(), REFRESH_TTL_MS))
+        : undefined;
     const audit = deps.audit ?? new WriteAuditLog(`${dataDir}/audit/write-audit.jsonl`);
     // Enforce retention at startup, then on an unref'd daily timer so the sweep never holds the
     // process open (D3/A7). No external cron/manual command required. The issued-token sweep rides the
@@ -71,6 +76,7 @@ export function buildRemoteApp(env = process.env, deps = {}) {
     const prune = () => {
         audit.prune();
         issued.prune();
+        refreshTokens?.prune();
     };
     prune();
     setInterval(prune, PRUNE_INTERVAL_MS).unref?.();
@@ -78,7 +84,7 @@ export function buildRemoteApp(env = process.env, deps = {}) {
     const rateLimiter = deps.rateLimiter ?? new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
     const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
     const sessions = new SessionManager(env, { resolver, rateLimiter, incrementalRateLimiter, dataDir, audit, fetchImpl: deps.fetchImpl });
-    const provider = new ZendeskBridgeOAuthProvider(config, resolver, issued, CONNECTOR.clientsStore(), deps.fetchImpl ?? fetch, CONNECTOR.callbackUrl);
+    const provider = new ZendeskBridgeOAuthProvider(config, resolver, issued, CONNECTOR.clientsStore(), deps.fetchImpl ?? fetch, CONNECTOR.callbackUrl, refreshTokens);
     const app = express();
     // Behind the mandated reverse proxy (Caddy/nginx) the socket IP is the proxy's, so without this
     // req.ip collapses every client into ONE express-rate-limit bucket (H1's per-IP protection fails —
@@ -139,7 +145,7 @@ export function buildRemoteApp(env = process.env, deps = {}) {
     app.post('/mcp', bearer, (req, res) => sessions.handlePost(req, res).catch((e) => fail(res, e)));
     app.get('/mcp', bearer, (req, res) => sessions.handleGet(req, res).catch((e) => fail(res, e)));
     app.delete('/mcp', bearer, (req, res) => sessions.handleDelete(req, res).catch((e) => fail(res, e)));
-    return { app, provider, issued, resolver };
+    return { app, provider, issued, refreshTokens, resolver };
 }
 // Surface a 400 without ever logging the request body (REQ-1 negative: no body content in logs).
 // The logged line uses the actionable auth/session copy, never a stack trace.

@@ -8,6 +8,11 @@ import { TokenStore } from './token-store.js';
 // claude.ai simply re-authorizes (the durable, restart-surviving state is the per-user Zendesk
 // token store, not these).
 const DEFAULT_TTL_MS = 3_600_000;
+// Lifetime of a DOWNSTREAM refresh token (M9): long enough that claude.ai stops prompting for a
+// browser authorize on an ordinary work rhythm, short enough to bound an undetected theft. It is a
+// ceiling, not the security guarantee — every refresh re-checks that the mapped identity still has
+// a live Zendesk session, so a revoked upstream grant kills the chain long before this elapses.
+export const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days, in milliseconds
 // Bound the in-memory authorize map: abandoned (never-consumed) states are TTL-evicted, but a flood
 // faster than the TTL must not grow unbounded — evict oldest past this hard cap.
 const MAX_PENDING = 10_000;
@@ -29,6 +34,13 @@ export class IssuedTokenStore {
     private readonly encryptionSecret: string,
     private readonly ttlMs: number = DEFAULT_TTL_MS,
   ) {}
+
+  // The store's own token lifetime, in SECONDS — the unit an OAuth `expires_in` is denominated in.
+  // Exposed so the token response reports the lifetime the store actually enforces instead of a
+  // second literal that can drift away from it.
+  get ttlSeconds(): number {
+    return Math.floor(this.ttlMs / 1000);
+  }
 
   // clientId (the real DCR client id from the token exchange) rides in the otherwise-unused
   // refreshToken slot so verifyAccessToken can surface the true issuing client in AuthInfo for
@@ -74,6 +86,26 @@ export class IssuedTokenStore {
     return { identity: rec.accessToken, clientId: rec.refreshToken, expiresAt: rec.expiresAt };
   }
 
+  // Single-use spend of an opaque token (M9 refresh-token rotation): validate exactly as
+  // identityFor, then remove the record so a replay of the same token finds nothing. The unlink IS
+  // the single-use gate — if it fails, another caller already spent the grant (or the record is
+  // unreachable), so refuse rather than hand out a token twice.
+  consume(token: string): { identity: string; clientId: string; expiresAt: number } {
+    const rec = this.identityFor(token); // throws InvalidTokenError for unknown/expired
+    try {
+      this.removeFile(this.pathFor(token));
+    } catch {
+      throw new InvalidTokenError('Refresh token already used - re-authorize the Zendesk connector.');
+    }
+    return rec;
+  }
+
+  // Seam for the single-use gate above: its own method so the failure path is reachable in tests
+  // without making the filesystem itself unreliable.
+  private removeFile(path: string): void {
+    unlinkSync(path);
+  }
+
   // Single-use anti-CSRF state → downstream-redirect map. NOT client-bound: the upstream Zendesk
   // callback carries no client identity, so binding to the authorizing client cannot be enforced
   // there. What IS enforced: a 128-bit unguessable state, single-use consume, and refusal of any
@@ -107,7 +139,14 @@ export class IssuedTokenStore {
   }
 
   private fileFor(opaque: string): TokenStore {
+    return new TokenStore(this.pathFor(opaque), this.encryptionSecret);
+  }
+
+  // Filename is sha256(token): the bearer never lands on disk raw, and no caller-supplied string
+  // ever reaches the path — a token containing `../`, a NUL byte or an absolute path hashes to the
+  // same 64 hex characters as any other, so path traversal is structurally impossible.
+  private pathFor(opaque: string): string {
     const name = createHash('sha256').update(opaque).digest('hex');
-    return new TokenStore(join(this.issuedDir, `${name}.enc`), this.encryptionSecret);
+    return join(this.issuedDir, `${name}.enc`);
   }
 }
