@@ -46,10 +46,13 @@
 //     crash. That is the same class as #9 and this walk does not see it.
 //   - A settling catch is credited to the whole try block, so a call added to that block later
 //     inherits the protection. That is the point of wrapping, not an oversight.
-//   - The settle expression is exempt AS A WHOLE, its arguments included, so a catch may write the
-//     honest `reject(err instanceof Error ? err : new Error(String(err)))`. If that expression
-//     throws it is a programming error at the one place every review looks; this rule exists for
-//     the FOREIGN calls standing next to it. Scoring the arguments made the code bend to the tool.
+//   - Inside a SETTLING CATCH BLOCK the settle expression is exempt as a whole, its arguments
+//     included, so a catch may write the honest `reject(err instanceof Error ? err : new
+//     Error(String(err)))`. That is the full extent of the exemption, and it is the full extent of
+//     its justification: a throw there is a programming error in the one place every review looks,
+//     on a path where something has already gone wrong. Everywhere ELSE a settle call is merely not
+//     a foreign call itself — its arguments are still walked, so `reject(load())` on the ordinary
+//     path is reported, because `load()` throwing there settles nothing.
 import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
@@ -140,6 +143,9 @@ function asFunction(node, seen = new Set()) {
   return null;
 }
 
+const within = (ranges, node) =>
+  ranges.some(([from, to]) => node.getStart() >= from && node.getEnd() <= to);
+
 const isAsync = (fn) => fn.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) ?? false;
 
 const problems = [];
@@ -188,6 +194,7 @@ for (const file of files) {
       // catch block itself, not hidden inside an `if`. A catch or finally block is not inside its
       // own try, so a foreign call sitting there is still unguarded.
       const safeRanges = [];
+      const settlingCatches = [];
       const collect = (node) => {
         if (!ts.isTryStatement(node) || !node.catchClause) return;
         const settles = node.catchClause.block.statements.some((statement) => {
@@ -200,7 +207,13 @@ for (const file of files) {
             expression && ts.isAwaitExpression(expression) ? expression.expression : expression;
           return settlers.has(calleeSymbol(call));
         });
-        if (settles) safeRanges.push([node.tryBlock.getStart(), node.tryBlock.getEnd()]);
+        if (settles) {
+          safeRanges.push([node.tryBlock.getStart(), node.tryBlock.getEnd()]);
+          settlingCatches.push([
+            node.catchClause.block.getStart(),
+            node.catchClause.block.getEnd(),
+          ]);
+        }
       };
       collect(executor.body);
       walkSync(executor.body, collect);
@@ -210,12 +223,13 @@ for (const file of files) {
         if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return true;
         // A nested `new Promise(fn)` is inspected in its own right, not a foreign call here.
         if (executorOf(node)) return true;
-        // The settle expression is exempt AS A WHOLE, arguments included — see the header.
         const settler = calleeSymbol(node);
-        if (settler && (settlers.has(settler) || ownSymbols.has(settler))) return false;
-        if (safeRanges.some(([from, to]) => node.getStart() >= from && node.getEnd() <= to)) {
-          return true;
+        if (settler && (settlers.has(settler) || ownSymbols.has(settler))) {
+          // A settle call is never a foreign call. Stopping the descent into its ARGUMENTS is the
+          // narrow part: only inside a settling catch — see the header.
+          return !within(settlingCatches, node);
         }
+        if (within(safeRanges, node)) return true;
         problems.push({
           at: where(node),
           call: node.getText(source).replace(/\s+/g, ' ').slice(0, 90),
@@ -278,11 +292,16 @@ if (problems.length > 0) {
           ' promise with the error as its VALUE, which is a second defect.\n',
   );
   console.error(
-    'PREFER moving the call out to the enclosing top-level executor, where a synchronous throw\n' +
-      'already rejects the promise the caller awaits. That is what fixed #9, and it leaves one\n' +
-      'settle path instead of two. Wrapping the body in a try is the fallback for a call that\n' +
-      'genuinely has to stand where it stands — it answers every call in the body at once.\n' +
-      'There is no per-call exemption on purpose: the calls nobody thought of are the ones that bite.',
+    nested
+      ? 'PREFER moving the call out to the enclosing top-level executor, where a synchronous throw\n' +
+          'already rejects the promise the caller awaits. That is what fixed #9, and it leaves one\n' +
+          'settle path instead of two. Wrapping the body in a try is the fallback for a call that\n' +
+          'genuinely has to stand where it stands — it answers every call in the body at once.\n' +
+          'There is no per-call exemption on purpose: the calls nobody thought of are the ones that bite.'
+      : 'There is no enclosing executor to move this call into — an async executor IS the top level.\n' +
+          'Wrapping the body in a try with a settling catch is the remedy here, and it answers every\n' +
+          'call in the body at once. There is no per-call exemption on purpose: the calls nobody\n' +
+          'thought of are the ones that bite.',
   );
   process.exit(1);
 }

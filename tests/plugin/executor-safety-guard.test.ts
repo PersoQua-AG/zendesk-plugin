@@ -83,6 +83,23 @@ const outerSettle = (wedge: string, name: string) =>
     `try { server.listen(port); } catch (e) { ${name}(e as Error); }`,
   );
 
+// The settle exemption, in both directions. Inside a settling catch the whole expression is
+// exempt; on the ordinary path only the settle CALL is not foreign — its arguments are still walked.
+const SETTLE_IN_CATCH = WEDGE.replace(
+  'server.listen(port);',
+  'try { server.listen(port); } catch (e) { bindFailed(e instanceof Error ? e : new Error(String(e))); }',
+);
+const SETTLE_ARG_ON_HAPPY_PATH = `
+export const f = (load: () => string) =>
+  new Promise<void>((bound, bindFailed) => {
+    const inner = new Promise<void>(() => {
+      bindFailed(new Error(load()));
+    });
+    inner.catch(() => {});
+    bound();
+  });
+`;
+
 describe('promise executor safety guard', () => {
   describe('w1 — the defect class it exists for', () => {
     it('flags an unguarded call on a nested executor path, with file:line and the call', () => {
@@ -137,17 +154,19 @@ describe('promise executor safety guard', () => {
       expect(stdout).toContain('nested, inspected');
     });
 
-    it('exempts the settle expression as a whole, arguments included', () => {
+    it('exempts the settle expression as a whole inside a settling catch', () => {
       // Otherwise the honest `reject(err instanceof Error ? err : new Error(String(err)))` is
       // reported and the code bends to the tool — which is how a type lie got into src/.
-      expect(
-        runGuard(
-          WEDGE.replace(
-            'server.listen(port);',
-            'try { server.listen(port); } catch (e) { bindFailed(e instanceof Error ? e : new Error(String(e))); }',
-          ),
-        ).status,
-      ).toBe(0);
+      expect(runGuard(SETTLE_IN_CATCH).status).toBe(0);
+    });
+
+    it('still walks the arguments of a settle call outside a catch', () => {
+      // The exemption is a catch exemption, and only the catch case justifies it. Here `load()`
+      // throws synchronously, nothing settles the outer promise, and the wedge is back — so the
+      // argument must still be reported.
+      const { status, stderr } = runGuard(SETTLE_ARG_ON_HAPPY_PATH);
+      expect(status).toBe(1);
+      expect(stderr).toContain('load()');
     });
 
     it('passes the call moved out to a sync top level — a throw there rejects the right promise', () => {
@@ -171,6 +190,14 @@ export function startListener(port: number, server: { listen: (p: number) => voi
       expect(status).toBe(1);
       expect(stderr).toMatch(/server\.listen\(port\)/);
       expect(stdout).toMatch(/async, inspected/);
+    });
+
+    it('does not advise moving the call out — an async executor has nowhere to move it to', () => {
+      const { stderr } = runGuard(ASYNC_WEDGE);
+      expect(stderr).not.toContain('PREFER moving the call out');
+      expect(stderr).toContain('an async executor IS the top level');
+      // The nested case keeps the advice that actually fixed #9.
+      expect(runGuard(WEDGE).stderr).toContain('PREFER moving the call out');
     });
 
     it('accepts the async executor once its own reject settles the promise', () => {
@@ -463,8 +490,8 @@ export const f = () =>
         rule: 'the catch must settle unconditionally',
         edits: [
           [
-            'if (settles) safeRanges.push',
-            'let anywhere = false;\n        walkSync(node.catchClause.block, (n) => { if (settlers.has(calleeSymbol(n))) anywhere = true; });\n        if (settles || anywhere) safeRanges.push',
+            '        if (settles) {',
+            '        let anywhere = false;\n        walkSync(node.catchClause.block, (n) => { if (settlers.has(calleeSymbol(n))) anywhere = true; });\n        if (settles || anywhere) {',
           ],
         ],
         source: WEDGE.replace(
@@ -536,19 +563,25 @@ export const f = (port: number, server: { listen: (p: number) => void }) =>
         ablated: (r) => expect(r.stderr).toContain('bound(err)'),
       },
       {
-        rule: 'the settle expression is exempt as a whole',
-        edits: [
-          [
-            'if (settler && (settlers.has(settler) || ownSymbols.has(settler))) return false;',
-            'if (settler && (settlers.has(settler) || ownSymbols.has(settler))) return true;',
-          ],
-        ],
-        source: WEDGE.replace(
-          'server.listen(port);',
-          'try { server.listen(port); } catch (e) { bindFailed(e instanceof Error ? e : new Error(String(e))); }',
-        ),
+        rule: 'the settle expression is exempt inside a settling catch',
+        edits: [['return !within(settlingCatches, node);', 'return true;']],
+        source: SETTLE_IN_CATCH,
         baseline: (r) => expect(r.status).toBe(0),
         ablated: (r) => expect(r.status).toBe(1),
+      },
+      {
+        rule: 'that exemption does not reach beyond the catch',
+        edits: [['return !within(settlingCatches, node);', 'return false;']],
+        source: SETTLE_ARG_ON_HAPPY_PATH,
+        baseline: (r) => expect(r.status).toBe(1),
+        ablated: (r) => expect(r.status).toBe(0),
+      },
+      {
+        rule: 'the remedy advice matches the executor kind',
+        edits: [['    nested\n      ? ', '    true\n      ? ']],
+        source: ASYNC_WEDGE,
+        baseline: (r) => expect(r.stderr).toContain('an async executor IS the top level'),
+        ablated: (r) => expect(r.stderr).toContain('PREFER moving the call out'),
       },
       {
         rule: 'tsx/mts/cts are collected',
