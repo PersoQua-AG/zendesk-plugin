@@ -6,91 +6,31 @@
 <meta name="robots" content="noindex">
 <title>Zendesk in Claude Desktop einrichten</title>
 <style>
-  :root {
-    --bg: #ffffff;
-    --fg: #17181c;
-    --muted: #5b6070;
-    --line: #dfe2ea;
-    --soft: #f5f6f9;
-    --accent: #1f5fd0;
-    --warn-bg: #fff6e6;
-    --warn-line: #e2b24a;
-    --ok-bg: #eef6ee;
-    --ok-line: #6ea471;
-  }
+  :root { --bg: #fff; --fg: #17181c; --muted: #5b6070; --line: #dfe2ea; --soft: #f5f6f9; --accent: #1f5fd0; --warn-bg: #fff6e6; --warn-line: #e2b24a; }
   @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #14161a;
-      --fg: #e9ebf0;
-      --muted: #a2a8b8;
-      --line: #2e323b;
-      --soft: #1b1e24;
-      --accent: #7aa8f5;
-      --warn-bg: #2a2317;
-      --warn-line: #8a6d28;
-      --ok-bg: #18241a;
-      --ok-line: #4f7a53;
-    }
+    :root { --bg: #14161a; --fg: #e9ebf0; --muted: #a2a8b8; --line: #2e323b; --soft: #1b1e24; --accent: #7aa8f5; --warn-bg: #2a2317; --warn-line: #8a6d28; }
   }
   * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--fg);
-    font: 16px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  }
-  .wrap { max-width: 50rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
-  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .4rem; }
-  h2 { font-size: 1.3rem; margin: 2.6rem 0 .6rem; padding-top: 1.4rem; border-top: 1px solid var(--line); }
-  h3 { font-size: 1.02rem; margin: 1.6rem 0 .35rem; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 44rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  h1 { font-size: 1.8rem; line-height: 1.2; margin: 0 0 .5rem; }
+  h2 { font-size: 1.2rem; margin: 2.4rem 0 .6rem; padding-top: 1.3rem; border-top: 1px solid var(--line); }
+  h3 { font-size: 1rem; margin: 1.5rem 0 .3rem; }
   p, li { margin: .5rem 0; }
-  .lede { color: var(--muted); margin-bottom: 1.6rem; }
-  code, .ui {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: .92em;
-    background: var(--soft);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: .05em .34em;
-    overflow-wrap: anywhere;
-  }
-  .ui { font-family: inherit; font-size: .95em; font-weight: 600; }
-  .box { border: 1px solid var(--line); border-radius: 8px; padding: .9rem 1.1rem; margin: 1.1rem 0; background: var(--soft); }
-  .box.warn { background: var(--warn-bg); border-color: var(--warn-line); }
-  .box.ok { background: var(--ok-bg); border-color: var(--ok-line); }
-  .box > :first-child { margin-top: 0; }
-  .box > :last-child { margin-bottom: 0; }
-  .box h3 { margin-top: 0; }
-  ol.steps { padding-left: 0; list-style: none; counter-reset: s; }
-  ol.steps > li { counter-increment: s; position: relative; padding-left: 2.6rem; margin: 1.5rem 0; }
-  ol.steps > li::before {
-    content: counter(s);
-    position: absolute; left: 0; top: .05rem;
-    width: 1.8rem; height: 1.8rem; border-radius: 50%;
-    background: var(--accent); color: #fff;
-    display: grid; place-items: center;
-    font-size: .92rem; font-weight: 700;
-  }
+  .lede { color: var(--muted); margin-bottom: 1.4rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; background: var(--soft); border: 1px solid var(--line); border-radius: 4px; overflow-wrap: anywhere; }
+  code { padding: .05em .34em; }
+  pre { padding: .7rem .9rem; margin: .5rem 0; white-space: pre-wrap; }
+  pre code { border: 0; padding: 0; background: none; }
+  .ui { font-weight: 650; }
+  .box { border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: 8px; padding: .8rem 1rem; margin: 1.2rem 0; }
+  .box > :first-child { margin-top: 0; } .box > :last-child { margin-bottom: 0; }
+  ol.steps { list-style: none; padding-left: 0; }
+  ol.steps > li { position: relative; padding-left: 2.5rem; margin: 1.5rem 0; }
   ol.steps > li > h3 { margin-top: .05rem; }
-  .tablewrap { overflow-x: auto; margin: 1rem 0; }
-  table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: .94rem; }
-  th, td { border: 1px solid var(--line); padding: .5rem .6rem; text-align: left; vertical-align: top; }
-  th { background: var(--soft); font-weight: 600; }
-  .req { color: #b3261e; font-weight: 700; }
-  @media (prefers-color-scheme: dark) { .req { color: #ff9a92; } }
-  dl.faq dt { font-weight: 650; margin-top: 1.15rem; }
-  dl.faq dd { margin: .25rem 0 0; padding-left: 0; }
-  .kv { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1rem; font-size: .95rem; }
-  .kv dt { color: var(--muted); }
-  .kv dd { margin: 0; overflow-wrap: anywhere; }
-  footer { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
-  @media print {
-    body { background: #fff; color: #000; }
-    .wrap { max-width: none; padding: 0; }
-    h2 { page-break-after: avoid; }
-    ol.steps > li, .box { page-break-inside: avoid; }
-  }
+  .num { position: absolute; left: 0; top: .05rem; width: 1.75rem; height: 1.75rem; border-radius: 50%; background: var(--accent); color: #fff; display: inline-grid; place-items: center; font-size: .9rem; font-weight: 700; }
+  footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
+  @media print { body { background: #fff; color: #000; } .wrap { max-width: none; padding: 0; } ol.steps > li, .box { page-break-inside: avoid; } }
 </style>
 </head>
 <body>
@@ -98,415 +38,138 @@
 
 <h1>Zendesk in Claude Desktop einrichten</h1>
 <p class="lede">
-  Diese Seite führt dich vom Download bis zur bestätigten Anmeldung. Du brauchst dafür keine
-  Programmierkenntnisse und keine Entwicklerwerkzeuge — nur Claude Desktop, deinen Zendesk-Zugang
-  und zwei Angaben, die du von deinem Administrator bekommst. Rechne mit etwa zehn Minuten.
+  Vier Schritte, etwa fünf Minuten. Du brauchst die Datei <code>zendesk-1.0.0.mcpb</code> und Zugang
+  zu 1Password. Es gibt kein Archiv und nichts zu entpacken — leg die Datei irgendwo ab, wo du sie
+  im Dateidialog wiederfindest.
 </p>
 
-<div class="box">
-  <h3>Das lädst du herunter</h3>
-  <dl class="kv">
-    <dt>Datei</dt><dd><code>zendesk-1.0.0.mcpb</code></dd>
-    <dt>Version</dt><dd>1.0.0</dd>
-    <dt>SHA-256</dt><dd><code>SHA256-PLATZHALTER-WIRD-BEIM-RELEASE-EINGESETZT</code></dd>
-  </dl>
-  <p>
-    Die Datei und diese Seite liegen getrennt nebeneinander zum Download. Es gibt kein Archiv und
-    nichts zu entpacken: Du lädst die Datei herunter, sie landet in deinem Download-Ordner, und von
-    dort wählst du sie in Claude Desktop aus. Was es mit der SHA-256-Zeile auf sich hat, steht
-    weiter unten unter <a href="#pruefsumme">Prüfsumme</a> — du musst sie nicht prüfen.
-  </p>
-</div>
-
-<h2 id="voraussetzungen">Bevor du anfängst</h2>
-
-<h3>Was du selbst schon hast</h3>
-<ul>
-  <li>
-    <strong>Claude Desktop</strong>, auf dem Rechner installiert und angemeldet.
-  </li>
-  <li>
-    <strong>Einen eigenen Zendesk-Agent-Zugang.</strong> Die Erweiterung arbeitet mit deinen
-    Rechten, nicht mit fremden: Was du in Zendesk nicht sehen darfst, siehst du auch hier nicht.
-  </li>
-  <li>
-    <strong>Deine Zendesk-Subdomain.</strong> Das ist der Teil vor <code>.zendesk.com</code> in der
-    Adresse, die du ohnehin jeden Tag benutzt. Steht dort
-    <code>https://ihre-subdomain.zendesk.com/agent/…</code>, dann ist
-    <code>ihre-subdomain</code> die Subdomain — nur dieses eine Wort, ohne
-    <code>https://</code> und ohne <code>.zendesk.com</code>.
-  </li>
-</ul>
-
-<h3>Was dir jemand geben muss</h3>
-<ul>
-  <li><strong>Client-ID</strong></li>
-  <li><strong>Client-Secret</strong></li>
-</ul>
-<p>
-  Beides erhältst du von deinem Administrator — der Person, die die Erweiterung in eurem Zendesk
-  eingerichtet hat. Diese Seite enthält die Werte bewusst <em>nicht</em>, und sie werden dir auch
-  nicht per E-Mail oder Chat geschickt. Frag danach, bevor du mit Schritt 1 beginnst; ohne die
-  beiden Angaben kommst du bei Schritt 4 nicht weiter.
-</p>
-
-<div class="box">
-  <h3>Was die Datei ist — und was sie nicht ist</h3>
-  <ul>
-    <li>
-      Sie enthält <strong>keine PersoQua-Daten</strong>: keine Tickets, keine Kundendaten, keine
-      Zugangsdaten, keine Anmeldung. Vor jeder Veröffentlichung wird der Inhalt der Datei maschinell
-      geprüft, und sie wird gar nicht erst erzeugt, wenn diese Prüfung etwas findet.
-    </li>
-    <li>
-      Sie tut <strong>nichts</strong>, solange Subdomain, Client-ID und Client-Secret nicht
-      eingetragen sind. Ohne diese drei Angaben antwortet jede Funktion nur mit dem Hinweis, welches
-      Feld noch leer ist.
-    </li>
-    <li>
-      Deine Anmeldung entsteht erst bei Schritt 6 auf deinem eigenen Rechner und bleibt dort —
-      verschlüsselt gespeichert.
-    </li>
-  </ul>
-</div>
-
-<h2 id="schritte">Die Einrichtung, Schritt für Schritt</h2>
-
-<p class="lede">
-  Die Beschriftungen stehen in beiden Sprachen, weil Claude Desktop je nach Einstellung deutsch oder
-  englisch angezeigt wird. Such dir die aus, die du auf deinem Bildschirm siehst.
-</p>
+<h2 id="schritte">Einrichten</h2>
 
 <ol class="steps">
 
   <li>
-    <h3>Die Datei herunterladen</h3>
+    <h3><span class="num" aria-hidden="true">1</span>Schritt 1 · Erweiterung installieren</h3>
     <p>
-      Klick auf den Download-Link zu <code>zendesk-1.0.0.mcpb</code>. Die Datei landet in deinem
-      Download-Ordner. Du musst sie nicht öffnen, nicht entpacken und nicht verschieben — ein
-      Doppelklick ist nicht nötig und richtet auch nichts aus. Merk dir nur, dass sie dort liegt.
-    </p>
-  </li>
-
-  <li>
-    <h3>Claude Desktop öffnen</h3>
-    <p>
-      Starte die Anwendung Claude Desktop und melde dich an, falls du nicht schon angemeldet bist.
-    </p>
-  </li>
-
-  <li>
-    <h3>Die Erweiterung installieren</h3>
-    <p>
-      Öffne <span class="ui">Einstellungen (Settings)</span> →
+      In Claude Desktop: <span class="ui">Einstellungen (Settings)</span> →
       <span class="ui">Erweiterungen (Extensions)</span> →
       <span class="ui">Erweiterte Einstellungen (Advanced settings)</span> →
-      <span class="ui">Erweiterung installieren… (Install extension…)</span>
-      und wähle im Dateidialog die Datei <code>zendesk-1.0.0.mcpb</code> aus deinem
-      Download-Ordner aus.
+      <span class="ui">Erweiterung installieren… (Install extension…)</span>, dann
+      <code>zendesk-1.0.0.mcpb</code> auswählen.
     </p>
     <p>
-      Die Zwischenstufe <span class="ui">Erweiterte Einstellungen (Advanced settings)</span> ist
-      leicht zu übersehen — ohne sie gibt es den Punkt zum Installieren nicht.
+      Die Zwischenstufe <span class="ui">Erweiterte Einstellungen (Advanced settings)</span> ist die
+      Stelle, an der man hängenbleibt: Ohne sie gibt es den Punkt zum Installieren nicht.
     </p>
   </li>
 
   <li>
-    <h3>Den Konfigurationsdialog ausfüllen</h3>
-    <p>
-      Nach der Installation fragt Claude Desktop neun Angaben ab. <strong>Drei davon sind
-      Pflicht</strong>, die übrigen sechs haben sinnvolle Voreinstellungen:
-      <em>leer lassen beziehungsweise stehen lassen, außer jemand sagt dir ausdrücklich etwas
-      anderes.</em>
-    </p>
-    <div class="tablewrap">
-      <table>
-        <thead>
-          <tr><th>Feld</th><th>Pflicht</th><th>Was du einträgst</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><strong>Zendesk Subdomain</strong></td>
-            <td><span class="req">ja</span></td>
-            <td>Der Teil vor <code>.zendesk.com</code> aus deiner Zendesk-Adresse — nur dieses eine
-              Wort.</td>
-          </tr>
-          <tr>
-            <td><strong>OAuth Client ID</strong></td>
-            <td><span class="req">ja</span></td>
-            <td>Von deinem Administrator.</td>
-          </tr>
-          <tr>
-            <td><strong>OAuth Client Secret</strong></td>
-            <td><span class="req">ja</span></td>
-            <td>Von deinem Administrator. Wird als Geheimnis behandelt und nicht im Klartext
-              angezeigt.</td>
-          </tr>
-          <tr>
-            <td><strong>OAuth Callback Port</strong></td>
-            <td>nein</td>
-            <td>Voreingestellt <code>8976</code>. Nur ändern, wenn dein Administrator dir eine
-              andere Zahl nennt — siehe den Kasten direkt unter dieser Tabelle.</td>
-          </tr>
-          <tr>
-            <td><strong>Injection-Screening Level</strong></td>
-            <td>nein</td>
-            <td>Voreingestellt <code>standard</code>. Legt fest, wie streng eingehende
-              Zendesk-Inhalte auf versteckte Anweisungen geprüft werden. Stehen lassen.</td>
-          </tr>
-          <tr>
-            <td><strong>Markdown to HTML Conversion</strong></td>
-            <td>nein</td>
-            <td>Voreingestellt eingeschaltet. Sorgt dafür, dass Formatierungen in Kommentaren
-              richtig in Zendesk ankommen. Stehen lassen.</td>
-          </tr>
-          <tr>
-            <td><strong>Business-Hours Timezone</strong></td>
-            <td>nein</td>
-            <td>Leer lassen (dann UTC). Für Auswertungen nach Geschäftszeiten, zum Beispiel
-              <code>Europe/Berlin</code>.</td>
-          </tr>
-          <tr>
-            <td><strong>Business Work Hours</strong></td>
-            <td>nein</td>
-            <td>Leer lassen (dann 09:00–17:00).</td>
-          </tr>
-          <tr>
-            <td><strong>Business Workdays</strong></td>
-            <td>nein</td>
-            <td>Leer lassen (dann Montag bis Freitag).</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="box warn" id="port">
-      <h3>Port und Weiterleitungsadresse gehören zusammen</h3>
-      <p>
-        Die Anmeldung läuft über eine Weiterleitung an deinen eigenen Rechner. Dein Administrator
-        hat dafür in Zendesk eine Weiterleitungsadresse hinterlegt, und die muss <strong>exakt</strong>
-        zu der Zahl im Feld <strong>OAuth Callback Port</strong> passen:
-      </p>
-      <p><code>http://localhost:&lt;Port&gt;/callback</code></p>
-      <p>
-        Mit der Voreinstellung <code>8976</code> ist das <code>http://localhost:8976/callback</code>.
-        Änderst du den Port eigenmächtig, passt die Adresse nicht mehr und die Anmeldung in Schritt 6
-        scheitert. Ändere ihn also nur, wenn dein Administrator dir eine andere Zahl nennt und sie
-        auf seiner Seite ebenfalls eingetragen hat. Erlaubt sind Zahlen von 1024 bis 65535.
-      </p>
-    </div>
+    <h3><span class="num" aria-hidden="true">2</span>Schritt 2 · Drei Felder ausfüllen</h3>
+    <p>Claude Desktop fragt danach neun Angaben ab. Nur diese drei trägst du ein:</p>
+    <ul>
+      <li><strong>Zendesk Subdomain</strong> → <code>kundenservice</code></li>
+      <li><strong>OAuth Client ID</strong> → aus 1Password</li>
+      <li><strong>OAuth Client Secret</strong> → aus 1Password</li>
+    </ul>
+    <p>Die übrigen sechs Felder bleiben unverändert.</p>
   </li>
 
   <li>
-    <h3>Einen neuen Chat öffnen</h3>
+    <h3><span class="num" aria-hidden="true">3</span>Schritt 3 · Anmelden — zwei Aufrufe</h3>
     <p>
-      Öffne in Claude Desktop einen neuen Chat. Die nächsten beiden Schritte machst du dort, indem
-      du Claude einfach darum bittest.
+      Das ist die Stelle, an der es aussieht, als sei etwas kaputt. Ist es nicht: Die Anmeldung
+      braucht zwei Aufrufe von <code>zendesk_login</code>, mit deiner Bestätigung im Browser
+      dazwischen.
     </p>
+    <p>
+      <strong>Erster Aufruf.</strong> Schreib in einen neuen Chat: <em>„Melde mich bei Zendesk an“</em>.
+      Die Antwort lautet:
+    </p>
+    <pre><code>Zendesk authorization started. Open this URL in your browser and approve access:
+https://…
+Then run zendesk_login a second time to finish — this call does not wait for you.
+The authorization stays open for 5 minute(s); after that, run zendesk_login to start over.</code></pre>
+    <p>
+      <strong>Im Browser bestätigen.</strong> Adresse öffnen, Zugriff erlauben. Der Tab zeigt dann
+      <code>Authorized. You can close this tab.</code> Dafür hast du fünf Minuten.
+    </p>
+    <p>
+      <strong>Zweiter Aufruf.</strong> Zurück im Chat: <em>„Führe zendesk_login noch einmal aus“</em>.
+      Fertig ist es bei:
+    </p>
+    <pre><code>Authorization complete — the Zendesk credentials are stored encrypted and are
+refreshed automatically. Verify with zendesk_get_me.</code></pre>
   </li>
 
   <li>
-    <h3>Anmelden — das dauert zwei Aufrufe, und das ist richtig so</h3>
-    <p>
-      Dies ist die Stelle, an der die meisten denken, etwas sei kaputt. Ist es nicht: Die Anmeldung
-      besteht aus zwei Aufrufen der Funktion <code>zendesk_login</code>, mit deiner Bestätigung im
-      Browser dazwischen.
-    </p>
-    <ol>
-      <li>
-        <p>
-          <strong>Erster Aufruf.</strong> Schreib in den Chat: <em>„Melde mich bei Zendesk an“</em>
-          (oder <em>„Führe zendesk_login aus“</em>). Die Antwort enthält eine
-          Zendesk-Anmeldeadresse. Dieser Aufruf <strong>wartet nicht</strong> auf dich — er gibt die
-          Adresse aus und ist fertig. Genau deshalb sind es zwei Aufrufe: Ein einziger, der wartet,
-          würde dir die Adresse erst zeigen, wenn es zu spät ist, sie zu öffnen.
-        </p>
-      </li>
-      <li>
-        <p>
-          <strong>Im Browser bestätigen.</strong> Öffne die Adresse, melde dich bei Zendesk an, falls
-          du es noch nicht bist, und erlaube den Zugriff. Der Browser-Tab bestätigt dir anschließend,
-          dass die Weiterleitung angekommen ist. Dafür hast du <strong>fünf Minuten</strong> Zeit.
-        </p>
-      </li>
-      <li>
-        <p>
-          <strong>Zweiter Aufruf.</strong> Zurück im Chat: <em>„Führe zendesk_login noch einmal
-          aus“</em>. Jetzt wird die Anmeldung abgeschlossen und verschlüsselt auf deinem Rechner
-          gespeichert.
-        </p>
-      </li>
-    </ol>
-    <p>
-      <strong>Zu früh gerufen?</strong> Wenn du den zweiten Aufruf machst, bevor du im Browser
-      bestätigt hast, wiederholt die Antwort die Adresse und sagt, dass sie noch wartet. Du hast
-      nichts kaputtgemacht — bestätige im Browser und ruf danach noch einmal auf.
-    </p>
-    <p>
-      <strong>Zu spät gerufen?</strong> Sind die fünf Minuten um, sagt die Antwort genau das. Der
-      nächste Aufruf beginnt dann eine frische Anmeldung mit einer neuen Adresse.
-    </p>
-    <p>
-      Bist du bereits angemeldet, meldet die Funktion das ebenfalls und tut nichts weiter. Willst du
-      dich trotzdem neu anmelden — etwa nach einem Wechsel des Client-Secrets —, bitte Claude,
-      <code>zendesk_login</code> <strong>mit <code>force: true</code></strong> auszuführen.
-    </p>
-  </li>
-
-  <li>
-    <h3>Prüfen, ob es läuft</h3>
-    <p>
-      Frag im Chat: <em>„Wer bin ich in Zendesk?“</em> Kommt dein eigener Name aus Zendesk zurück,
-      ist die Einrichtung fertig. (Technisch ruft Claude dafür <code>zendesk_get_me</code> auf.)
-    </p>
+    <h3><span class="num" aria-hidden="true">4</span>Schritt 4 · Prüfen</h3>
+    <p>Frag im Chat: <em>„Wer bin ich in Zendesk?“</em> Kommt dein Name aus Zendesk zurück, läuft es.</p>
   </li>
 
 </ol>
 
-<div class="box ok">
-  <h3>Fertig — und das kannst du jetzt</h3>
+<div class="box">
   <p>
-    Bitte Claude in normaler Sprache um das, was du sonst in Zendesk anklickst: offene Tickets
-    zeigen, ein Ticket zusammenfassen, einen Kommentar schreiben, Status oder Priorität ändern,
-    Wissensdatenbank-Artikel pflegen, Auswertungen über einen Zeitraum. Löschende Eingriffe gibt es
-    bewusst nicht, und vor jeder Änderung in Zendesk wirst du gefragt.
+    <strong>Was die Erweiterung nicht tut:</strong> Löschen, Zusammenführen und Schwärzen sind nicht
+    eingebaut. Hat sich ein Ticket geändert, seit Claude es gelesen hat, überschreibt sie nicht,
+    sondern meldet <code>Conflict: ticket #… changed since last read …</code>.
+  </p>
+  <p>
+    <strong>Was nicht funktioniert:</strong> die Befehle mit Schrägstrich
+    (<code>/zendesk:tickets</code> und die anderen) — die gibt es nur in Claude Code. Hier fragst du
+    in normaler Sprache.
   </p>
 </div>
 
-<div class="box warn">
-  <h3>Eine Einschränkung, ehrlich gesagt</h3>
-  <p>
-    Die kurzen Befehle mit Schrägstrich (etwa <code>/zendesk:tickets</code>) und die mitgelieferten
-    Fertigabläufe funktionieren in Claude Desktop <strong>nicht</strong> — sie sind nicht Teil dieser
-    Datei. Du bekommst alle Funktionen, aber du rufst sie in normaler Sprache auf statt über einen
-    Befehl. Wer die Befehle und Fertigabläufe wirklich braucht, braucht dafür Claude Code. Daran wird
-    gesondert gearbeitet.
-  </p>
-</div>
+<h2 id="hilfe">Wenn etwas klemmt</h2>
 
-<h2 id="hilfe">Wenn etwas nicht klappt</h2>
-
-<dl class="faq">
-
-  <dt>Jede Antwort nennt nur ein leeres Feld</dt>
-  <dd>
-    Die Erweiterung ist installiert, aber noch nicht vollständig konfiguriert. Das ist Absicht: Statt
-    still zu scheitern, nennt sie dir das Feld, das noch fehlt. Öffne
-    <span class="ui">Einstellungen (Settings)</span> →
-    <span class="ui">Erweiterungen (Extensions)</span>, wähle die Zendesk-Erweiterung, trag genau
-    dieses Feld nach und starte den Chat neu.
-  </dd>
-
-  <dt>Die Anmeldung schlägt fehl, weil der Port belegt ist</dt>
-  <dd>
-    Ein anderes Programm hört bereits auf der Zahl im Feld <strong>OAuth Callback Port</strong>.
-    Bitte deinen Administrator um eine andere Zahl zwischen 1024 und 65535. Er trägt in Zendesk die
-    passende Weiterleitungsadresse <code>http://localhost:&lt;neuer Port&gt;/callback</code> ein, du
-    trägst dieselbe Zahl im Konfigurationsdialog ein. Beides muss geschehen — eine Seite allein
-    genügt nicht.
-  </dd>
-
-  <dt>Der eingetragene Port wird abgelehnt</dt>
-  <dd>
-    Erlaubt sind nur Zahlen von <strong>1024 bis 65535</strong>. Alles darunter oder darüber weist
-    das Feld zurück. Trag eine Zahl aus diesem Bereich ein — und zwar die, die dein Administrator in
-    Zendesk hinterlegt hat.
-  </dd>
-
-  <dt>Zendesk zeigt bei der Anmeldung einen Fehler zur Weiterleitungsadresse</dt>
-  <dd>
-    Dann passt die in Zendesk registrierte Adresse nicht zu deinem Port. Vergleiche beides Zeichen
-    für Zeichen: In Zendesk muss <code>http://localhost:&lt;Port&gt;/callback</code> mit genau der
-    Zahl stehen, die bei dir im Feld <strong>OAuth Callback Port</strong> steht. Weicht etwas ab,
-    setz dein Feld auf den Wert, den dein Administrator dir nennt, oder bitte ihn, die Adresse auf
-    deinen Port zu ändern.
-  </dd>
-
-  <dt>Die fünf Minuten sind abgelaufen</dt>
-  <dd>
-    Kein Schaden. Bitte Claude erneut um <code>zendesk_login</code>: Der nächste Aufruf beginnt eine
-    frische Anmeldung mit einer neuen Adresse. Öffne sie diesmal gleich und bestätige, bevor du den
-    zweiten Aufruf machst.
-  </dd>
-
-  <dt>„No authorization found“ nach der Installation</dt>
-  <dd>
-    Es liegt noch keine gespeicherte Anmeldung vor. Das ist der Normalzustand direkt nach der
-    Installation — hol Schritt 6 nach. Erscheint die Meldung, obwohl du dich schon einmal angemeldet
-    hattest, wurde sehr wahrscheinlich das Client-Secret gewechselt: Trag dann das neue Secret im
-    Konfigurationsdialog ein und melde dich noch einmal an, mit <code>force: true</code>.
-  </dd>
-
-  <dt>Claude Desktop nimmt die Datei nicht an oder bricht die Installation ab</dt>
-  <dd>
-    Lade die Datei noch einmal herunter — ein abgebrochener Download ist die häufigste Ursache — und
-    achte darauf, dass sie <code>zendesk-1.0.0.mcpb</code> heißt und nicht in einem Archiv steckt.
-    Klappt es danach immer noch nicht, wende dich an deinen Administrator und nenne ihm die genaue
-    Fehlermeldung sowie dein Betriebssystem. Installiere die Datei nicht aus einer anderen Quelle.
-  </dd>
-
-  <dt>Die Prüfsumme stimmt nicht überein</dt>
-  <dd>
-    Dann lade die Datei <strong>nicht</strong> — installiere sie nicht und lösche sie. Melde dich bei
-    deinem Administrator und nenne ihm, von welchem Link du geladen hast. Meistens ist es ein
-    unvollständiger Download; ausschließen kann das nur er.
-  </dd>
-
-  <dt>Etwas anderes</dt>
-  <dd>
-    Wende dich an deinen Administrator — an die Person, die dir Client-ID und Client-Secret gegeben
-    hat. Schick ihr den Wortlaut der Meldung mit; „geht nicht“ lässt sich nicht nachstellen.
-  </dd>
-
-</dl>
-
-<h2 id="pruefsumme">Prüfsumme — freiwillig</h2>
+<h3>Eine Meldung nennt ein leeres Feld</h3>
+<pre><code>Missing required environment variable: ZENDESK_OAUTH_CLIENT_SECRET (extension
+configuration field "oauth_client_secret" is empty). Open Settings → Extensions →
+Zendesk, complete the configuration, then reload the extension.</code></pre>
 <p>
-  Oben auf dieser Seite steht neben der Datei eine lange Zeichenfolge, die <strong>SHA-256</strong>
-  heißt. Sie ist so etwas wie ein Fingerabdruck der Datei: Wird auch nur ein einziges Byte anders
-  ausgeliefert, sieht die Zeichenfolge völlig anders aus.
-</p>
-<p>
-  <strong>Du musst sie nicht prüfen.</strong> Die Datei kommt von der internen Downloadseite, und für
-  den normalen Weg genügt das. Willst du sie trotzdem vergleichen — oder hast du den Verdacht, der
-  Download sei abgebrochen —, dann gilt: Die Prüfung geschieht nicht in Claude Desktop. Bitte deinen
-  Administrator darum; er berechnet die Zeichenfolge zu deiner heruntergeladenen Datei und stellt sie
-  der oben genannten gegenüber. Stimmen beide überein, ist es dieselbe Datei, die veröffentlicht
-  wurde. Weichen sie ab, siehe den letzten Punkt unter <a href="#hilfe">Wenn etwas nicht klappt</a>.
+  Die Meldung nennt den internen Feldnamen: <code>zendesk_subdomain</code> ist
+  <strong>Zendesk Subdomain</strong>, <code>oauth_client_id</code> ist
+  <strong>OAuth Client ID</strong>, <code>oauth_client_secret</code> ist
+  <strong>OAuth Client Secret</strong>. Trag den Wert nach und <strong>lade die Erweiterung neu</strong>
+  (<em>reload the extension</em>) — ein neuer Chat genügt nicht, die Werte werden beim Start der
+  Erweiterung gelesen.
 </p>
 
-<h2 id="deinstallation">Deinstallieren</h2>
+<h3>„No Zendesk authorization found“</h3>
+<pre><code>No Zendesk authorization found. Run the zendesk_login tool to authorize (from a terminal: `npm run authorize`).</code></pre>
 <p>
-  Die Erweiterung wird in Claude Desktop unter
-  <span class="ui">Einstellungen (Settings)</span> →
-  <span class="ui">Erweiterungen (Extensions)</span> entfernt, an derselben Stelle, an der du sie in
-  Schritt 3 installiert hast.
+  Den Teil in Klammern ignorierst du — er gilt nur für Entwickler; mach stattdessen Schritt 3.
 </p>
-<div class="box warn">
-  <h3>Deine Anmeldung wird dabei nicht mitgelöscht</h3>
-  <p>
-    Die gespeicherte Anmeldung liegt bewusst <strong>außerhalb</strong> des Erweiterungsordners —
-    deshalb übersteht sie eine Aktualisierung der Erweiterung, und deshalb bleibt sie auch nach dem
-    Entfernen liegen. Wenn du endgültig aufräumen willst, lösche diesen Ordner von Hand:
-  </p>
-  <ul>
-    <li>macOS: <code>~/Library/Application Support/zendesk-plugin</code></li>
-    <li>Windows: <code>%APPDATA%\zendesk-plugin</code></li>
-    <li>Linux: <code>~/.local/share/zendesk-plugin</code></li>
-  </ul>
-  <p>
-    Darin liegen deine verschlüsselte Anmeldung und ein Zwischenspeicher — sonst nichts. Verlässt du
-    das Unternehmen oder gibst du den Rechner ab, sag deinem Administrator Bescheid, auch wenn du den
-    Ordner gelöscht hast: Er muss auf seiner Seite etwas tun.
-  </p>
-</div>
+<p>
+  Steht dort stattdessen <code>Stored Zendesk credentials could not be read (encryption secret
+  changed or file corrupt). Run the zendesk_login tool to re-authorize.</code>, wurde das
+  Client-Secret gewechselt: neues Secret aus 1Password eintragen, Erweiterung neu laden, dann
+  Schritt 3. <code>zendesk_login</code> selbst meldet denselben Fall kürzer, mit
+  <code>Stored credentials could not be read … — starting a new authorization.</code>, und beginnt
+  sofort eine neue Anmeldung.
+</p>
+
+<h3>Die fünf Minuten sind abgelaufen</h3>
+<pre><code>Zendesk login failed: OAuth callback timed out after 300000ms.
+Run zendesk_login again to start a new authorization.</code></pre>
+<p>
+  <code>300000ms</code> sind die fünf Minuten, und trotz <em>failed</em> ist nichts kaputt. Dieser
+  Aufruf räumt nur die abgelaufene Anmeldung weg — <strong>die neue Adresse liefert erst der Aufruf
+  danach</strong>. Also <code>zendesk_login</code> ein zweites Mal ausführen lassen und die Adresse
+  diesmal gleich öffnen.
+</p>
+
+<h2 id="deinstallation">Entfernen</h2>
+<p>
+  Unter <span class="ui">Einstellungen (Settings)</span> →
+  <span class="ui">Erweiterungen (Extensions)</span>. Deine Anmeldung liegt außerhalb des
+  Erweiterungsordners und bleibt dabei liegen — deshalb übersteht sie auch eine Aktualisierung. Soll
+  sie weg, lösch den Ordner <code>~/Library/Application Support/zendesk-plugin</code> (macOS)
+  beziehungsweise <code>%APPDATA%\zendesk-plugin</code> (Windows) von Hand.
+</p>
 
 <footer>
-  <p>
-    Zendesk-Erweiterung für Claude Desktop, Version 1.0.0 · PersoQua AG, intern.
-    Diese Seite enthält bewusst keine Zugangsdaten. Fragen und Fehlerbilder gehen an deinen
-    Administrator.
-  </p>
+  <p>Zendesk-Erweiterung für Claude Desktop, Version 1.0.0 · PersoQua AG, intern. Keine Zugangsdaten auf dieser Seite.</p>
 </footer>
 
 </div>

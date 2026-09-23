@@ -11,7 +11,7 @@ docs/
 deploy/
 .worktrees/
 
-# The download pages published NEXT TO the artifact, never inside it. They are also why this line
+# The install page published NEXT TO the artifact, never inside it. It is also why this line
 # exists rather than nothing: the audit's allowlist is default-deny, so an unlisted web/ entry would
 # not be silently shipped — it would refuse the whole bundle at release time.
 web/
