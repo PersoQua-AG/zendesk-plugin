@@ -101,7 +101,7 @@ describe('token request timeout', () => {
   });
 
   it('answers the user with instructions and leaves the login queue free for the next call', async () => {
-    const port = await freePort();
+    const port = freePort();
     const arrived: NonNullable<LoginDeps['listen']> = async (): Promise<CallbackListener> => ({
       promise: Promise.resolve({ code: 'c', redirectUri: `http://localhost:${port}/callback` }),
       close: () => {},

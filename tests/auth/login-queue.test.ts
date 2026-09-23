@@ -20,7 +20,7 @@ function expectNoPortBlame(text: string): void {
 
 describe('overlapping zendesk_login calls', () => {
   it('lets exactly one of three simultaneous calls start the flow, and answers the others from it', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port, { callbackTimeoutMs: 60_000 });
 
     const texts = await Promise.all([runLogin(d), runLogin(d), runLogin(d)]);
@@ -40,7 +40,7 @@ describe('overlapping zendesk_login calls', () => {
   });
 
   it('answers a call that arrives while the token exchange is in flight from the finished flow', async () => {
-    const port = await freePort();
+    const port = freePort();
     let release!: () => void;
     let entered!: () => void;
     const gate = new Promise<void>((r) => (release = r));
@@ -72,7 +72,7 @@ describe('overlapping zendesk_login calls', () => {
   });
 
   it('does not blame the port when a call overlaps a force restart', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port, { callbackTimeoutMs: 60_000 });
     const stale = authorizationUrl(await runLogin(d));
 
@@ -92,7 +92,7 @@ describe('overlapping zendesk_login calls', () => {
   // and the very next call starts over. Before the queue every call was independent, so nothing
   // pinned that a failed step lets the following one through at all.
   it('releases the queue when the exchange fails, so the next login starts a fresh flow', async () => {
-    const port = await freePort();
+    const port = freePort();
     const arrived: NonNullable<LoginDeps['listen']> = async (): Promise<CallbackListener> => ({
       promise: Promise.resolve({ code: 'c', redirectUri: `http://localhost:${port}/callback` }),
       close: () => {},

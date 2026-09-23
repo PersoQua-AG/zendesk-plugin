@@ -25,7 +25,7 @@ afterEach(closeRawSockets);
 
 describe('the callback listener survives a request target that is not a URL', () => {
   it.each(UNPARSEABLE_TARGETS)('answers 400 to `GET %s` instead of throwing out of the handler', async (target) => {
-    const port = await freePort();
+    const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 60_000);
     // An uncaught throw from the 'request' handler reaches the process, not this test. Recorded
     // rather than left to vitest so the assertion names the defect instead of the suite dying.
@@ -46,7 +46,7 @@ describe('the callback listener survives a request target that is not a URL', ()
   // A stray local request is not the user's browser, so it must not consume the authorization the
   // user is in the middle of — the same rule the 404 path already follows for an unknown path.
   it('leaves the pending authorization usable, so the real callback still completes it', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 60_000);
     try {
       for (const target of UNPARSEABLE_TARGETS) {
