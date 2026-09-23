@@ -1,106 +1,19 @@
-import { randomBytes, createHash } from 'node:crypto';
-import { join } from 'node:path';
-import { readdirSync, unlinkSync, existsSync } from 'node:fs';
-import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import { TokenStore } from './token-store.js';
+import { OpaqueTokenStore } from './opaque-token-store.js';
 // Opaque access tokens we issue to claude.ai live for one session window; if the process restarts,
 // claude.ai simply re-authorizes (the durable, restart-surviving state is the per-user Zendesk
 // token store, not these).
 const DEFAULT_TTL_MS = 3_600_000;
-// Lifetime of a DOWNSTREAM refresh token (M9): long enough that claude.ai stops prompting for a
-// browser authorize on an ordinary work rhythm, short enough to bound an undetected theft. It is a
-// ceiling, not the security guarantee — every refresh re-checks that the mapped identity still has
-// a live Zendesk session, so a revoked upstream grant kills the chain long before this elapses.
-export const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days, in milliseconds
 // Bound the in-memory authorize map: abandoned (never-consumed) states are TTL-evicted, but a flood
 // faster than the TTL must not grow unbounded — evict oldest past this hard cap.
 const MAX_PENDING = 10_000;
-// Maps our opaque access tokens to a connector identity, encrypted at rest by reusing TokenStore
-// verbatim (one AES-256-GCM file per opaque token, filename = sha256(token) so the bearer never
-// lands on disk raw). Pending-authorize state (downstream redirect + PKCE challenge) is held
-// in-memory, single-use, TTL-bounded — the CSRF/state discipline of the stdio oauth-flow.
-export class IssuedTokenStore {
-    issuedDir;
-    encryptionSecret;
-    ttlMs;
+// The access-token role of OpaqueTokenStore: mint on a completed Zendesk exchange, verify on every
+// MCP request. It owns one thing no other role does — the pending-authorize state (the downstream
+// redirect keyed by the anti-CSRF state), held in-memory, single-use, TTL-bounded, mirroring the
+// CSRF discipline of the stdio oauth-flow.
+export class IssuedTokenStore extends OpaqueTokenStore {
     pending = new Map();
     constructor(issuedDir, encryptionSecret, ttlMs = DEFAULT_TTL_MS) {
-        this.issuedDir = issuedDir;
-        this.encryptionSecret = encryptionSecret;
-        this.ttlMs = ttlMs;
-    }
-    // The store's own token lifetime, in SECONDS — the unit an OAuth `expires_in` is denominated in.
-    // Exposed so the token response reports the lifetime the store actually enforces instead of a
-    // second literal that can drift away from it.
-    get ttlSeconds() {
-        return Math.floor(this.ttlMs / 1000);
-    }
-    // clientId (the real DCR client id from the token exchange) rides in the otherwise-unused
-    // refreshToken slot so verifyAccessToken can surface the true issuing client in AuthInfo for
-    // audit — never a hardcoded literal (M4-minor). Direct test mints omit it.
-    mint(identity, clientId = '') {
-        const opaque = randomBytes(32).toString('hex');
-        this.fileFor(opaque).save({ accessToken: identity, refreshToken: clientId, expiresAt: Date.now() + this.ttlMs });
-        return opaque;
-    }
-    // Unlink issued-token files whose decrypted expiresAt is past, so hourly re-auth can't grow the
-    // issued/ dir without bound (H2). Call at startup and on the same daily timer as audit.prune().
-    // A torn/corrupt file is skipped (never aborts the sweep), mirroring audit.prune().
-    prune(now = Date.now()) {
-        if (!existsSync(this.issuedDir))
-            return;
-        for (const name of readdirSync(this.issuedDir)) {
-            if (!name.endsWith('.enc'))
-                continue;
-            const path = join(this.issuedDir, name);
-            try {
-                const rec = new TokenStore(path, this.encryptionSecret).load();
-                if (!rec || now >= rec.expiresAt)
-                    unlinkSync(path);
-            }
-            catch {
-                // Torn/corrupt file (e.g. crash mid-write): unrecoverable → unlink so it can't accumulate to
-                // disk-full under a flood (H2). Best-effort; a concurrent sweep may have removed it already.
-                try {
-                    unlinkSync(path);
-                }
-                catch {
-                    /* already gone */
-                }
-            }
-        }
-    }
-    // Throws InvalidTokenError (the SDK type requireBearerAuth maps to 401) for an unknown or expired
-    // token, so claude.ai gets a clean re-auth signal — never a 500. Never returns a partial identity.
-    // expiresAt is epoch-ms (the AuthManager stores the identity in the accessToken field).
-    identityFor(token) {
-        const rec = this.fileFor(token).load();
-        // Messages are surfaced verbatim in the WWW-Authenticate header, which is latin1-only — keep them
-        // ASCII (no em dash) or setHeader throws and the clean 401 degrades back into a 500.
-        if (!rec)
-            throw new InvalidTokenError('Unknown access token - re-authorize the Zendesk connector.');
-        if (Date.now() >= rec.expiresAt)
-            throw new InvalidTokenError('Access token expired - re-authorize the Zendesk connector.');
-        return { identity: rec.accessToken, clientId: rec.refreshToken, expiresAt: rec.expiresAt };
-    }
-    // Single-use spend of an opaque token (M9 refresh-token rotation): validate exactly as
-    // identityFor, then remove the record so a replay of the same token finds nothing. The unlink IS
-    // the single-use gate — if it fails, another caller already spent the grant (or the record is
-    // unreachable), so refuse rather than hand out a token twice.
-    consume(token) {
-        const rec = this.identityFor(token); // throws InvalidTokenError for unknown/expired
-        try {
-            this.removeFile(this.pathFor(token));
-        }
-        catch {
-            throw new InvalidTokenError('Refresh token already used - re-authorize the Zendesk connector.');
-        }
-        return rec;
-    }
-    // Seam for the single-use gate above: its own method so the failure path is reachable in tests
-    // without making the filesystem itself unreliable.
-    removeFile(path) {
-        unlinkSync(path);
+        super(issuedDir, encryptionSecret, ttlMs);
     }
     // Single-use anti-CSRF state → downstream-redirect map. NOT client-bound: the upstream Zendesk
     // callback carries no client identity, so binding to the authorizing client cannot be enforced
@@ -133,15 +46,5 @@ export class IssuedTokenStore {
         if (!p || Date.now() >= p.expiresAt)
             throw new Error('OAuth state mismatch or expired — possible CSRF.');
         return { redirectUri: p.redirectUri };
-    }
-    fileFor(opaque) {
-        return new TokenStore(this.pathFor(opaque), this.encryptionSecret);
-    }
-    // Filename is sha256(token): the bearer never lands on disk raw, and no caller-supplied string
-    // ever reaches the path — a token containing `../`, a NUL byte or an absolute path hashes to the
-    // same 64 hex characters as any other, so path traversal is structurally impossible.
-    pathFor(opaque) {
-        const name = createHash('sha256').update(opaque).digest('hex');
-        return join(this.issuedDir, `${name}.enc`);
     }
 }

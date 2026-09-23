@@ -6,6 +6,9 @@ export interface StoredTokens {
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
+  // Rotation family, written only by the downstream refresh-token store (M9). Absent in every
+  // Zendesk-credential file, which is why it is optional rather than a fourth required slot.
+  chainId?: string;
 }
 
 export class TokenStore {

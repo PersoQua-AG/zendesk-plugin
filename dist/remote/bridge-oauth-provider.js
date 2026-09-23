@@ -1,7 +1,13 @@
 import { randomBytes } from 'node:crypto';
-import { InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { InvalidGrantError, InvalidScopeError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { buildAuthorizationUrl, exchangeCodeForTokens } from '../auth/oauth-flow.js';
 import { fetchZendeskIdentity } from './zendesk-identity.js';
+import { RefreshTokenReplayError } from '../auth/refresh-token-store.js';
+import { log } from './logger.js';
+import { describeAuthError } from './error-messages.js';
+// The single refusal the client ever sees on the refresh grant. ASCII only: it rides in an OAuth
+// error body and, on the bearer path, in a latin1-only header. It names no token and no check.
+const REFRESH_REFUSED = 'Refresh token is invalid, expired, already used, or the Zendesk session ended - re-authorize the Zendesk connector.';
 // Bridges claude.ai (downstream) to Zendesk (upstream). claude.ai never receives Zendesk tokens:
 // we persist those server-side (encrypted, per identity) and hand claude.ai an opaque token bound
 // to that identity. Zendesk performs the actual PKCE validation, so we forward the verifier and
@@ -68,39 +74,94 @@ export class ZendeskBridgeOAuthProvider {
     // Lets claude.ai renew its opaque access token without a browser authorize, for as long as the
     // underlying per-user Zendesk session is still usable. Single-use with rotation: the presented
     // token is spent BEFORE anything else can fail, so a refused refresh leaves no replay window.
-    async exchangeRefreshToken(client, refreshToken) {
-        if (!this.refreshTokens) {
+    //
+    // `resource` is ignored: this server advertises exactly one resource (CONNECTOR.resourceUrl), so
+    // there is nothing to narrow to. `scopes` may not WIDEN the grant (RFC 6749 §6) and we do not
+    // implement narrowing either — a request for anything outside the connector's configured scopes
+    // is refused rather than silently granted as something else. The response echoes what was granted.
+    async exchangeRefreshToken(client, refreshToken, scopes) {
+        const store = this.refreshTokens;
+        if (!store) {
             throw new InvalidGrantError('Refresh grant is not enabled - re-authorize the Zendesk connector.');
         }
-        let identity;
+        const unknown = scopes?.filter((s) => !this.config.scopes.includes(s)) ?? [];
+        if (unknown.length > 0) {
+            // Count, not contents: the requested strings are client-supplied and have no place in a log.
+            log({ msg: `refresh refused: ${unknown.length} requested scope(s) outside the granted set`, outcome: '400' });
+            throw new InvalidScopeError('Requested scope exceeds the scope granted to this connector.');
+        }
+        let rec;
         try {
-            const rec = this.refreshTokens.consume(refreshToken); // unknown/expired/reused -> throws
-            // Token substitution: a grant minted for one registered client must not be spendable by another.
-            if (rec.clientId !== client.client_id)
-                throw new Error('refresh token was issued to a different client');
-            // Liveness: the mapped identity must still resolve to a usable Zendesk session. getAccessToken()
-            // can reject (dead upstream grant) OR throw synchronously (store construction) — both are a
-            // refusal, never a 500.
+            rec = store.consume(refreshToken); // atomic single-use; unknown/expired/replayed -> throws
+        }
+        catch (err) {
+            throw this.refuseConsume(err);
+        }
+        // Token substitution: a grant minted for one registered client must not be spendable by another.
+        // The token was genuine but is in the wrong hands — the same theft signal as a replay, so the
+        // family goes with it.
+        if (rec.clientId !== client.client_id) {
+            const revoked = store.revokeChain(rec.chainId);
+            log({ msg: `refresh refused: presented by a different client, rotation chain revoked (${revoked} live token(s))`, outcome: '400' });
+            throw new InvalidGrantError(REFRESH_REFUSED);
+        }
+        try {
+            // Liveness: the mapped identity must still resolve to usable Zendesk credentials.
+            // getAccessToken() can reject (dead upstream grant) OR throw synchronously (store
+            // construction) — both are a refusal, never a 500.
             await this.resolver.forIdentity(rec.identity).getAccessToken();
-            identity = rec.identity;
         }
-        catch {
-            // One opaque message for every refusal: it must not tell an attacker which check failed, and
-            // it carries no token material. ASCII only (it rides in an OAuth error body).
-            throw new InvalidGrantError('Refresh token is invalid, expired, already used, or the Zendesk session ended - re-authorize the Zendesk connector.');
+        catch (err) {
+            log({ msg: `refresh refused: no live Zendesk session - ${describeAuthError(err)}`, outcome: '400' });
+            throw new InvalidGrantError(REFRESH_REFUSED);
         }
-        return this.mintTokens(identity, client.client_id);
+        try {
+            // Rotation stays inside the SAME chain, so a later replay revokes every descendant of the
+            // token that was stolen and nothing else.
+            const tokens = this.mintTokens(rec.identity, client.client_id, rec.chainId);
+            log({ msg: 'refresh granted: access token rotated without re-authorization', outcome: '200' });
+            return tokens;
+        }
+        catch (err) {
+            // BLOCKER fix: minting writes files, and writeFileSync throws (ENOSPC, EACCES). Outside this
+            // catch a bare Error reaches the SDK handler as a ServerError -> HTTP 500, which is the one
+            // status an OAuth client does NOT re-authorize on — and the presented token is already spent,
+            // so the chain is gone and the client would retry into the same 500 forever. Refuse as
+            // invalid_grant so the client re-authorizes, and log the real cause so it is diagnosable.
+            log({ msg: `refresh mint failed after the grant was spent: ${describeAuthError(err)}`, outcome: '400' });
+            throw new InvalidGrantError(REFRESH_REFUSED);
+        }
+    }
+    // One opaque message for every refusal: it must not tell an attacker which check failed, and it
+    // carries no token material. The DISTINCTION lives in the log line, not in the response — a bare
+    // `catch {}` here would turn a programming error into an endless, diagnosis-free re-auth loop.
+    refuseConsume(err) {
+        if (err instanceof RefreshTokenReplayError) {
+            // A rotated token presented a second time is the classic stolen-chain indicator
+            // (RFC 6819 5.2.2.3). consume() has already revoked the family; say how much it took.
+            log({ msg: `refresh refused: rotation replay detected, chain revoked (${err.revoked} live token(s))`, outcome: '400' });
+        }
+        else if (err instanceof InvalidTokenError) {
+            log({ msg: `refresh refused: ${describeAuthError(err)}`, outcome: '400' });
+        }
+        else {
+            // Not one of the store's refusal types: an I/O failure or a bug on this path. Still a refusal
+            // for the client (AC4: never a 500), but it must be visible in the log as what it is.
+            log({ msg: `refresh refused on an unexpected internal error: ${describeAuthError(err)}`, outcome: '400' });
+        }
+        return new InvalidGrantError(REFRESH_REFUSED);
     }
     // expires_in is the lifetime the issued store actually enforces, read from the store itself, so
     // the advertised number cannot drift away from the one that expires the token.
-    mintTokens(identity, clientId) {
+    mintTokens(identity, clientId, chainId) {
         const tokens = {
             access_token: this.issued.mint(identity, clientId),
             token_type: 'Bearer',
             expires_in: this.issued.ttlSeconds,
+            scope: this.config.scopes.join(' '),
         };
         if (this.refreshTokens)
-            tokens.refresh_token = this.refreshTokens.mint(identity, clientId);
+            tokens.refresh_token = this.refreshTokens.mint(identity, clientId, chainId);
         return tokens;
     }
     async verifyAccessToken(token) {

@@ -51,14 +51,22 @@ export const CONNECTOR = {
   resourceUrl: `${PUBLIC_BASE_URL}/mcp`,
   // The upstream Zendesk redirect_uri: must be identical at authorize and at token exchange.
   callbackUrl: `${PUBLIC_BASE_URL}/callback`,
-  // Does claude.ai use the downstream refresh grant? Pinned true by the Task-0 spike: the SDK's
-  // own metadata already advertises grant_types_supported: ['authorization_code','refresh_token'],
-  // so claude.ai is told the grant exists and without it forces a full browser authorize every
-  // time the issued access token expires. Flip this to false and the grant goes inert — no
-  // refresh_token is minted and every refresh is refused — with no change anywhere downstream.
+  // ASSUMED, not pinned — no Task-0 spike has run (issue #8 is open; deploy/README.md says the
+  // connector runs on SDK-documented defaults until it does). The reasoning is ours, not claude.ai's:
+  // the SDK's own metadata advertises grant_types_supported ['authorization_code','refresh_token'],
+  // so a client that reads the metadata is told the grant exists, and without it every expiry of the
+  // issued access token costs a full browser authorize. That is an argument from OUR metadata, and
+  // it is not the same as having watched claude.ai use the grant. #8 sets this value a second time
+  // from a live registration. Flip it to false and the grant goes inert end to end — nothing is
+  // minted, the metadata stops advertising it, and every refresh is refused.
   refreshGrant: true,
+  // Lifetime of a DOWNSTREAM refresh token. CEILING, NOT A PROMISE: the DCR client store is
+  // in-memory (InMemoryClientsStore above), so a process restart makes every registered client_id
+  // unknown and the next refresh answers 400 invalid_client regardless of what this says. Until the
+  // client store is durable the real bound is the process lifetime; see the follow-up noted in #8.
+  refreshTtlMs: 30 * 24 * 60 * 60 * 1000, // 30 days, in milliseconds
   // One store instance for the process — registrations must survive across authorize/token calls.
   clientsStore(): OAuthRegisteredClientsStore {
     return (clientsStoreSingleton ??= new InMemoryClientsStore());
   },
-};
+} as const;
