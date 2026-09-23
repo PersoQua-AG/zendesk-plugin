@@ -107,7 +107,7 @@ export class ZendeskBridgeOAuthProvider {
             // ten-second window, and the Zendesk session was checked when they were minted. Probing again
             // would turn a retry into a second upstream call for nothing.
             if (outcome.clientId !== client.client_id)
-                return this.refuseClientMismatch(store, outcome.chainId);
+                throw this.refuseClientMismatch(store, outcome.chainId);
             log({ msg: 'refresh repeated: same response returned inside the grace window', outcome: '200' });
             return this.parseRepeat(outcome.payload);
         }
@@ -116,7 +116,7 @@ export class ZendeskBridgeOAuthProvider {
         // The token was genuine but is in the wrong hands — the same theft signal as a replay, so the
         // family goes with it.
         if (rec.clientId !== client.client_id)
-            this.refuseClientMismatch(store, rec.chainId);
+            throw this.refuseClientMismatch(store, rec.chainId);
         try {
             // Liveness: the mapped identity must still resolve to usable Zendesk credentials.
             // getAccessToken() can reject (dead upstream grant) OR throw synchronously (store
@@ -148,12 +148,26 @@ export class ZendeskBridgeOAuthProvider {
     }
     // A client substitution is a client substitution. It used to be answered one way on the spend
     // path (revoke the family) and another inside the grace window (refuse only) — the same signal,
-    // a weaker answer, purely because of when it arrived. Never returns: the signature says so, so
-    // the two call sites read alike.
+    // a weaker answer, purely because of when it arrived.
+    //
+    // RETURNS the error rather than throwing it, like refuseConsume: both call sites then read
+    // `throw this.refuseClientMismatch(...)`, and neither can be mistaken for a call that continues.
+    //
+    // revokeChain WRITES, and a failing write must not convert a refusal into a 500 — the same shape
+    // as the mint-path blocker: outside a try, a bare Error reaches the SDK as a ServerError, and 500
+    // is the one status an OAuth client does not re-authorize on.
     refuseClientMismatch(store, chainId) {
-        const revoked = store.revokeChain(chainId);
-        log({ msg: `refresh refused: presented by a different client, rotation chain revoked (${revoked} live token(s))`, outcome: '400' });
-        throw new InvalidGrantError(REFRESH_REFUSED);
+        let outcome;
+        try {
+            outcome = `rotation chain revoked (${store.revokeChain(chainId)} live token(s))`;
+        }
+        catch (err) {
+            // The family could not be killed. Say so plainly — it is the one line an operator needs to
+            // know a theft signal was seen and the response to it did not land.
+            outcome = `rotation chain could NOT be revoked: ${describeAuthError(err)}`;
+        }
+        log({ msg: `refresh refused: presented by a different client, ${outcome}`, outcome: '400' });
+        return new InvalidGrantError(REFRESH_REFUSED);
     }
     // The payload is bytes this server wrote and encrypted, so a parse failure is a corrupt store,
     // not client input — but it must still leave by the refusal door rather than as a 500.
@@ -161,7 +175,10 @@ export class ZendeskBridgeOAuthProvider {
         try {
             return JSON.parse(payload);
         }
-        catch {
+        catch (err) {
+            // Silence here would make a corrupt store an unexplained 400 — and being diagnosable is the
+            // entire value of routing this through the refusal door instead of letting it 500.
+            log({ msg: `refresh refused: the stored repeat payload is unreadable - ${describeAuthError(err)}`, outcome: '400' });
             throw new InvalidGrantError(REFRESH_REFUSED);
         }
     }

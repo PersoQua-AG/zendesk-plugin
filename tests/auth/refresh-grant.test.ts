@@ -77,12 +77,19 @@ interface Built {
 
 // refreshGrant=false models the pinned contract saying claude.ai does NOT use a refresh grant:
 // remote-server then constructs the provider without a refresh store, and the grant is inert.
-function build({ refreshGrant = true }: { refreshGrant?: boolean } = {}): Built {
+function build({ refreshGrant = true, brokenRevoke = false }: { refreshGrant?: boolean; brokenRevoke?: boolean } = {}): Built {
   const dir = mkdtempSync(join(tmpdir(), 'zd-refresh-'));
   dirs.push(dir);
   const resolver = new IdentityAuthResolver(new IdentityTokenStore(join(dir, 'users'), config.clientSecret), config);
   const issued = new IssuedTokenStore(join(dir, 'issued'), config.clientSecret);
-  const refresh = refreshGrant ? new RefreshTokenStore(join(dir, 'refresh'), config.clientSecret, CONNECTOR.refreshTtlMs) : undefined;
+  // revokeChain writes; on a full disk it throws. The refusal must survive that.
+  class UnrevokableStore extends RefreshTokenStore {
+    revokeChain(): number {
+      throw new Error('ENOSPC: no space left on device');
+    }
+  }
+  const Store = brokenRevoke ? UnrevokableStore : RefreshTokenStore;
+  const refresh = refreshGrant ? new Store(join(dir, 'refresh'), config.clientSecret, CONNECTOR.refreshTtlMs) : undefined;
   let userId = 777;
   const fetchImpl = vi.fn(async (url: string | URL | Request) => {
     const u = String(url);
@@ -1086,5 +1093,71 @@ describe('the grace window, when its own bookkeeping is damaged', () => {
     const old = Date.now() / 1000 - 3600;
     utimesSync(join(dir, '.claim'), old, old);
     expect(() => store.prune()).not.toThrow();
+  });
+});
+
+// Three assurances added in the final round, each stated on its own so that removing exactly the
+// clause behind it turns exactly this test red.
+describe('the client-substitution answer, and the ways it can itself fail', () => {
+  it('SPEND path: a wrong client revokes the family, not merely this request', async () => {
+    const b = build();
+    const victim = await firstLogin(b);
+    // The legitimate client rotates once, so the family has a live descendant to lose.
+    const live = (await b.provider.exchangeRefreshToken(client, victim.refresh_token!)) as Record<string, unknown>;
+    pastGraceWindow(join(b.dir, 'refresh')); // out of the window, so this is the SPEND path
+
+    // A second registered client presents the live token. Refusing it alone would leave the thief's
+    // copy — and the victim's session — both working.
+    await expect(b.provider.exchangeRefreshToken(otherClient, String(live.refresh_token))).rejects.toBeInstanceOf(InvalidGrantError);
+    await expect(b.provider.exchangeRefreshToken(client, String(live.refresh_token))).rejects.toBeInstanceOf(InvalidGrantError);
+  });
+
+  it.each([
+    // The two call sites of refuseClientMismatch. On the SPEND path the token is still live and is
+    // presented by the wrong client; on the REPEAT path it was already spent by the right client
+    // and the wrong one asks again inside the window.
+    ['SPEND path, a live token in the wrong hands', async (b: ReturnType<typeof build>, first: { refresh_token?: string }) => void b],
+    ['REPEAT path, inside the grace window', async (b: ReturnType<typeof build>, first: { refresh_token?: string }) =>
+      void (await b.provider.exchangeRefreshToken(client, first.refresh_token!))],
+  ])('%s: a failing revocation still leaves as invalid_grant, never a 500', async (_label, setup) => {
+    const b = build({ brokenRevoke: true });
+    const first = await firstLogin(b);
+    await setup(b, first);
+
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
+    const err = await b.provider.exchangeRefreshToken(otherClient, first.refresh_token!).catch((e: unknown) => e);
+    spy.mockRestore();
+
+    // A bare Error here reaches the SDK as a ServerError and answers 500 — the one status an OAuth
+    // client does not re-authorize on.
+    expect(err).toBeInstanceOf(InvalidGrantError);
+    // And the operator is told the theft signal was seen AND that the response to it did not land.
+    expect(written.join('')).toContain('could NOT be revoked');
+  });
+
+  it('a corrupt stored answer is refused AND logged, not silently dropped', async () => {
+    const b = build();
+    const first = await firstLogin(b);
+    await b.provider.exchangeRefreshToken(client, first.refresh_token!);
+    // Inside the window, but the receipt no longer holds JSON: a corrupt store, not client input.
+    const refreshDir = join(b.dir, 'refresh');
+    const receipt = join(refreshDir, readdirSync(refreshDir).find((n) => n.endsWith('.repeat'))!);
+    new EncryptedFile(receipt, config.clientSecret).save({ payload: '{not json', clientId: 'claude.ai', expiresAt: Date.now() + 10_000 });
+
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
+    const err = await b.provider.exchangeRefreshToken(client, first.refresh_token!).catch((e: unknown) => e);
+    spy.mockRestore();
+
+    expect(err).toBeInstanceOf(InvalidGrantError);
+    // Being diagnosable is the whole reason this goes out as a refusal instead of a 500.
+    expect(written.join('')).toContain('stored repeat payload is unreadable');
   });
 });
