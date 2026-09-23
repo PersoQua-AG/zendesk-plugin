@@ -46,10 +46,11 @@
 //     crash. That is the same class as #9 and this walk does not see it.
 //   - A settling catch is credited to the whole try block, so a call added to that block later
 //     inherits the protection. That is the point of wrapping, not an oversight.
-//   - The settle call itself is exempt, its ARGUMENTS are not: `reject(new Error(String(err)))` in a
-//     catch is reported, because a throw while building that argument escapes just the same. Keep
-//     the catch to a settle of something already in hand.
-import { readdirSync } from 'node:fs';
+//   - The settle expression is exempt AS A WHOLE, its arguments included, so a catch may write the
+//     honest `reject(err instanceof Error ? err : new Error(String(err)))`. If that expression
+//     throws it is a programming error at the one place every review looks; this rule exists for
+//     the FOREIGN calls standing next to it. Scoring the arguments made the code bend to the tool.
+import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import ts from 'typescript';
@@ -63,6 +64,10 @@ const SOURCE = /\.(ts|tsx|mts|cts)$/;
 const DECLARATION = /\.d\.(ts|mts|cts)$/;
 // node's own recursive walk (>=20, pinned in package.json) does not descend into symlinked
 // directories, so a symlink cycle cannot turn this into an ELOOP stack trace.
+if (!existsSync(target)) {
+  console.error(`Nothing to inspect: ${target} does not exist.`);
+  process.exit(1);
+}
 const files = readdirSync(target, { recursive: true })
   .filter((f) => SOURCE.test(f) && !DECLARATION.test(f))
   .sort()
@@ -87,11 +92,13 @@ const isFunctionBoundary = (node) =>
   ts.isGetAccessor(node) ||
   ts.isSetAccessor(node);
 
-// Walks only the synchronous path: every function is a boundary, not a place to recurse.
+// Walks only the synchronous path: every function is a boundary, not a place to recurse. A visitor
+// returning false stops the descent into that node — which is how one finding per expression falls
+// out for free: `a.map(x).filter(y)` is reported at the outermost call and not walked into.
 function walkSync(node, visit) {
   node.forEachChild((child) => {
     if (isFunctionBoundary(child)) return;
-    visit(child);
+    if (visit(child) === false) return;
     walkSync(child, visit);
   });
 }
@@ -198,35 +205,26 @@ for (const file of files) {
       collect(executor.body);
       walkSync(executor.body, collect);
 
-      const found = [];
-      const check = (node) => {
-        if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return;
-        // A nested `new Promise(fn)` is inspected in its own right, not counted as a foreign call.
-        if (executorOf(node)) return;
-        const settler = calleeSymbol(node);
-        if (settler && (settlers.has(settler) || ownSymbols.has(settler))) return;
-        if (safeRanges.some(([from, to]) => node.getStart() >= from && node.getEnd() <= to)) return;
-        found.push(node);
-      };
-      check(executor.body);
-      walkSync(executor.body, check);
-
-      // One finding per expression: `a.map(x).filter(y).join(z)` is three CallExpressions nested in
-      // one another, and reporting the outermost says everything the inner two would.
       const settleName = (nested ? ancestors[ancestors.length - 1] : own).rejectName;
-      for (const node of found) {
-        const enclosed = found.some(
-          (other) =>
-            other !== node && other.getStart() <= node.getStart() && other.getEnd() >= node.getEnd(),
-        );
-        if (enclosed) continue;
+      const check = (node) => {
+        if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return true;
+        // A nested `new Promise(fn)` is inspected in its own right, not a foreign call here.
+        if (executorOf(node)) return true;
+        // The settle expression is exempt AS A WHOLE, arguments included — see the header.
+        const settler = calleeSymbol(node);
+        if (settler && (settlers.has(settler) || ownSymbols.has(settler))) return false;
+        if (safeRanges.some(([from, to]) => node.getStart() >= from && node.getEnd() <= to)) {
+          return true;
+        }
         problems.push({
           at: where(node),
           call: node.getText(source).replace(/\s+/g, ' ').slice(0, 90),
           nested,
           settleName,
         });
-      }
+        return false;
+      };
+      if (check(executor.body) !== false) walkSync(executor.body, check);
     }
 
     // Deeper executors on this synchronous path inherit the chain.
@@ -280,7 +278,10 @@ if (problems.length > 0) {
           ' promise with the error as its VALUE, which is a second defect.\n',
   );
   console.error(
-    'Wrapping the whole executor body in one try with a settling catch answers every call at once.\n' +
+    'PREFER moving the call out to the enclosing top-level executor, where a synchronous throw\n' +
+      'already rejects the promise the caller awaits. That is what fixed #9, and it leaves one\n' +
+      'settle path instead of two. Wrapping the body in a try is the fallback for a call that\n' +
+      'genuinely has to stand where it stands — it answers every call in the body at once.\n' +
       'There is no per-call exemption on purpose: the calls nobody thought of are the ones that bite.',
   );
   process.exit(1);
