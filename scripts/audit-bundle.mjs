@@ -71,12 +71,14 @@ const FORBIDDEN = [
 
 // Content rules, and what they do NOT reach.
 //
-// SCOPE, measured on the real bundle so the number carries its denominator: the scan reads the
-// 72 of 1930 entries that are not node_modules/**, i.e. 283,486 of 8,447,445 uncompressed bytes —
-// 3.7% of entries, 3.4% of bytes. `node_modules/**` is deliberately out of scope: its content comes
+// SCOPE: the scan reads only what is not node_modules/**. Every passing run PRINTS the share it
+// actually covered, with both denominators — a figure written into this comment was already stale
+// one merge later (it said 72 of 1930 while the bundle had grown), and a number nobody can be
+// relied on to re-measure eventually becomes a false statement. `node_modules/**` is out of scope
+// deliberately: its content comes
 // from `npm ci --omit=dev` against the lockfile, and a credential in there is a compromised
-// package, which this audit is the wrong tool for. So this scan protects against OUR OWN material
-// leaking into the bundle. It does not protect against a malicious dependency, and it never did.
+// package, which this audit is the wrong tool for. So the scan protects against OUR OWN material leaking
+// into the bundle. It does not protect against a malicious dependency, and it never did.
 //
 // Known gaps in the rules themselves, each measured with exit 0 and kept knowingly rather than
 // bought with a false positive that would get the guard switched off:
@@ -237,9 +239,14 @@ function readArchive(buf) {
   return entries;
 }
 
+// Relies on an invariant readArchive establishes: the local-header walk terminates only at
+// pos === cdStart, and every entry's dataAt + compressedSize is one of the pos values along that
+// chain, so each is <= cdStart <= eocd <= buf.length - 22. The data window is therefore always in
+// bounds. There was a `raw.length !== entry.compressedSize` guard here; it could not be reached,
+// no fixture could make it fire, and an untestable branch is where the next rewrite loses a rule
+// without anyone noticing. If that walk is ever relaxed, this line comes back WITH a fixture.
 function readEntry(buf, entry) {
   const raw = buf.subarray(entry.dataAt, entry.dataAt + entry.compressedSize);
-  if (raw.length !== entry.compressedSize) throw new Error(`${entry.name}: its data runs past the end of the file`);
   if (entry.method !== 0 && entry.method !== 8) {
     throw new Error(`${entry.name}: unsupported ZIP compression method ${entry.method}`);
   }
@@ -323,6 +330,9 @@ for (let i = 0; i < argv.length; i++) {
 const bundlePath = resolve(root, positional[0] ?? 'zendesk.mcpb');
 const problems = [];
 const accepted = [];
+// Counted for the coverage line the run prints, so the disclosure cannot go stale.
+let scannedEntries = 0;
+let scannedBytes = 0;
 
 const pkg = readJson(join(root, 'package.json'), 'package.json', problems);
 const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', problems);
@@ -399,6 +409,8 @@ for (const entry of entries) {
     problems.push(`binary content where only text belongs, and the credential scan cannot read it: ${path}`);
     continue;
   }
+  scannedEntries++;
+  scannedBytes += content.length;
   const text = content.toString('utf8');
   for (const { rule, re, skip } of CREDENTIAL_PATTERNS) {
     // Every match is walked, not just the first: a carve-out that consumed the first hit would
@@ -466,8 +478,15 @@ console.log(`Accepted ${accepted.length} paths, of which ${dependencies} are nod
 console.log(`The other ${accepted.length - dependencies}, in full:`);
 for (const { path, rule } of accepted) if (rule !== 'runtime-dependencies') console.log(`  ${path} [${rule}]`);
 console.log(`\nBundle audit passed: ${basename(bundlePath)}`);
+const totalBytes = entries.reduce((sum, e) => sum + e.size, 0);
+const share = (part, whole) => (whole === 0 ? '0.0' : ((100 * part) / whole).toFixed(1));
 console.log(`  version   ${version} (manifest.json, package.json and the bundled manifest agree)`);
 console.log(`  entries   ${accepted.length} accepted, 0 refused`);
+console.log(
+  `  scanned   ${scannedEntries} of ${entries.length} entries (${share(scannedEntries, entries.length)}%)` +
+    `, ${scannedBytes.toLocaleString('en-US')} of ${totalBytes.toLocaleString('en-US')} bytes` +
+    ` (${share(scannedBytes, totalBytes)}%) — node_modules/** is out of scope by decision`,
+);
 console.log(`  sha256    ${sha256}`);
 console.log(`  artifact  ${basename(artifactPath)}`);
 console.log(`  checksum  ${basename(checksumPath)}`);

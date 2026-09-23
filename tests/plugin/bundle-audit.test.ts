@@ -51,18 +51,24 @@ afterEach(() => {
 type ZipEntry = {
   name: string;
   data: string | Buffer;
-  method?: 0 | 8;
+  /** 0 stored, 8 deflate; anything else is a method this auditor must refuse. */
+  method?: number;
   /** General-purpose flags: 0x01 encrypted, 0x08 data descriptor. */
   flags?: number;
   /** Write the local header but NO central-directory record (a streaming unpacker still sees it). */
   localOnly?: boolean;
+  /** Write the central-directory record but NO local header — a record pointing at nothing of its own. */
+  cdOnly?: boolean;
   /** Zero the LOCAL sizes and append a real 16-byte data descriptor after the data. */
   descriptor?: boolean;
   /** Make the directory name differ from the local one. */
   cdName?: string;
-  /** Lie about the sizes in the central directory. */
+  /** Lie about the sizes, or the local-header offset, in the central directory. */
   cdCompressedSize?: number;
   cdSize?: number;
+  cdLocalOffset?: number;
+  /** Point this record at the local header of an earlier entry with this name. */
+  cdLocalOffsetOf?: string;
 };
 
 function zip(entries: ZipEntry[], opts: { declaredCount?: number } = {}): Buffer {
@@ -70,6 +76,7 @@ function zip(entries: ZipEntry[], opts: { declaredCount?: number } = {}): Buffer
   const central: Buffer[] = [];
   let offset = 0;
   let records = 0;
+  const offsetOf = new Map<string, number>();
   for (const entry of entries) {
     const plain = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data, 'utf8');
     const method = entry.method ?? 0;
@@ -87,8 +94,8 @@ function zip(entries: ZipEntry[], opts: { declaredCount?: number } = {}): Buffer
     local.writeUInt32LE(entry.descriptor ? 0 : body.length, 18);
     local.writeUInt32LE(entry.descriptor ? 0 : plain.length, 22);
     local.writeUInt16LE(name.length, 26);
-    locals.push(local, name, body);
-    if (entry.descriptor) {
+    if (!entry.cdOnly) locals.push(local, name, body);
+    if (entry.descriptor && !entry.cdOnly) {
       // The real thing: signature, CRC and both sizes, written AFTER the data. This is what makes
       // the data-descriptor fixture an archive of that shape rather than a flag on an ordinary one.
       const dd = Buffer.alloc(16);
@@ -100,7 +107,10 @@ function zip(entries: ZipEntry[], opts: { declaredCount?: number } = {}): Buffer
     }
 
     const at = offset;
-    offset += 30 + name.length + body.length + (entry.descriptor ? 16 : 0);
+    if (!entry.cdOnly) {
+      offsetOf.set(entry.name, at);
+      offset += 30 + name.length + body.length + (entry.descriptor ? 16 : 0);
+    }
     if (entry.localOnly) continue;
     records++;
 
@@ -115,7 +125,11 @@ function zip(entries: ZipEntry[], opts: { declaredCount?: number } = {}): Buffer
     cd.writeUInt32LE(entry.cdCompressedSize ?? body.length, 20);
     cd.writeUInt32LE(entry.cdSize ?? plain.length, 24);
     cd.writeUInt16LE(cdName.length, 28);
-    cd.writeUInt32LE(at, 42);
+    const pointsAt = entry.cdLocalOffsetOf === undefined ? undefined : offsetOf.get(entry.cdLocalOffsetOf);
+    if (entry.cdLocalOffsetOf !== undefined && pointsAt === undefined) {
+      throw new Error(`fixture error: no earlier entry named ${entry.cdLocalOffsetOf}`);
+    }
+    cd.writeUInt32LE(pointsAt ?? entry.cdLocalOffset ?? at, 42);
     central.push(cd, cdName);
   }
   const directory = Buffer.concat(central);
@@ -550,6 +564,74 @@ describe('the reader sees what a real unpacker sees, or refuses', () => {
     });
   });
 
+  // Patches on a well-formed archive: these lies live in the EOCD and the directory records
+  // themselves, which is below what the builder models.
+  const eocdAt = (buf: Buffer): number => buf.length - 22;
+  const withZip64Sentinel = (): Buffer => {
+    const buf = zip(clean());
+    buf.writeUInt32LE(0xffffffff, eocdAt(buf) + 16); // central-directory offset
+    return buf;
+  };
+  const withOverstatedDirectory = (): Buffer => {
+    const buf = zip(clean());
+    buf.writeUInt32LE(buf.readUInt32LE(eocdAt(buf) + 12) + 400, eocdAt(buf) + 12);
+    return buf;
+  };
+  const withJunkedRecordSignature = (): Buffer => {
+    const buf = zip(clean());
+    buf.writeUInt32LE(0xdeadbeef, buf.readUInt32LE(eocdAt(buf) + 16));
+    return buf;
+  };
+
+  it('refuses a ZIP64 sentinel in the end-of-central-directory', () => {
+    const run = runAudit(makeTree({ raw: withZip64Sentinel() }));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('ZIP64 archive — this auditor reads 32-bit ZIP only');
+  });
+
+  it('refuses a directory that claims to extend past the end of the file', () => {
+    const run = runAudit(makeTree({ raw: withOverstatedDirectory() }));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('the central directory runs past the end of the file');
+  });
+
+  it('refuses a directory record without a directory signature', () => {
+    const run = runAudit(makeTree({ raw: withJunkedRecordSignature() }));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('central directory record 1 is malformed');
+  });
+
+  it.each([
+    ['its compressed size', { cdCompressedSize: 0xffffffff }],
+    ['its uncompressed size', { cdSize: 0xffffffff }],
+    ['its local-header offset', { cdLocalOffset: 0xffffffff }],
+  ])('refuses a ZIP64 sentinel in %s', (_label, lie) => {
+    const run = audit([...clean(), { name: 'dist/x.js', data: 'export {};\n', ...lie }]);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('ZIP64 sentinel in the central directory');
+  });
+
+  it('refuses a compression method it cannot decode, rather than guessing at the bytes', () => {
+    // Method 12 is BZIP2. Refusing is the whole design: every branch added to this reader is a
+    // REFUSAL, never a new decoder — the interpreting surface stays the size it was.
+    const run = audit([...clean(), { name: 'dist/x.js', data: 'export {};\n', method: 12 }]);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('unsupported ZIP compression method 12');
+  });
+
+  it('refuses a directory record whose local header the walk never reaches', () => {
+    // Two records with the same name pointing at ONE local header: the walk visits that header
+    // once, so the other record never gets a data window. Reading it would mean reading the wrong
+    // entry's bytes, and leaving it unread would mean not scanning a record the directory lists.
+    const run = audit([
+      ...clean(),
+      { name: 'dist/ok.js', data: 'export {};\n' },
+      { name: 'dist/ok.js', data: 'export {};\n', cdOnly: true, cdLocalOffsetOf: 'dist/ok.js' },
+    ]);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('its local file header is unreachable');
+  });
+
   it('refuses a multi-part archive, whose other volumes it was never handed', () => {
     const buf = zip(clean());
     buf.writeUInt16LE(1, buf.length - 22 + 4);
@@ -590,7 +672,7 @@ describe('the reader sees what a real unpacker sees, or refuses', () => {
     // has to sit where the scan does read: an allowlisted dist/*.js.
     const run = audit([...clean(), { name: 'dist/big.js', data: '\n'.repeat(200_000), method: 8, cdSize: 16 }]);
     expect(run.status).not.toBe(0);
-    expect(run.stderr).toContain('dist/big.js');
+    expect(run.stderr).toContain('dist/big.js: expands past the 16 bytes it declares');
     expect(run.stderr).not.toContain('JavaScript heap out of memory');
   });
 });
@@ -1130,6 +1212,129 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
       entries: [...clean(), { name: 'dist/auth/', data: PLANTED }],
       baseline: (r: Run) => expect(r.status).not.toBe(0),
       ablated: (r: Run) => expect(r.status).toBe(0),
+    },
+    // Six branches that had no fixture at all. Only the directory-signature one can be pinned by
+    // exit status; the rest are caught by a neighbouring fail-closed check once ablated, so what
+    // is asserted is which layer speaks — the reason is recorded above.
+    {
+      rule: 'a ZIP64 sentinel in the EOCD is a refusal',
+      mutate: [
+        [
+          '  if (declared === ZIP64_U16 || cdSize === ZIP64_U32 || cdStart === ZIP64_U32) {',
+          '  if (false) {',
+        ],
+      ],
+      raw: (() => {
+        const buf = zip(clean());
+        buf.writeUInt32LE(0xffffffff, buf.length - 22 + 16);
+        return buf;
+      })(),
+      baseline: (r: Run) => expect(r.stderr).toContain('ZIP64 archive'),
+      ablated: (r: Run) => {
+        expect(r.stderr).not.toContain('ZIP64 archive');
+        expect(r.stderr).toContain('runs past the end of the file');
+      },
+    },
+    {
+      rule: 'a directory reaching past the end of the file is a refusal',
+      mutate: [['  if (cdEnd > buf.length || cdEnd > eocd) throw', '  if (false) throw']],
+      raw: (() => {
+        const buf = zip(clean());
+        buf.writeUInt32LE(buf.readUInt32LE(buf.length - 22 + 12) + 400, buf.length - 22 + 12);
+        return buf;
+      })(),
+      baseline: (r: Run) => expect(r.stderr).toContain('runs past the end of the file'),
+      ablated: (r: Run) => {
+        expect(r.stderr).not.toContain('runs past the end of the file');
+        expect(r.stderr).toContain('is malformed');
+      },
+    },
+    {
+      // The only one of the six that is load-bearing on its own: with the signature check gone the
+      // archive PASSES, because the rest of the junked record still parses as plausible fields.
+      rule: 'a directory record must carry the directory signature',
+      mutate: [
+        ['    if (at + 46 > cdEnd || buf.readUInt32LE(at) !== CENTRAL_SIG) {', '    if (false) {'],
+      ],
+      raw: (() => {
+        const buf = zip(clean());
+        buf.writeUInt32LE(0xdeadbeef, buf.readUInt32LE(buf.length - 22 + 16));
+        return buf;
+      })(),
+      baseline: (r: Run) => expect(r.status).not.toBe(0),
+      ablated: (r: Run) => expect(r.status).toBe(0),
+    },
+    {
+      rule: 'a ZIP64 sentinel on an entry is a refusal',
+      mutate: [
+        [
+          '    if (entry.compressedSize === ZIP64_U32 || entry.size === ZIP64_U32 || entry.local === ZIP64_U32) {',
+          '    if (false) {',
+        ],
+      ],
+      entries: [...clean(), { name: 'dist/x.js', data: 'export {};\n', cdCompressedSize: 0xffffffff }],
+      baseline: (r: Run) => expect(r.stderr).toContain('ZIP64 sentinel in the central directory'),
+      ablated: (r: Run) => {
+        expect(r.stderr).not.toContain('ZIP64 sentinel');
+        expect(r.stderr).toContain('the local headers do not reach the central directory');
+      },
+    },
+    {
+      rule: 'a ZIP64 sentinel on an entry offset is a refusal too',
+      mutate: [
+        [
+          '    if (entry.compressedSize === ZIP64_U32 || entry.size === ZIP64_U32 || entry.local === ZIP64_U32) {',
+          '    if (false) {',
+        ],
+      ],
+      entries: [...clean(), { name: 'dist/x.js', data: 'export {};\n', cdLocalOffset: 0xffffffff }],
+      baseline: (r: Run) => expect(r.stderr).toContain('ZIP64 sentinel in the central directory'),
+      ablated: (r: Run) => {
+        expect(r.stderr).not.toContain('ZIP64 sentinel');
+        expect(r.stderr).toContain('present in the local headers but absent from the central directory');
+      },
+    },
+    {
+      rule: 'an undecodable compression method is a refusal, not a guess',
+      mutate: [['  if (entry.method !== 0 && entry.method !== 8) {', '  if (false) {']],
+      entries: [...clean(), { name: 'dist/x.js', data: 'export {};\n', method: 12 }],
+      baseline: (r: Run) => expect(r.stderr).toContain('unsupported ZIP compression method 12'),
+      // Without it the auditor hands BZIP2 bytes to inflate and reports a zlib code instead of the
+      // cause. Fail-closed either way, but the operator can no longer read what happened.
+      ablated: (r: Run) => {
+        expect(r.stderr).not.toContain('unsupported ZIP compression method');
+        expect(r.stderr).toContain('Z_DATA_ERROR');
+      },
+    },
+    {
+      rule: 'a directory record with no reachable local header is a refusal',
+      mutate: [
+        [
+          '    if (entry.dataAt === undefined) throw new Error(`${entry.name}: its local file header is unreachable`);',
+          '    void entry;',
+        ],
+      ],
+      entries: [
+        ...clean(),
+        { name: 'dist/ok.js', data: 'export {};\n' },
+        { name: 'dist/ok.js', data: 'export {};\n', cdOnly: true, cdLocalOffsetOf: 'dist/ok.js' },
+      ],
+      baseline: (r: Run) => expect(r.stderr).toContain('its local file header is unreachable'),
+      // Without it the entry is read with dataAt undefined, which slices from byte 0 — the auditor
+      // would be scanning a different entry's bytes and calling the result this entry's.
+      ablated: (r: Run) => expect(r.stderr).not.toContain('its local file header is unreachable'),
+    },
+    {
+      rule: 'an over-long expansion is reported as a rule, not as a zlib code',
+      mutate: [
+        [
+          "      throw new Error(`${entry.name}: expands past the ${entry.size} bytes it declares (${error.code ?? error.message})`);",
+          '      throw error;',
+        ],
+      ],
+      entries: [...clean(), { name: 'dist/big.js', data: '\n'.repeat(200_000), method: 8, cdSize: 16 }],
+      baseline: (r: Run) => expect(r.stderr).toContain('expands past the 16 bytes it declares'),
+      ablated: (r: Run) => expect(r.stderr).not.toContain('expands past'),
     },
     {
       rule: 'a multi-part archive is a refusal',
