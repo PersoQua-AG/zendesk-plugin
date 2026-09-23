@@ -16,7 +16,7 @@ setupLoginHarness('login-url-');
 
 describe('the authorization URL reaches the user before anything waits', () => {
   it('call 1 returns it without waiting for the callback', async () => {
-    const port = await freePort();
+    const port = freePort();
     const started = Date.now();
     const text = await runLogin(deps(port, { callbackTimeoutMs: 60_000 }));
     // A minute-long listener is open, yet the call is back at once with the URL.
@@ -26,7 +26,7 @@ describe('the authorization URL reaches the user before anything waits', () => {
   });
 
   it('a call made while the callback is still outstanding names it again', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port, { callbackTimeoutMs: 60_000 });
     const first = await runLogin(d);
     const second = await runLogin(d);
@@ -45,7 +45,7 @@ describe('the authorization URL reaches the user before anything waits', () => {
 // design exists to remove.
 describe('a reply that has no usable URL promises none', () => {
   it('a subdomain that cannot form a URL yields an actionable failure and promises no URL', async () => {
-    const port = await freePort();
+    const port = freePort();
     const text = await runLogin(deps(port, { config: { ...config(port), subdomain: 'acme corp' } }));
     expect(text).toMatch(/Invalid URL/i);
     expect(text).toContain('Run zendesk_login again');
@@ -53,7 +53,7 @@ describe('a reply that has no usable URL promises none', () => {
   });
 
   it('a blocked callback port names the remedy and promises no URL', async () => {
-    const port = await freePort();
+    const port = freePort();
     const blocker = createHttpServer(() => {});
     await new Promise<void>((r) => blocker.listen(port, r));
     try {
@@ -66,7 +66,7 @@ describe('a reply that has no usable URL promises none', () => {
   });
 
   it('a cancelled/denied authorization reports the reason and points at a NEW authorization', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port);
     const first = await runLogin(d);
     expect(authorizationUrl(first).host).toBe('acme.zendesk.com');
@@ -80,7 +80,7 @@ describe('a reply that has no usable URL promises none', () => {
   });
 
   it('reports a non-Error failure as plain text rather than swallowing it', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listen: NonNullable<LoginDeps['listen']> = async (): Promise<CallbackListener> => ({
       promise: Promise.resolve({ code: 'auth-code', redirectUri: `http://localhost:${port}/callback` }),
       close: () => {},

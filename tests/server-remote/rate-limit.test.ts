@@ -2,11 +2,11 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { buildRemoteApp } from '../../src/remote/remote-server.js';
 import { IssuedTokenStore } from '../../src/auth/issued-token-store.js';
 import { InMemoryClientsStore } from '../../src/remote/connector-contract.js';
+import { listenLoopback } from './harness.js';
 
 const KEY = '0+k4qZ+4xicM8rKBVMRYFikJpkLODNCh33wHb08pJyU=';
 const dirs: string[] = [];
@@ -28,11 +28,9 @@ async function boot(): Promise<string> {
   };
   const issued = new IssuedTokenStore(join(dataDir, 'issued'), KEY);
   const { app } = buildRemoteApp(env, { issued });
-  const server = (app as unknown as { listen: (p: number) => Server }).listen(0);
+  const { server, base } = await listenLoopback(app);
   servers.push(server);
-  await new Promise<void>((r) => server.once('listening', () => r()));
-  const { port } = (server.address() as AddressInfo);
-  return `http://127.0.0.1:${port}`;
+  return base;
 }
 
 describe('HTTP rate limiting (H1)', () => {

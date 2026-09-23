@@ -15,7 +15,7 @@ setupLoginHarness('login-two-step-');
 
 describe('the two-call login over the real callback listener', () => {
   it('call 1 hands out the URL, the browser redirect lands, call 2 completes the login', async () => {
-    const port = await freePort();
+    const port = freePort();
     let exchanged: { code: string; verifier: string; redirectUri: string } | null = null;
     const d = deps(port, {
       exchange: async (_cfg, code, verifier, redirectUri) => {
@@ -46,7 +46,7 @@ describe('the two-call login over the real callback listener', () => {
   });
 
   it('keeps the same state across calls, so the URL handed out first still works', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port, {
       callbackTimeoutMs: 60_000,
       exchange: async () => ({ accessToken: 'a', refreshToken: 'r', expiresIn: 3600 }),
@@ -70,7 +70,7 @@ describe('the two-call login over the real callback listener', () => {
   // user's own authorization is still there to be finished. Whole reasoning in
   // oauth-flow.stray-callback.test.ts.
   it('refuses a callback that carries a foreign state, stores nothing, and keeps the login alive', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port, { callbackTimeoutMs: 60_000 });
     const url = authorizationUrl(await runLogin(d));
 
@@ -87,7 +87,7 @@ describe('the two-call login over the real callback listener', () => {
 
 describe('a flow that ends without a callback', () => {
   it('times out, cleans up, and the next login starts over with a NEW state', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port, { callbackTimeoutMs: 30 });
     const stale = authorizationUrl(await runLogin(d));
     await new Promise((r) => setTimeout(r, 80));
@@ -105,7 +105,7 @@ describe('a flow that ends without a callback', () => {
   });
 
   it('force abandons the flow in progress and starts a new one on the same port', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port, { callbackTimeoutMs: 60_000 });
     const stale = authorizationUrl(await runLogin(d));
 
@@ -124,7 +124,7 @@ describe('a flow that ends without a callback', () => {
   });
 
   it('leaves no handle that could keep the process alive', async () => {
-    const port = await freePort();
+    const port = freePort();
     const realSetTimeout = globalThis.setTimeout;
     const timers: NodeJS.Timeout[] = [];
     const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {

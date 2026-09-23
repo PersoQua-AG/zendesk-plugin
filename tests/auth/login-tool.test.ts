@@ -29,7 +29,7 @@ setupLoginHarness('login-tool-');
 
 describe('zendesk_login happy path', () => {
   it('call 1 returns the authorization URL, call 2 stores tokens the server can load', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port, {
       listen: arrived(port),
       exchange: async () => ({ accessToken: 'access-1', refreshToken: 'refresh-1', expiresIn: 3600 }),
@@ -50,7 +50,7 @@ describe('zendesk_login happy path', () => {
   });
 
   it('never leaks the client secret, tokens, or the authorization code', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port, {
       listen: arrived(port),
       exchange: async () => ({ accessToken: 'access-1', refreshToken: 'refresh-1', expiresIn: 3600 }),
@@ -61,7 +61,7 @@ describe('zendesk_login happy path', () => {
   });
 
   it('writes nothing to stdout (stdout is the MCP stdio transport)', async () => {
-    const port = await freePort();
+    const port = freePort();
     const spy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     const d = deps(port, { listen: arrived(port), exchange: async () => ({ accessToken: 'a', refreshToken: 'r', expiresIn: 3600 }) });
     await runLogin(d);
@@ -76,7 +76,7 @@ describe('zendesk_login when already authorized', () => {
   }
 
   it('reports authorized without starting a browser/network flow', async () => {
-    const port = await freePort();
+    const port = freePort();
     seedTokens();
     const listen = vi.fn();
     const text = await runLogin(deps(port, { listen: listen as unknown as LoginDeps['listen'] }));
@@ -85,7 +85,7 @@ describe('zendesk_login when already authorized', () => {
   });
 
   it('force starts a new flow and replaces the tokens only after a successful exchange', async () => {
-    const port = await freePort();
+    const port = freePort();
     seedTokens();
     const d = deps(port, {
       listen: arrived(port, 'c'),
@@ -102,7 +102,7 @@ describe('zendesk_login when already authorized', () => {
   });
 
   it('keeps the existing tokens when the forced flow fails', async () => {
-    const port = await freePort();
+    const port = freePort();
     seedTokens();
     const d = deps(port, {
       listen: arrived(port, 'c'),
@@ -119,7 +119,7 @@ describe('zendesk_login when already authorized', () => {
 
 describe('zendesk_login negative paths', () => {
   it('reports a cancelled/denied authorization in plain text with no stack trace', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port);
     // With the flow's own `state`, because Zendesk's denial redirect carries it too. Without one
     // the listener answers 400 and keeps waiting instead — deliberately, so that a stray local
@@ -134,7 +134,7 @@ describe('zendesk_login negative paths', () => {
   });
 
   it('names only the invalid fields of a malformed token response, never the raw body', async () => {
-    const port = await freePort();
+    const port = freePort();
     const badFetch = (async () =>
       new Response(JSON.stringify({ refresh_token: 'r', expires_in: 3600, leaked: 'TOP_SECRET_BODY' }), {
         status: 200,
@@ -155,7 +155,7 @@ describe('zendesk_login negative paths', () => {
   // challenge page on ONE line, so a first-line-only cut quotes all ~8 KB of it — challenge token
   // included — straight into the tool result the user reads.
   it('never quotes an HTML error page from the token endpoint back to the user', async () => {
-    const port = await freePort();
+    const port = freePort();
     const challenge = `<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>${'x'.repeat(8000)}<input name="cf_chl_tk" value="SENTINEL_CHALLENGE_TOKEN"></body></html>`;
     expect(challenge).not.toContain('\n');
     const wafFetch = (async () => new Response(challenge, { status: 403 })) as unknown as typeof fetch;
@@ -175,7 +175,7 @@ describe('zendesk_login negative paths', () => {
   });
 
   it('names the port and the oauth_callback_port field when the callback port is taken', async () => {
-    const port = await freePort();
+    const port = freePort();
     const blocker = createHttpServer(() => {});
     await new Promise<void>((r) => blocker.listen(port, r));
     try {
@@ -194,7 +194,7 @@ describe('zendesk_login negative paths', () => {
   // A failed bind must leave NOTHING reserved. The old synchronous marker did reserve, and a single
   // EADDRINUSE then refused every later login for the lifetime of the process.
   it('reserves nothing when the bind fails, so the next login starts normally', async () => {
-    const port = await freePort();
+    const port = freePort();
     const blocker = createHttpServer(() => {});
     await new Promise<void>((r) => blocker.listen(port, r));
     try {
@@ -209,7 +209,7 @@ describe('zendesk_login negative paths', () => {
   });
 
   it('never puts the token file path into an error message', async () => {
-    const port = await freePort();
+    const port = freePort();
     const d = deps(port, {
       listen: arrived(port, 'c'),
       exchange: async () => {
@@ -225,7 +225,7 @@ describe('zendesk_login negative paths', () => {
 
 describe('zendesk_login with an unreadable token store', () => {
   it('says the stored credentials were discarded, without a path or a stack trace', async () => {
-    const port = await freePort();
+    const port = freePort();
     // What a rotated client secret looks like from here: a file the TokenStore cannot decrypt.
     writeFileSync(tokensPath, 'not-a-valid-encrypted-token-file');
     const d = deps(port, {
@@ -246,7 +246,7 @@ describe('zendesk_login with an unreadable token store', () => {
 
 describe('zendesk_login with incomplete extension configuration', () => {
   it('returns the actionable configuration message and touches nothing', async () => {
-    const port = await freePort();
+    const port = freePort();
     const listen = vi.fn();
     const text = await runLogin(
       deps(port, {

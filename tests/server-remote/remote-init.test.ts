@@ -2,13 +2,13 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { buildRemoteApp } from '../../src/remote/remote-server.js';
 import { IssuedTokenStore } from '../../src/auth/issued-token-store.js';
 import { WriteAuditLog, RETENTION_MS } from '../../src/remote/audit-log.js';
+import { listenLoopback } from './harness.js';
 
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -35,11 +35,9 @@ async function start(): Promise<{ base: string; token: string }> {
   const { env, issued } = fixtureEnv();
   const { app } = buildRemoteApp(env, { issued });
   const token = issued.mint('zendesk:test');
-  const server = (app as unknown as { listen: (p: number) => Server }).listen(0);
+  const { server, base } = await listenLoopback(app);
   servers.push(server);
-  await new Promise<void>((r) => server.once('listening', () => r()));
-  const { port } = server.address() as AddressInfo;
-  return { base: `http://127.0.0.1:${port}`, token };
+  return { base, token };
 }
 
 function connect(base: string, token: string): { client: Client; transport: StreamableHTTPClientTransport } {
