@@ -40,3 +40,4 @@ coverage/
 # The packer already drops *.mcpb itself (EXCLUDE_PATTERNS) but not this, and a bundle shipping the
 # checksum of the previous bundle is confusing at best.
 *.mcpb.sha256
+*.mcpb.REJECTED
