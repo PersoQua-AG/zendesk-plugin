@@ -35,3 +35,8 @@ memory/
 # Test output, produced by `npm run test:coverage` in a checkout that is then packed. Same reason as
 # above: .gitignore keeps it out of git, and only this file keeps it out of the bundle.
 coverage/
+
+# The checksum sidecar scripts/audit-bundle.mjs writes next to the artifact once the audit passes.
+# The packer already drops *.mcpb itself (EXCLUDE_PATTERNS) but not this, and a bundle shipping the
+# checksum of the previous bundle is confusing at best.
+*.mcpb.sha256
