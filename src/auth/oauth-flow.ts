@@ -115,97 +115,106 @@ export function startCallbackListener(
     let server!: Server;
 
     const promise = new Promise<AuthorizationResult>((resolve, reject) => {
-      let settled = false;
-      server = createServer((req, res) => {
-        // req.url is typed `string | undefined` but is always set on a request the parser accepted,
-        // so the fallback exists for the type only and no test can reach it.
-        /* v8 ignore next */
-        const rawUrl = req.url ?? '/';
-        // Not every request-target node's HTTP parser accepts is a URL this base can resolve.
-        // Measured on node v22: llhttp delivers "//", "///", "//%" and "http://" unchanged, and
-        // WHATWG rejects all four (empty authority) — `new URL` throws TypeError [ERR_INVALID_URL].
-        // Thrown from a 'request' listener that is an uncaughtException, so it did not fail the
-        // callback, it killed the whole stdio server: the extension is gone and every tool with it,
-        // for the five minutes the listener is open, on a port any local process can reach. A
-        // browser sent to http://localhost:<port>// is enough to produce it. The suite could not
-        // see it because every test drives the listener through fetch(), which normalizes the
-        // target and can never emit one of these.
-        //
-        // The remedy is 400 and keep listening, not a settled flow: a request this malformed is not
-        // the user's browser coming back from Zendesk, so the pending authorization must survive it
-        // exactly as it survives the 404 below.
-        let url: URL;
-        try {
-          url = new URL(rawUrl, `http://localhost:${port}`);
-        } catch {
-          res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Bad request target');
-          return;
-        }
-        if (url.pathname !== '/callback') {
-          res.writeHead(404).end();
-          return;
-        }
-        // `state` FIRST, before any other query parameter is read, and a request that fails it ends
-        // like the 404 above: 400, keep listening, pending authorization untouched. `state` is the
-        // only thing separating the user's browser coming back from Zendesk from any other caller,
-        // and on a fixed local port held open for five minutes every local process is a possible
-        // caller — a browser tab included, since fetch's no-cors mode is blocked from READING the
-        // answer, not from sending the request. Checked second, as it was, an `error=` from such a
-        // caller did two things it must not: it ENDED the authorization the user was in the middle
-        // of, and it put text of its own choosing into the rejection the model reads as tool output
-        // (../tools/login.ts failureText).
-        //
-        // The order costs nothing, because a genuine denial carries `state` too: "If the user
-        // denies access, Zendesk redirects to your app with an error and the same state value you
-        // sent: …?error=access_denied&state=xyz789" (developer.zendesk.com, "Using OAuth to
-        // authenticate API requests", step 3) — which RFC 6749 §4.1.2.1 requires of any
-        // authorization server ("state: REQUIRED if a 'state' parameter was present in the client
-        // authorization request"). So a denial still settles AT ONCE, and nobody waits out the
-        // window for an answer that already exists.
-        if (url.searchParams.get('state') !== expectedState) {
-          res.writeHead(400, { 'Content-Type': 'text/plain' }).end('State mismatch');
-          return;
-        }
+      // Every call below is wrapped, not just the one that bit us in #9. This is the INNER
+      // executor: a synchronous throw in here rejects `promise`, which the catch below this
+      // function swallows, so the promise startCallbackListener() returns would never settle and
+      // every serialized login behind it would hang. bindFailed() settles the one the caller
+      // actually holds. Enforced by scripts/assert-executor-safety.mjs.
+      try {
+        let settled = false;
+        server = createServer((req, res) => {
+          // req.url is typed `string | undefined` but is always set on a request the parser accepted,
+          // so the fallback exists for the type only and no test can reach it.
+          /* v8 ignore next */
+          const rawUrl = req.url ?? '/';
+          // Not every request-target node's HTTP parser accepts is a URL this base can resolve.
+          // Measured on node v22: llhttp delivers "//", "///", "//%" and "http://" unchanged, and
+          // WHATWG rejects all four (empty authority) — `new URL` throws TypeError [ERR_INVALID_URL].
+          // Thrown from a 'request' listener that is an uncaughtException, so it did not fail the
+          // callback, it killed the whole stdio server: the extension is gone and every tool with it,
+          // for the five minutes the listener is open, on a port any local process can reach. A
+          // browser sent to http://localhost:<port>// is enough to produce it. The suite could not
+          // see it because every test drives the listener through fetch(), which normalizes the
+          // target and can never emit one of these.
+          //
+          // The remedy is 400 and keep listening, not a settled flow: a request this malformed is not
+          // the user's browser coming back from Zendesk, so the pending authorization must survive it
+          // exactly as it survives the 404 below.
+          let url: URL;
+          try {
+            url = new URL(rawUrl, `http://localhost:${port}`);
+          } catch {
+            res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Bad request target');
+            return;
+          }
+          if (url.pathname !== '/callback') {
+            res.writeHead(404).end();
+            return;
+          }
+          // `state` FIRST, before any other query parameter is read, and a request that fails it ends
+          // like the 404 above: 400, keep listening, pending authorization untouched. `state` is the
+          // only thing separating the user's browser coming back from Zendesk from any other caller,
+          // and on a fixed local port held open for five minutes every local process is a possible
+          // caller — a browser tab included, since fetch's no-cors mode is blocked from READING the
+          // answer, not from sending the request. Checked second, as it was, an `error=` from such a
+          // caller did two things it must not: it ENDED the authorization the user was in the middle
+          // of, and it put text of its own choosing into the rejection the model reads as tool output
+          // (../tools/login.ts failureText).
+          //
+          // The order costs nothing, because a genuine denial carries `state` too: "If the user
+          // denies access, Zendesk redirects to your app with an error and the same state value you
+          // sent: …?error=access_denied&state=xyz789" (developer.zendesk.com, "Using OAuth to
+          // authenticate API requests", step 3) — which RFC 6749 §4.1.2.1 requires of any
+          // authorization server ("state: REQUIRED if a 'state' parameter was present in the client
+          // authorization request"). So a denial still settles AT ONCE, and nobody waits out the
+          // window for an answer that already exists.
+          if (url.searchParams.get('state') !== expectedState) {
+            res.writeHead(400, { 'Content-Type': 'text/plain' }).end('State mismatch');
+            return;
+          }
 
-        const fail = (status: number, body: string, message: string): void => {
-          res.writeHead(status, { 'Content-Type': 'text/plain' }).end(body);
-          finish(() => reject(new Error(message)));
+          const fail = (status: number, body: string, message: string): void => {
+            res.writeHead(status, { 'Content-Type': 'text/plain' }).end(body);
+            finish(() => reject(new Error(message)));
+          };
+
+          const error = url.searchParams.get('error');
+          if (error) {
+            const reason = sanitizeErrorCode(error);
+            return fail(400, `Authorization failed: ${reason}`, `OAuth authorization failed: ${reason}`);
+          }
+          const code = url.searchParams.get('code');
+          if (!code) {
+            return fail(400, 'Missing code', 'OAuth callback missing code');
+          }
+          res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Authorized. You can close this tab.');
+          finish(() => resolve({ code, redirectUri: redirectUri(port) }));
+        });
+
+        const timer = setTimeout(() => {
+          finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`)));
+        }, timeoutMs);
+        timer.unref?.();
+
+        const finish = (settle: () => void): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          server.close();
+          settle();
         };
 
-        const error = url.searchParams.get('error');
-        if (error) {
-          const reason = sanitizeErrorCode(error);
-          return fail(400, `Authorization failed: ${reason}`, `OAuth authorization failed: ${reason}`);
-        }
-        const code = url.searchParams.get('code');
-        if (!code) {
-          return fail(400, 'Missing code', 'OAuth callback missing code');
-        }
-        res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Authorized. You can close this tab.');
-        finish(() => resolve({ code, redirectUri: redirectUri(port) }));
-      });
+        close = () => finish(() => reject(new Error('OAuth callback listener closed')));
 
-      const timer = setTimeout(() => {
-        finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`)));
-      }, timeoutMs);
-      timer.unref?.();
-
-      const finish = (settle: () => void): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        server.close();
-        settle();
-      };
-
-      close = () => finish(() => reject(new Error('OAuth callback listener closed')));
-
-      server.on('error', (err) => {
-        const bindError = new Error(`OAuth callback server error: ${err.message}`);
-        finish(() => reject(bindError));
-        bindFailed(bindError);
-      });
-      server.on('listening', () => bound({ promise, close }));
+        server.on('error', (err) => {
+          const bindError = new Error(`OAuth callback server error: ${err.message}`);
+          finish(() => reject(bindError));
+          bindFailed(bindError);
+        });
+        server.on('listening', () => bound({ promise, close }));
+      } catch (err) {
+        bindFailed(err as Error);
+      }
     });
 
     // On a bind failure nobody holds `promise` yet — it is rejected before this function resolves,
