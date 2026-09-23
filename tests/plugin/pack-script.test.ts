@@ -33,8 +33,10 @@ describe('mcpb pack script', () => {
     expect(script).toContain('zendesk.mcpb');
   });
 
-  it('refuses to reach the packer before the production-tree gate has passed', () => {
-    expect(pkg.scripts.pack as string).toMatch(/^node scripts\/assert-prod-tree\.mjs &&/);
+  it('refuses to reach the packer before the manifest and production-tree gates have passed', () => {
+    expect(pkg.scripts.pack as string).toMatch(
+      /^node scripts\/validate-manifests\.mjs && node scripts\/assert-prod-tree\.mjs &&/,
+    );
   });
 
   it('adds no runtime dependency for packaging', () => {

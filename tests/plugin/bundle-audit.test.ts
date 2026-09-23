@@ -56,6 +56,8 @@ type ZipEntry = {
   flags?: number;
   /** Write the local header but NO central-directory record (a streaming unpacker still sees it). */
   localOnly?: boolean;
+  /** Zero the LOCAL sizes and append a real 16-byte data descriptor after the data. */
+  descriptor?: boolean;
   /** Make the directory name differ from the local one. */
   cdName?: string;
   /** Lie about the sizes in the central directory. */
@@ -81,14 +83,24 @@ function zip(entries: ZipEntry[], opts: { declaredCount?: number } = {}): Buffer
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(flags, 6);
     local.writeUInt16LE(method, 8);
-    local.writeUInt32LE(sum, 14);
-    local.writeUInt32LE(body.length, 18);
-    local.writeUInt32LE(plain.length, 22);
+    local.writeUInt32LE(entry.descriptor ? 0 : sum, 14);
+    local.writeUInt32LE(entry.descriptor ? 0 : body.length, 18);
+    local.writeUInt32LE(entry.descriptor ? 0 : plain.length, 22);
     local.writeUInt16LE(name.length, 26);
     locals.push(local, name, body);
+    if (entry.descriptor) {
+      // The real thing: signature, CRC and both sizes, written AFTER the data. This is what makes
+      // the data-descriptor fixture an archive of that shape rather than a flag on an ordinary one.
+      const dd = Buffer.alloc(16);
+      dd.writeUInt32LE(0x08074b50, 0);
+      dd.writeUInt32LE(sum, 4);
+      dd.writeUInt32LE(body.length, 8);
+      dd.writeUInt32LE(plain.length, 12);
+      locals.push(dd);
+    }
 
     const at = offset;
-    offset += 30 + name.length + body.length;
+    offset += 30 + name.length + body.length + (entry.descriptor ? 16 : 0);
     if (entry.localOnly) continue;
     records++;
 
@@ -383,7 +395,9 @@ describe('an archive that cannot be judged is refused', () => {
 
   it('refuses a directory whose record count disagrees with the records it holds', () => {
     const buf = zip(clean());
-    buf.writeUInt16LE(buf.readUInt16LE(buf.length - 22 + 10) + 1, buf.length - 22 + 10);
+    // BOTH count fields, so the EOCD stays self-consistent and the fixture reaches the check it is
+    // about rather than the one next to it.
+    for (const at of [8, 10]) buf.writeUInt16LE(buf.readUInt16LE(buf.length - 22 + at) + 1, buf.length - 22 + at);
     const run = runAudit(makeTree({ raw: buf }));
     expect(run.status).not.toBe(0);
     expect(run.stderr).toContain('claims 7 entries, the directory holds 6');
@@ -433,7 +447,7 @@ describe('the reader sees what a real unpacker sees, or refuses', () => {
     // file. `cat f | bsdtar -xOf - README.md` prints the token.
     const run = audit([
       ...clean().filter((e) => e.name !== 'README.md'),
-      { name: 'README.md', data: PLANTED, flags: 0x08, cdCompressedSize: 0, cdSize: 0 },
+      { name: 'README.md', data: PLANTED, flags: 0x08, descriptor: true, cdCompressedSize: 0, cdSize: 0 },
     ]);
     expect(run.status).not.toBe(0);
     expect(run.stderr).toContain('uses a data descriptor');
@@ -441,13 +455,18 @@ describe('the reader sees what a real unpacker sees, or refuses', () => {
   });
 
   it('refuses a directory record that declares content in zero compressed bytes', () => {
-    // The same silence reached without the flag.
+    // There is no rule of its own for this: the local-header tiling refuses it, because the next
+    // header is not where a zero-length entry says it should be. Measured in four shapes — scanned
+    // entry, node_modules entry, last entry, one-byte body — and the tiling check caught all four,
+    // so a dedicated rule was only a second message for the same refusal.
     const run = audit([
       ...clean().filter((e) => e.name !== 'README.md'),
       { name: 'README.md', data: PLANTED, cdCompressedSize: 0 },
     ]);
     expect(run.status).not.toBe(0);
-    expect(run.stderr).toMatch(/declares \d+ bytes of content in 0 compressed bytes/);
+    // The walk names the entry it came from, which here IS the entry that lied about its size —
+    // the diagnosis the deleted rule used to carry, at no extra rule.
+    expect(run.stderr).toContain('expected a local file header after README.md');
   });
 
   it('refuses an entry whose real byte count disagrees with its declaration', () => {
@@ -488,6 +507,73 @@ describe('the reader sees what a real unpacker sees, or refuses', () => {
     expect(run.stderr).toContain('binary content where only text belongs');
     expect(run.stderr).toContain('dist/tokens.enc.js');
     expectNoSecretEchoed(run);
+  });
+
+  // Directory markers. The audit skipped these entirely — not accepted, not refused, absent from
+  // the output — and `grep "path.endsWith('/')"` over this file found nothing: the one line with
+  // no fixture was the one carrying the defect. They are judged like every other entry now.
+  describe('directory markers are judged, not waved past', () => {
+    const marker = (name: string): ZipEntry => ({ name, data: '' });
+
+    it.each([
+      ['.zendesk-plugin-data/', 'forbidden path in bundle: .zendesk-plugin-data/ [runtime-data-directory]'],
+      ['coverage/', 'forbidden path in bundle: coverage/ [coverage-output]'],
+      ['dist/users/', 'forbidden path in bundle: dist/users/ [user-data-directory]'],
+      ['../../../../tmp/pwned/', 'is a parent-directory segment'],
+      ['/etc/pwned/', 'is an absolute path'],
+      ['secrets/', 'refused by default: secrets/'],
+    ])('refuses the zero-byte marker %s', (name, expected) => {
+      const run = audit([...clean(), marker(name)]);
+      expect(run.status).not.toBe(0);
+      expect(run.stderr).toContain(expected);
+    });
+
+    it('accepts a marker inside a tree that is itself allowed, and counts it', () => {
+      const run = audit([...clean(), marker('dist/auth/'), marker('node_modules/zod/')]);
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain('Accepted 8 paths');
+      expect(run.stdout).toContain('dist/auth/ [directory-marker]');
+    });
+
+    it('refuses a marker that carries a payload', () => {
+      const run = audit([...clean(), { name: 'dist/auth/', data: PLANTED }]);
+      expect(run.status).not.toBe(0);
+      expect(run.stderr).toMatch(/directory marker carrying \d+ bytes of content: dist\/auth\//);
+      expectNoSecretEchoed(run);
+    });
+
+    it('does not read a trailing slash as an empty path segment', () => {
+      // unsafePath() refuses empty segments; without stripping the marker's trailing slash first,
+      // every legitimate marker would be reported as unsafe instead of judged on its path.
+      expect(audit([...clean(), marker('dist/auth/')]).stderr).not.toContain('empty path segment');
+      expect(audit([...clean(), { name: 'dist//auth.js', data: 'x' }]).stderr).toContain('an empty path segment');
+    });
+  });
+
+  it('refuses a multi-part archive, whose other volumes it was never handed', () => {
+    const buf = zip(clean());
+    buf.writeUInt16LE(1, buf.length - 22 + 4);
+    const run = runAudit(makeTree({ raw: buf }));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('multi-part ZIP archive');
+  });
+
+  it('refuses an end-of-central-directory that disagrees with itself about the entry count', () => {
+    const buf = zip(clean());
+    buf.writeUInt16LE(3, buf.length - 22 + 8); // entries on this disk
+    const run = runAudit(makeTree({ raw: buf }));
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('disagrees with itself');
+  });
+
+  it('refuses a control character in an entry name, which its own report would hide', () => {
+    // Measured: `dist/a\0b.js` was accepted and printed as `dist/a b.js`, so the inventory named
+    // a file that is not the file in the archive. A newline would forge findings outright.
+    const run = audit([...clean(), { name: 'dist/a\u0000b.js', data: 'export {};\n' }]);
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('a control character in the name');
+    const forged = audit([...clean(), { name: 'dist/a\nb.js', data: 'export {};\n' }]);
+    expect(forged.status).not.toBe(0);
   });
 
   it('accepts an archive with an ordinary trailing comment', () => {
@@ -648,7 +734,7 @@ describe('the audit is wired in front of publication', () => {
 
   it('runs as the last link of the existing pack chain, not as a second chain beside it', () => {
     expect(pkg.scripts.pack as string).toMatch(
-      /^node scripts\/assert-prod-tree\.mjs && npx .*@anthropic-ai\/mcpb.* pack \. zendesk\.mcpb && node scripts\/audit-bundle\.mjs zendesk\.mcpb$/,
+      /^node scripts\/validate-manifests\.mjs && node scripts\/assert-prod-tree\.mjs && npx .*@anthropic-ai\/mcpb.* pack \. zendesk\.mcpb && node scripts\/audit-bundle\.mjs zendesk\.mcpb$/,
     );
   });
 
@@ -657,8 +743,11 @@ describe('the audit is wired in front of publication', () => {
     expect(pkg.scripts.pack as string).not.toContain('zendesk-1.0.0.mcpb');
   });
 
-  it('runs in CI', () => {
+  it('runs in CI, and the local release path checks every version site the way CI does', () => {
     expect(readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8')).toContain('npm run pack');
+    // validate-manifests.mjs was CI's first step but not part of `npm run pack`, so the local run
+    // that produces the uploadable artifact checked three of the seven version sites.
+    expect(pkg.scripts.pack as string).toContain('scripts/validate-manifests.mjs');
   });
 
   it('adds no dependency: the script imports Node builtins and nothing else', () => {
@@ -768,6 +857,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     rule: string;
     mutate: Array<[string, string]>;
     entries?: ZipEntry[];
+    raw?: Buffer;
     zipOpts?: { declaredCount?: number };
     tree?: Parameters<typeof makeTree>[0];
     args?: string[];
@@ -959,24 +1049,15 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
       mutate: [['    if (flags & FLAG_DATA_DESCRIPTOR) {', '    if (false) {']],
       entries: [
         ...clean().filter((e) => e.name !== 'README.md'),
-        { name: 'README.md', data: PLANTED, flags: 0x08, cdCompressedSize: 0, cdSize: 0 },
+        { name: 'README.md', data: PLANTED, flags: 0x08, descriptor: true, cdCompressedSize: 0, cdSize: 0 },
       ],
       baseline: (r: Run) => expect(r.stderr).toContain('uses a data descriptor'),
       ablated: (r: Run) => {
         expect(r.stderr).not.toContain('data descriptor');
-        expect(r.stderr).toContain('expected a local file header'); // the tiling check
-      },
-    },
-    {
-      rule: 'zero compressed bytes for non-empty content is a refusal',
-      mutate: [['    if (entry.compressedSize === 0 && entry.size !== 0) {', '    if (false) {']],
-      entries: [
-        ...clean().filter((e) => e.name !== 'README.md'),
-        { name: 'README.md', data: PLANTED, cdCompressedSize: 0 },
-      ],
-      baseline: (r: Run) => expect(r.stderr).toContain('in 0 compressed bytes'),
-      ablated: (r: Run) => {
-        expect(r.stderr).not.toContain('in 0 compressed bytes');
+        // The tiling check. NOTE what this leans on: the fixture writes a real descriptor with
+        // zeroed local sizes, so with the flag check gone the walk lands mid-data. If zip() ever
+        // stops zeroing those sizes the archive tiles again and this goes red for a reason that
+        // has nothing to do with the reader.
         expect(r.stderr).toContain('expected a local file header');
       },
     },
@@ -1008,6 +1089,65 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
         expect(r.stderr).not.toContain('where the directory declares');
         expect(r.stderr).toContain('[credential-assignment]');
       },
+    },
+    {
+      // The exact line that was there: a zero-byte marker skipped unsafePath, the forbidden list
+      // and the allowlist in one go, and appeared in neither the accepted nor the refused count.
+      rule: 'a directory marker is not waved past the path rules',
+      mutate: [
+        [
+          '  const unsafe = unsafePath(path);',
+          "  if (path.endsWith('/') && entry.size === 0) continue;\n  const unsafe = unsafePath(path);",
+        ],
+      ],
+      entries: [
+        ...clean(),
+        { name: '.zendesk-plugin-data/', data: '' },
+        { name: '../../../../tmp/pwned/', data: '' },
+      ],
+      baseline: (r: Run) => expect(r.status).not.toBe(0),
+      ablated: (r: Run) => {
+        expect(r.status).toBe(0);
+        // The shape of the old defect: the archive passes AND the count silently omits them.
+        expect(r.stdout).toContain('Accepted 6 paths');
+      },
+    },
+    {
+      rule: 'a marker inside an allowed tree is allowed by a named rule',
+      mutate: drop('ALLOWED', 'directory-marker'),
+      entries: [...clean(), { name: 'dist/auth/', data: '' }],
+      baseline: (r: Run) => expect(r.status).toBe(0),
+      ablated: (r: Run) => expect(r.status).not.toBe(0),
+    },
+    {
+      rule: 'a marker carrying a payload is a refusal',
+      mutate: [
+        [
+          '    if (entry.size !== 0) problems.push(`directory marker carrying ${entry.size} bytes of content: ${path}`);',
+          '    void entry;',
+        ],
+      ],
+      entries: [...clean(), { name: 'dist/auth/', data: PLANTED }],
+      baseline: (r: Run) => expect(r.status).not.toBe(0),
+      ablated: (r: Run) => expect(r.status).toBe(0),
+    },
+    {
+      rule: 'a multi-part archive is a refusal',
+      mutate: [["  if (buf.readUInt16LE(eocd + 4) !== 0 || buf.readUInt16LE(eocd + 6) !== 0) {", '  if (false) {']],
+      raw: (() => {
+        const buf = zip(clean());
+        buf.writeUInt16LE(1, buf.length - 22 + 4);
+        return buf;
+      })(),
+      baseline: (r: Run) => expect(r.status).not.toBe(0),
+      ablated: (r: Run) => expect(r.status).toBe(0),
+    },
+    {
+      rule: 'a control character in an entry name is a refusal',
+      mutate: [["  if (/[\\u0000-\\u001f\\u007f]/.test(path)) return 'a control character in the name';", '']],
+      entries: [...clean(), { name: 'dist/a\u0000b.js', data: 'export {};\n' }],
+      baseline: (r: Run) => expect(r.status).not.toBe(0),
+      ablated: (r: Run) => expect(r.status).toBe(0),
     },
     {
       rule: 'an unsafe entry name is a refusal',
@@ -1065,11 +1205,11 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     })),
   ];
 
-  it.each(CASES)('$rule', ({ mutate, entries, zipOpts, tree, args, seed, baseline, ablated }) => {
-    const plain = makeTree({ ...tree, entries, zipOpts });
+  it.each(CASES)('$rule', ({ mutate, entries, raw, zipOpts, tree, args, seed, baseline, ablated }) => {
+    const plain = makeTree({ ...tree, entries, raw, zipOpts });
     seed?.(plain);
     baseline(runAudit(plain, args), plain);
-    const mutant = makeTree({ ...tree, entries, zipOpts, mutate });
+    const mutant = makeTree({ ...tree, entries, raw, zipOpts, mutate });
     seed?.(mutant);
     ablated(runAudit(mutant, args), mutant);
   });

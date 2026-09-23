@@ -33,6 +33,11 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // Default-deny. An entry that matches nothing here is refused, whatever it looks like. Measured
 // against the real bundle: 1930 entries, and above node_modules/ and dist/ exactly four files.
 const ALLOWED = [
+  // A directory marker is a zero-byte entry whose name ends in "/". `mcpb pack` emits none today
+  // (measured: 0 of 1930), but an entry that is neither accepted nor refused is the one shape the
+  // default-deny promise cannot cover, so markers are judged like everything else and allowed only
+  // inside a tree that is itself allowed. First in the list so they are reported under this name.
+  { rule: 'directory-marker', match: (p) => p.endsWith('/') && (p.startsWith('dist/') || p.startsWith('node_modules/')) },
   { rule: 'manifest', match: (p) => p === 'manifest.json' },
   { rule: 'package-metadata', match: (p) => p === 'package.json' },
   { rule: 'license', match: (p) => p === 'LICENSE' },
@@ -148,6 +153,14 @@ function readArchive(buf) {
   }
   if (eocd < 0) throw new Error('no ZIP end-of-central-directory record — this is not a .mcpb archive');
 
+  // A multi-part archive: the records this file holds are not all of them, and the rest are in a
+  // file this auditor was never handed. Refusing beats auditing one volume of several.
+  if (buf.readUInt16LE(eocd + 4) !== 0 || buf.readUInt16LE(eocd + 6) !== 0) {
+    throw new Error('multi-part ZIP archive — this auditor reads single-file archives only');
+  }
+  if (buf.readUInt16LE(eocd + 8) !== buf.readUInt16LE(eocd + 10)) {
+    throw new Error('the end-of-central-directory disagrees with itself about how many entries there are');
+  }
   const declared = buf.readUInt16LE(eocd + 10);
   const cdSize = buf.readUInt32LE(eocd + 12);
   const cdStart = buf.readUInt32LE(eocd + 16);
@@ -182,9 +195,6 @@ function readArchive(buf) {
     if (entry.compressedSize === ZIP64_U32 || entry.size === ZIP64_U32 || entry.local === ZIP64_U32) {
       throw new Error(`${entry.name}: ZIP64 sentinel in the central directory — this auditor reads 32-bit ZIP only`);
     }
-    if (entry.compressedSize === 0 && entry.size !== 0) {
-      throw new Error(`${entry.name}: declares ${entry.size} bytes of content in 0 compressed bytes`);
-    }
     entries.push(entry);
     at += 46 + nameLength + buf.readUInt16LE(at + 30) + buf.readUInt16LE(at + 32);
   }
@@ -199,9 +209,15 @@ function readArchive(buf) {
   // the same name, and they must tile the region before the directory with no gaps.
   const byOffset = new Map(entries.map((entry) => [entry.local, entry]));
   let pos = 0;
+  let previous = null;
   while (pos < cdStart) {
     if (pos + 30 > cdStart || buf.readUInt32LE(pos) !== LOCAL_SIG) {
-      throw new Error(`byte ${pos}: expected a local file header, and a streaming unpacker would read something else`);
+      // Naming the entry the walk came from is the whole diagnosis: the usual cause is that the
+      // one before it declared a size its data does not have, and this check is what refuses it.
+      throw new Error(
+        `byte ${pos}: expected a local file header${previous ? ` after ${previous.name}` : ''}` +
+          ', and a streaming unpacker would read something else',
+      );
     }
     const entry = byOffset.get(pos);
     const nameLength = buf.readUInt16LE(pos + 26);
@@ -212,6 +228,7 @@ function readArchive(buf) {
     }
     entry.dataAt = pos + 30 + nameLength + buf.readUInt16LE(pos + 28);
     pos = entry.dataAt + entry.compressedSize;
+    previous = entry;
   }
   if (pos !== cdStart) throw new Error('the local headers do not reach the central directory');
   for (const entry of entries) {
@@ -223,15 +240,23 @@ function readArchive(buf) {
 function readEntry(buf, entry) {
   const raw = buf.subarray(entry.dataAt, entry.dataAt + entry.compressedSize);
   if (raw.length !== entry.compressedSize) throw new Error(`${entry.name}: its data runs past the end of the file`);
-  // maxOutputLength turns a decompression bomb into this error instead of an out-of-memory kill,
-  // and the equality below makes a lying declared size a refusal rather than a short read.
-  const content =
-    entry.method === 0
-      ? Buffer.from(raw)
-      : entry.method === 8
-        ? inflateRawSync(raw, { maxOutputLength: entry.size })
-        : null;
-  if (content === null) throw new Error(`${entry.name}: unsupported ZIP compression method ${entry.method}`);
+  if (entry.method !== 0 && entry.method !== 8) {
+    throw new Error(`${entry.name}: unsupported ZIP compression method ${entry.method}`);
+  }
+  let content;
+  if (entry.method === 0) {
+    content = Buffer.from(raw);
+  } else {
+    // The cap turns a decompression bomb into a finding instead of an out-of-memory kill. It is
+    // floored at 1 because Node rejects maxOutputLength 0 as an ARGUMENT error — and the real
+    // bundle holds 15 legitimately empty DEFLATE entries (size 0, 2 compressed bytes), so 0 is a
+    // value this sees in practice. zlib's own message is re-worded so the operator reads a rule.
+    try {
+      content = inflateRawSync(raw, { maxOutputLength: Math.max(entry.size, 1) });
+    } catch (error) {
+      throw new Error(`${entry.name}: expands past the ${entry.size} bytes it declares (${error.code ?? error.message})`);
+    }
+  }
   if (content.length !== entry.size) {
     throw new Error(`${entry.name}: holds ${content.length} bytes where the directory declares ${entry.size}`);
   }
@@ -240,10 +265,17 @@ function readEntry(buf, entry) {
 
 // A path a real unpacker would write outside the extraction root, or cannot represent at all.
 function unsafePath(path) {
-  if (path === '') return 'an empty entry name';
+  if (path === '' || path === '/') return 'an empty entry name';
   if (path.startsWith('/')) return 'an absolute path';
   if (/^[A-Za-z]:/.test(path)) return 'a drive-letter path';
-  const segments = path.split('/');
+  // A control character is invisible in this script's own report: `dist/a\0b.js` printed as
+  // `dist/a b.js`, so the inventory named a file that is not the file in the archive, and a
+  // newline would let an entry name forge findings outright.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(path)) return 'a control character in the name';
+  // One trailing slash is the directory-marker convention, not an empty segment. Stripping it here
+  // is what lets a marker be JUDGED by the path rules instead of waved past them.
+  const segments = (path.endsWith('/') ? path.slice(0, -1) : path).split('/');
   if (segments.includes('..')) return 'a parent-directory segment';
   if (segments.some((segment) => segment === '' )) return 'an empty path segment';
   return null;
@@ -327,8 +359,6 @@ if (readable && entries.length === 0) problems.push(`${basename(bundlePath)} con
 
 for (const entry of entries) {
   const path = entry.name.split('\\').join('/');
-  if (path.endsWith('/') && entry.size === 0) continue; // directory marker, carries no content
-
   const unsafe = unsafePath(path);
   if (unsafe) problems.push(`unsafe entry name, refused: ${JSON.stringify(path)} is ${unsafe}`);
 
@@ -343,6 +373,14 @@ for (const entry of entries) {
     );
   }
   if (allow && !forbidden) accepted.push({ path, rule: allow.rule });
+
+  // A directory marker carries no content to scan. It has been through unsafePath, the forbidden
+  // list and the allowlist above, so it is accounted for in the counts either way; what it may not
+  // be is a marker with a payload.
+  if (path.endsWith('/')) {
+    if (entry.size !== 0) problems.push(`directory marker carrying ${entry.size} bytes of content: ${path}`);
+    continue;
+  }
 
   if (path.startsWith('node_modules/')) continue;
 
