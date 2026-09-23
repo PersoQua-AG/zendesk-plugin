@@ -27,6 +27,11 @@ jobs:
       # it asserts both manifests parse as JSON and carry their required fields. See the script
       # header. Swap to `claude plugin validate` here once the CLI is available in CI.
       - run: node scripts/validate-manifests.mjs
+      # Structural guard for the #9 defect class: a foreign call on the synchronous path of a
+      # NESTED promise executor, whose synchronous throw rejects the inner promise while the one the
+      # caller awaits never settles. Pure syntax walk over src/ with the TypeScript compiler API
+      # (already a devDependency), so it needs no build and runs before one. See the script header.
+      - run: npm run check:executors
       - run: npm run build
       # Dist-drift guard: the just-run build must leave committed dist/ byte-identical.
       # A source change without a matching dist rebuild would otherwise ship stale install
