@@ -157,7 +157,7 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
   const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
   const cache = deps.cache ?? new ResponseCache(join(dataDir, 'cache'));
 
-  const server = new McpServer({ name: 'zendesk', version: '0.1.0' });
+  const server = new McpServer({ name: 'zendesk', version: '1.0.0' });
   const ctx: ToolContext = {
     httpClient,
     cache,

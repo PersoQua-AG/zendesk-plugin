@@ -513,6 +513,24 @@ describe('the audit is wired in front of publication', () => {
     expect(pkg.version).toBe('1.0.0');
   });
 
+  it('declares the same version at every site where one is hand-kept', () => {
+    // src/server.ts is the version the MCP HOST is told, and nothing held it: it sat at 0.1.0
+    // while the bundle moved, which a colleague meets as "so which version have I got". The
+    // durable fix is to stop keeping it a fourth time and read it from manifest.json; until then
+    // this test is what notices the drift. A grep of the tree finds no further live site — the
+    // remaining 0.1.0 literals are throwaway fixtures below and frozen plan documents in docs/.
+    const version = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')).version;
+    expect(JSON.parse(readFileSync(join(root, '.claude-plugin', 'plugin.json'), 'utf8')).version).toBe(version);
+    // marketplace.json keeps it under `metadata`, not on the plugin entry — asserted against the
+    // real file, because assuming the shape is how the site got missed in the first place.
+    expect(
+      JSON.parse(readFileSync(join(root, '.claude-plugin', 'marketplace.json'), 'utf8')).metadata.version,
+    ).toBe(version);
+    expect(readFileSync(join(root, 'src', 'server.ts'), 'utf8')).toContain(
+      `new McpServer({ name: 'zendesk', version: '${version}' })`,
+    );
+  });
+
   it('keeps the artifact and its checksum out of git', () => {
     const ignore = readFileSync(join(root, '.gitignore'), 'utf8');
     expect(ignore).toMatch(/^\*\.mcpb$/m);
