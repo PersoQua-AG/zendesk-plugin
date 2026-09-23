@@ -998,13 +998,19 @@ describe('the load-bearing clauses, one test each', () => {
     await expect(b.provider.exchangeRefreshToken(client, first.refresh_token!)).rejects.toBeInstanceOf(InvalidGrantError);
   });
 
-  it('N13: the stored answer is never handed to a different client', async () => {
+  it('N13: the stored answer is never handed to a different client, and the family dies with it', async () => {
     const b = build();
     const first = await firstLogin(b);
-    await b.provider.exchangeRefreshToken(client, first.refresh_token!);
+    const granted = (await b.provider.exchangeRefreshToken(client, first.refresh_token!)) as Record<string, unknown>;
+
     // Inside the window, but presented by someone else: idempotency is per client, or it is a way
     // to read another client's issued tokens.
     await expect(b.provider.exchangeRefreshToken(otherClient, first.refresh_token!)).rejects.toBeInstanceOf(InvalidGrantError);
+
+    // And the answer is the SAME one the spend path gives: a client substitution revokes the
+    // family. Refusing only, because the attempt happened to land inside ten seconds, would be a
+    // weaker reply to an identical signal.
+    await expect(b.provider.exchangeRefreshToken(client, String(granted.refresh_token))).rejects.toBeInstanceOf(InvalidGrantError);
   });
 
   it('N8: revocation unlinks the live member even when the head can no longer be written', () => {

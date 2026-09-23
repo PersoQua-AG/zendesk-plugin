@@ -232,22 +232,19 @@ export class RefreshTokenStore extends OpaqueTokenStore {
             // `head` must be readable: a stored answer is not a way around an unverifiable family.
             // (`dead` is already refused above, before the window is even considered.)
             if (repeat && head)
-                return { kind: 'repeat', payload: repeat.payload, clientId: repeat.clientId };
+                return { kind: 'repeat', payload: repeat.payload, clientId: repeat.clientId, chainId: spent.chainId };
             throw new RefreshInFlightError();
         }
-        return (() => {
-            throw new RefreshTokenReplayError(spent.chainId, this.revokeChain(spent.chainId), false);
-        })();
+        throw new RefreshTokenReplayError(spent.chainId, this.revokeChain(spent.chainId), false);
     }
     // Called by the caller once it has produced the response, so a repeat of the same request can be
     // answered with the same bytes. Best-effort: a refresh that succeeded must not fail because its
     // receipt could not be filed.
-    rememberRepeat(token, payload, clientId, chainId) {
+    rememberRepeat(token, payload, clientId) {
         try {
             new EncryptedFile(this.pathFor(token, SUFFIX_REPEAT), this.encryptionSecret).save({
                 payload,
                 clientId,
-                chainId,
                 expiresAt: Date.now() + REPEAT_GRACE_MS,
             });
         }

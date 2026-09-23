@@ -9,7 +9,7 @@ import { buildAuthorizationUrl, exchangeCodeForTokens, type OAuthConfig } from '
 import { fetchZendeskIdentity } from './zendesk-identity.js';
 import type { IdentityAuthResolver } from '../auth/identity-resolver.js';
 import type { IssuedTokenStore } from '../auth/issued-token-store.js';
-import { RefreshTokenReplayError, RefreshInFlightError, type RefreshTokenStore, type RefreshRecord } from '../auth/refresh-token-store.js';
+import { RefreshTokenReplayError, RefreshInFlightError, type RefreshTokenStore, type RefreshRecord, type SpendOutcome } from '../auth/refresh-token-store.js';
 import { log } from './logger.js';
 import { describeAuthError } from './error-messages.js';
 
@@ -106,30 +106,32 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
       throw new InvalidScopeError('Requested scope exceeds the scope granted to this connector.');
     }
 
-    let rec: RefreshRecord;
+    let outcome: SpendOutcome;
     try {
-      const outcome = store.consume(refreshToken); // atomic single-use; unknown/expired/replayed -> throws
-      if (outcome.kind === 'repeat') {
-        // The same request asked again inside the grace window — a lost 200, a retry, a second tab.
-        // Answering it with the SAME bytes is what keeps an ordinary OAuth client from being logged
-        // out by its own correct retry behaviour. No mint, no rotation, no new state.
-        if (outcome.clientId !== client.client_id) throw new Error('repeat presented by a different client');
-        log({ msg: 'refresh repeated: same response returned inside the grace window', outcome: '200' });
-        return JSON.parse(outcome.payload) as OAuthTokens;
-      }
-      rec = outcome.record;
+      outcome = store.consume(refreshToken); // atomic single-use; unknown/expired/replayed -> throws
     } catch (err: unknown) {
       throw this.refuseConsume(err);
     }
 
+    if (outcome.kind === 'repeat') {
+      // The same request asked again inside the grace window — a lost 200, a retry, a second tab.
+      // Answering it with the SAME bytes is what keeps an ordinary OAuth client from being logged
+      // out by its own correct retry behaviour. No mint, no rotation, no new state.
+      //
+      // The liveness probe is deliberately NOT run here, and that is not an oversight to be tidied
+      // away later: no new grant is being issued. These are bytes already handed out once, inside a
+      // ten-second window, and the Zendesk session was checked when they were minted. Probing again
+      // would turn a retry into a second upstream call for nothing.
+      if (outcome.clientId !== client.client_id) return this.refuseClientMismatch(store, outcome.chainId);
+      log({ msg: 'refresh repeated: same response returned inside the grace window', outcome: '200' });
+      return this.parseRepeat(outcome.payload);
+    }
+    const rec: RefreshRecord = outcome.record;
+
     // Token substitution: a grant minted for one registered client must not be spendable by another.
     // The token was genuine but is in the wrong hands — the same theft signal as a replay, so the
     // family goes with it.
-    if (rec.clientId !== client.client_id) {
-      const revoked = store.revokeChain(rec.chainId);
-      log({ msg: `refresh refused: presented by a different client, rotation chain revoked (${revoked} live token(s))`, outcome: '400' });
-      throw new InvalidGrantError(REFRESH_REFUSED);
-    }
+    if (rec.clientId !== client.client_id) this.refuseClientMismatch(store, rec.chainId);
 
     try {
       // Liveness: the mapped identity must still resolve to usable Zendesk credentials.
@@ -146,7 +148,7 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
       // token that was stolen and nothing else.
       const tokens = this.mintTokens(rec.identity, client.client_id, rec);
       // File the receipt so the client's retry gets this same answer instead of a revoked chain.
-      store.rememberRepeat(refreshToken, JSON.stringify(tokens), client.client_id, rec.chainId);
+      store.rememberRepeat(refreshToken, JSON.stringify(tokens), client.client_id);
       log({ msg: 'refresh granted: access token rotated without re-authorization', outcome: '200' });
       return tokens;
     } catch (err: unknown) {
@@ -156,6 +158,26 @@ export class ZendeskBridgeOAuthProvider implements OAuthServerProvider {
       // so the chain is gone and the client would retry into the same 500 forever. Refuse as
       // invalid_grant so the client re-authorizes, and log the real cause so it is diagnosable.
       log({ msg: `refresh mint failed after the grant was spent: ${describeAuthError(err)}`, outcome: '400' });
+      throw new InvalidGrantError(REFRESH_REFUSED);
+    }
+  }
+
+  // A client substitution is a client substitution. It used to be answered one way on the spend
+  // path (revoke the family) and another inside the grace window (refuse only) — the same signal,
+  // a weaker answer, purely because of when it arrived. Never returns: the signature says so, so
+  // the two call sites read alike.
+  private refuseClientMismatch(store: RefreshTokenStore, chainId: string): never {
+    const revoked = store.revokeChain(chainId);
+    log({ msg: `refresh refused: presented by a different client, rotation chain revoked (${revoked} live token(s))`, outcome: '400' });
+    throw new InvalidGrantError(REFRESH_REFUSED);
+  }
+
+  // The payload is bytes this server wrote and encrypted, so a parse failure is a corrupt store,
+  // not client input — but it must still leave by the refusal door rather than as a 500.
+  private parseRepeat(payload: string): OAuthTokens {
+    try {
+      return JSON.parse(payload) as OAuthTokens;
+    } catch {
       throw new InvalidGrantError(REFRESH_REFUSED);
     }
   }

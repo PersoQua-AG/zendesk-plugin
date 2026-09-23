@@ -36,13 +36,15 @@ export interface Tombstone extends RefreshRecord {
 interface RepeatRecord {
   payload: string;
   clientId: string;
-  chainId: string;
   expiresAt: number;
 }
 
 export type SpendOutcome =
   | { kind: 'spent'; record: RefreshRecord }
-  | { kind: 'repeat'; payload: string; clientId: string };
+  // chainId rides along so the caller can revoke on a client mismatch without a second lookup. It
+  // comes from the TOMBSTONE, the same record the head check above used — not from the receipt,
+  // which would be a second, divergeable copy of the same fact.
+  | { kind: 'repeat'; payload: string; clientId: string; chainId: string };
 
 // A concurrent presentation of the same token: another process holds the claim and is mid-spend.
 // This is NOT a theft signal, and answering it with a revocation is what killed the winner's
@@ -267,23 +269,20 @@ export class RefreshTokenStore extends OpaqueTokenStore {
       // whose head cannot be read, hands out nothing.
       // `head` must be readable: a stored answer is not a way around an unverifiable family.
       // (`dead` is already refused above, before the window is even considered.)
-      if (repeat && head) return { kind: 'repeat', payload: repeat.payload, clientId: repeat.clientId };
+      if (repeat && head) return { kind: 'repeat', payload: repeat.payload, clientId: repeat.clientId, chainId: spent.chainId };
       throw new RefreshInFlightError();
     }
-    return (() => {
-      throw new RefreshTokenReplayError(spent.chainId, this.revokeChain(spent.chainId), false);
-    })();
+    throw new RefreshTokenReplayError(spent.chainId, this.revokeChain(spent.chainId), false);
   }
 
   // Called by the caller once it has produced the response, so a repeat of the same request can be
   // answered with the same bytes. Best-effort: a refresh that succeeded must not fail because its
   // receipt could not be filed.
-  rememberRepeat(token: string, payload: string, clientId: string, chainId: string): void {
+  rememberRepeat(token: string, payload: string, clientId: string): void {
     try {
       new EncryptedFile(this.pathFor(token, SUFFIX_REPEAT), this.encryptionSecret).save({
         payload,
         clientId,
-        chainId,
         expiresAt: Date.now() + REPEAT_GRACE_MS,
       } satisfies RepeatRecord);
     } catch {
