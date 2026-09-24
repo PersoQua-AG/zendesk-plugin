@@ -132,6 +132,18 @@ describe('the sweep that reclaims the band', () => {
     return path;
   }
 
+  // Who a claim names, or null once it is gone. The claim dir is shared with every concurrent run,
+  // whose sweep may remove a dead claim first and whose freePort() may then publish the same port
+  // for a live owner (#38) — so "the path is gone" is not ours to assert, "the dead owner is" is.
+  function claimOwner(path: string): string | null {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
   afterEach(() => {
     for (const path of planted.splice(0)) rmSync(path, { force: true });
   });
@@ -168,7 +180,7 @@ describe('the sweep that reclaims the band', () => {
     const claim = portClaimPath(port);
     truncateSync(claim, 0);
     sweepDeadClaims();
-    expect(existsSync(claim)).toBe(false);
+    expect(claimOwner(claim)).not.toBe('');
   });
 
   it('reclaims a claim whose owner has exited, and keeps one whose owner is alive', () => {
@@ -182,7 +194,7 @@ describe('the sweep that reclaims the band', () => {
 
     sweepDeadClaims();
 
-    expect(existsSync(abandoned)).toBe(false);
+    expect(claimOwner(abandoned)).not.toBe(String(dead.pid));
     // Ours names a pid that is this very process, so nothing about it can read as dead.
     expect(readFileSync(ours, 'utf8')).toBe(String(process.pid));
     expect(existsSync(ours)).toBe(true);
