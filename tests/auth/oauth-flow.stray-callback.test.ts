@@ -164,9 +164,12 @@ describe('the timeout under a burst of stray callbacks', () => {
     const inFlightAtSettle = over ? outcomes.splice(-1) : [];
     const seen = `while open ${tally(outcomes)}, in flight at settle ${tally(inFlightAtSettle)}`;
 
-    expect(await ended, seen).toBe(
-      'OAuth callback timed out after 300ms; a callback with an unexpected state was received and ignored',
-    );
+    // A stray answered before settle was handled before the timer, so the note is owed; with none,
+    // the one in flight may or may not have been handled first, and either wording is right.
+    const bare = 'OAuth callback timed out after 300ms';
+    const noted = `${bare}; a callback with an unexpected state was received and ignored`;
+    const answeredWhileOpen = outcomes.some((o) => o === ANSWERED);
+    expect(answeredWhileOpen ? [noted] : [bare, noted], seen).toContain(await ended);
     const unanswered = outcomes.filter((o) => o !== ANSWERED);
     expect(unanswered, `a stray request was not answered 400; ${seen}`).toEqual([]);
     // close() may refuse, reset or drop the one in flight; a port clash is a foreign status line.
