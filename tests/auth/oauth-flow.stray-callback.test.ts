@@ -153,37 +153,40 @@ describe('the timeout under a burst of stray callbacks', () => {
     let over = false;
     const ended = settlesWithin('the timed-out listener', listener.promise)
       .catch((err: Error) => err.message)
-      .finally(() => {
-        over = true;
-      });
+      .finally(() => (over = true));
 
     // Burst until the flow ends: how many requests fit in the window is the machine's business.
-    const whileOpen: string[] = [];
-    const atClose: string[] = [];
-    while (!over) {
-      const outcome = await strayOutcome(port, whileOpen.length + atClose.length);
-      (over ? atClose : whileOpen).push(outcome);
+    // The ceiling only stops a timer that never fires from opening sockets for 2s; it is no check.
+    const outcomes: string[] = [];
+    while (!over && outcomes.length < 5000) {
+      outcomes.push(await strayOutcome(port, `wrong-${outcomes.length}`));
     }
-    const seen = `while open ${tally(whileOpen)}, at close ${tally(atClose)}`;
+    const inFlightAtSettle = over ? outcomes.splice(-1) : [];
+    const seen = `while open ${tally(outcomes)}, in flight at settle ${tally(inFlightAtSettle)}`;
 
     expect(await ended, seen).toBe('OAuth callback timed out after 300ms');
-    expect(whileOpen.filter((o) => o !== ANSWERED), `a stray request was not answered 400; ${seen}`).toEqual([]);
-    // Refused or reset at close is the timer ending the listener, not a clash: no EADDRINUSE here.
-    const confirming = [ANSWERED, 'ECONNREFUSED', 'ECONNRESET'];
-    expect(atClose.filter((o) => !confirming.includes(o)), `unexpected at close; ${seen}`).toEqual([]);
+    const unanswered = outcomes.filter((o) => o !== ANSWERED);
+    expect(unanswered, `a stray request was not answered 400; ${seen}`).toEqual([]);
+    // close() may refuse, reset or drop the one in flight; a port clash is a foreign status line.
+    const confirming = [ANSWERED, 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', NO_STATUS_LINE];
+    const unexpected = inFlightAtSettle.filter((o) => !confirming.includes(o));
+    expect(unexpected, `unexpected in flight at settle; ${seen}`).toEqual([]);
     // The flow has rejected, so a listener that still answers was settled without being closed.
-    expect(await strayOutcome(port, -1), `after the timeout; ${seen}`).toBe('ECONNREFUSED');
+    const afterTimeout = await strayOutcome(port, 'wrong-after-timeout');
+    expect(afterTimeout, `after the timeout; ${seen}`).toBe('ECONNREFUSED');
     await rebind(port);
   });
 });
 
 const ANSWERED = 'HTTP/1.1 400 Bad Request: State mismatch';
+const NO_STATUS_LINE = 'no status line';
 
 // One stray request's fate as a single string: the answer, or the socket error code that ended it.
-async function strayOutcome(port: number, i: number): Promise<string> {
+async function strayOutcome(port: number, state: string): Promise<string> {
   try {
-    const answer = await settlesWithin(`stray ${i}`, rawExchange(port, `/callback?error=denied&state=wrong-${i}`));
-    return `${answer.statusLine}: ${answer.body}`;
+    const target = `/callback?error=denied&state=${state}`;
+    const answer = await settlesWithin(`stray ${state}`, rawExchange(port, target));
+    return answer.statusLine === '' ? NO_STATUS_LINE : `${answer.statusLine}: ${answer.body}`;
   } catch (err) {
     return err instanceof Error && 'code' in err ? String(err.code) : String(err);
   }
