@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 // A fixed port on a bind call collides with a concurrent `vitest run` (#23); use freePort().
-const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|listen|rebind)\(\s*(\d[\d_]*)\b/g;
+// Blind spot: a port reaching the call through a const or other indirection is not traced.
+// Blind spot: only files directly in tests/auth are scanned, not its subfolders.
+const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|listen|rebind|config)\(\s*(\d[\d_]*)\b/g;
 
 // 0 is chosen by the OS and anything above 65535 is refused by listen() — neither binds a fixed port.
 function isBindablePort(literal: string): boolean {
