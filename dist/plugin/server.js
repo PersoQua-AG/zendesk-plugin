@@ -24670,7 +24670,7 @@ function createServer2(rawEnv = process.env, deps = {}) {
   const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
   const subdomain2 = auth.ok ? auth.config.subdomain : "";
   const httpClient = new ZendeskHttpClient({ subdomain: subdomain2, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
-  const server = new McpServer({ name: "zendesk", version: "1.0.0" });
+  const server = new McpServer({ name: "zendesk", version: "1.0.1" });
   const ctx = {
     httpClient,
     cache,

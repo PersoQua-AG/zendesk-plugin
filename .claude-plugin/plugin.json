@@ -1,7 +1,7 @@
 {
   "name": "zendesk",
   "displayName": "Zendesk Support Integration",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Manage Zendesk tickets, users, organizations, business rules, and Help Center content from Claude Code.",
   "author": { "name": "Persoqua", "email": "r.pfisterer@persoqua.de" },
   "license": "MIT",
