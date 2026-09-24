@@ -31,7 +31,7 @@ async function errorMessage(raw: string): Promise<string> {
   await answerFromOurListener(port, `/callback?state=state-abc&error=${raw}`);
   const message = await assertion;
   listener.close();
-  return message;
+  return message as string;
 }
 
 describe('a callback without the expected state', () => {
