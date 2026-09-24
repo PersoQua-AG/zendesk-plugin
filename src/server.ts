@@ -87,7 +87,8 @@ function parseMarkdownDefault(raw: string | undefined): boolean {
 // server.ts on purpose: bin/authorize.ts and the remote path still want resolveAuthConfig to throw.
 // A union rather than a ResolvedAuthConfig filled in with blanks: with an incomplete configuration
 // there IS no OAuth config, so the degraded case simply does not carry one and the invalid state
-// (subdomain '', callbackPort 0) is not representable.
+// (subdomain '', callbackPort 0) is not representable. `reason` may also carry a storage error,
+// because the token store shares the data directory with the cache.
 type AuthResolution =
   | ({ ok: true } & ResolvedAuthConfig)
   | { ok: false; reason: string; dataDir: string; tokensPath: string };
@@ -109,25 +110,23 @@ function resolveOrDegrade(env: NodeJS.ProcessEnv): AuthResolution {
   }
 }
 
-// The cache mkdirs under the data directory, which can throw (EACCES, ENOSPC, ENOTDIR). The token
-// store lives in the same directory, so the whole server degrades exactly like an incomplete
-// configuration: it starts, and every tool names the errno and the remedy. Never the path.
-function openCacheOrDegrade(auth: AuthResolution): { auth: AuthResolution; cache: ResponseCache } {
+// mkdir can throw (EACCES/ENOSPC/ENOTDIR); tokens share the dir, so degrade like a bad config.
+function openCacheOrDegrade(auth: AuthResolution): { auth: AuthResolution; cache: ResponseCache; cacheOk: boolean } {
   try {
-    return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')) };
+    return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')), cacheOk: true };
   } catch (err) {
     const code = err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
     const problem =
-      `The extension's data directory is not writable (${code}), so responses cannot be cached and ` +
-      `tokens cannot be stored. Free up disk space or fix the directory's permissions, then reload the extension.`;
-    const reason = auth.ok ? problem : `${auth.reason} ${problem}`;
+      `The extension's data directory cannot be used (${code}), so responses cannot be cached and ` +
+      `tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;
+    const reason = auth.ok ? problem : `${auth.reason.replace(/,? then reload the extension\.$/, '.')} ${problem}`;
     const fail = (): never => {
       throw new Error(reason);
     };
-    // ResponseCache's private fields make it nominal; this stand-in only has to answer save/load,
-    // the two methods the tools call, and ToolContext lives outside this slice's scope.
-    const cache = { save: fail, load: fail } as unknown as ResponseCache;
-    return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache };
+    // ResponseCache is nominal (private fields); tools only call save/load.
+    const stub = { save: fail, load: fail } satisfies Pick<ResponseCache, 'save' | 'load'>;
+    const cache = stub as unknown as ResponseCache;
+    return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
   }
 }
 
@@ -163,13 +162,15 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
   // (security level, markdown flag, report config) sees "absent" rather than a literal placeholder.
   const env = stripPlaceholders(rawEnv);
   const resolved = resolveOrDegrade(env);
-  const { auth, cache } = deps.cache ? { auth: resolved, cache: deps.cache } : openCacheOrDegrade(resolved);
+  const { auth, cache, cacheOk } = deps.cache
+    ? { auth: resolved, cache: deps.cache, cacheOk: true }
+    : openCacheOrDegrade(resolved);
   const { tokensPath } = auth;
   const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
   const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
 
   const authManager: TokenProvider =
-    deps.authManager ??
+    (cacheOk ? deps.authManager : undefined) ??
     (auth.ok
       ? new AuthManager(new TokenStore(tokensPath, auth.config.clientSecret), auth.config)
       : // Stands in for AuthManager while the configuration is incomplete: every Zendesk request
