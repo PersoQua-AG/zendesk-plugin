@@ -44,7 +44,10 @@ export function buildAuthorizationUrl(config, codeChallenge, state, redirectUriO
 // configuration field the user must fix; rendering it as "unknown error code" would trade a
 // nonexistent injection gain (the set above already contains nothing executable, and the caller
 // already holds `state`) for a user who cannot tell what went wrong.
-const NOT_NQCHAR = /[^\x20-\x21\x23-\x5B\x5D-\x7E]/g;
+//
+// '<' and '>' (0x3C, 0x3E) are dropped as well, although NQCHAR allows them: no documented code uses
+// them, and without them the value cannot write envelope-like markup once failureText is fenced.
+const NOT_NQCHAR = /[^\x20-\x21\x23-\x3B\x3D\x3F-\x5B\x5D-\x7E]/g;
 // Long enough for any real code plus a word of context, short enough that nothing can pad the tool
 // result with content of its own. The longest value Zendesk documents is 21 characters.
 const MAX_ERROR_CODE_CHARS = 100;
