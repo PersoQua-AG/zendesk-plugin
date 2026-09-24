@@ -153,7 +153,9 @@ describe('the timeout under a burst of stray callbacks', () => {
       });
     }
 
-    expect(await assertion).toBe('OAuth callback timed out after 300ms');
+    expect(await assertion).toBe(
+      'OAuth callback timed out after 300ms; a callback with an unexpected state was received and ignored',
+    );
     // And the timer released the port rather than merely settling the promise.
     await rebind(port);
   });

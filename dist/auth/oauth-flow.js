@@ -60,6 +60,8 @@ function sanitizeErrorCode(raw) {
         ? `${cleaned.slice(0, MAX_ERROR_CODE_CHARS)}… (truncated)`
         : cleaned;
 }
+// Named in the timeout, never with the state value: a state bug must not look like a mere timeout.
+const STRAY_STATE_NOTE = '; a callback with an unexpected state was received and ignored';
 // Resolves only once the port is actually bound, and REJECTS on a bind failure (e.g. EADDRINUSE) —
 // so a caller never receives a listener whose callback could never land, and never has to inspect
 // an error returned as a value.
@@ -77,6 +79,7 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
             // actually holds. Enforced by scripts/assert-executor-safety.mjs.
             try {
                 let settled = false;
+                let ignoredStrayState = false;
                 server = createServer((req, res) => {
                     // req.url is typed `string | undefined` but is always set on a request the parser accepted,
                     // so the fallback exists for the type only and no test can reach it.
@@ -125,6 +128,7 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                     // authorization request"). So a denial still settles AT ONCE, and nobody waits out the
                     // window for an answer that already exists.
                     if (url.searchParams.get('state') !== expectedState) {
+                        ignoredStrayState = true;
                         res.writeHead(400, { 'Content-Type': 'text/plain' }).end('State mismatch');
                         return;
                     }
@@ -145,7 +149,8 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                     finish(() => resolve({ code, redirectUri: redirectUri(port) }));
                 });
                 const timer = setTimeout(() => {
-                    finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`)));
+                    const stray = ignoredStrayState ? STRAY_STATE_NOTE : '';
+                    finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms${stray}`)));
                 }, timeoutMs);
                 timer.unref?.();
                 const finish = (settle) => {

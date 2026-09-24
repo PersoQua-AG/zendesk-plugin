@@ -91,6 +91,9 @@ function sanitizeErrorCode(raw: string): string {
     : cleaned;
 }
 
+// Named in the timeout, never with the state value: a state bug must not look like a mere timeout.
+const STRAY_STATE_NOTE = '; a callback with an unexpected state was received and ignored';
+
 // A callback listener that is BOUND but not yet awaited. The two-step login tool needs those two
 // moments apart: it hands the user the authorization URL on the first tool call and collects the
 // callback on a later one, with the listener — and the `state` it validates — living across both.
@@ -125,6 +128,7 @@ export function startCallbackListener(
       // actually holds. Enforced by scripts/assert-executor-safety.mjs.
       try {
         let settled = false;
+        let ignoredStrayState = false;
         server = createServer((req, res) => {
           // req.url is typed `string | undefined` but is always set on a request the parser accepted,
           // so the fallback exists for the type only and no test can reach it.
@@ -172,6 +176,7 @@ export function startCallbackListener(
           // authorization request"). So a denial still settles AT ONCE, and nobody waits out the
           // window for an answer that already exists.
           if (url.searchParams.get('state') !== expectedState) {
+            ignoredStrayState = true;
             res.writeHead(400, { 'Content-Type': 'text/plain' }).end('State mismatch');
             return;
           }
@@ -195,7 +200,8 @@ export function startCallbackListener(
         });
 
         const timer = setTimeout(() => {
-          finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`)));
+          const stray = ignoredStrayState ? STRAY_STATE_NOTE : '';
+          finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms${stray}`)));
         }, timeoutMs);
         timer.unref?.();
 
