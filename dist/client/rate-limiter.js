@@ -1,3 +1,5 @@
+// Zendesk windows reset each minute; 5 min bounds a bogus header, far below setTimeout's 2^31 ms.
+const MAX_RETRY_AFTER_SECONDS = 300;
 export class RateLimiter {
     requestsPerMinute; // the configured account bucket size, for wiring inspection
     intervalMs;
@@ -25,6 +27,8 @@ export class RateLimiter {
         }
     }
     reportRetryAfter(seconds) {
-        this.retryAfterUntil = this.now() + seconds * 1000;
+        // NaN fails `<`: unknown wait -> longest safe wait, not the parser's 60 s default.
+        const capped = seconds < MAX_RETRY_AFTER_SECONDS ? seconds : MAX_RETRY_AFTER_SECONDS;
+        this.retryAfterUntil = this.now() + capped * 1000;
     }
 }

@@ -107,6 +107,10 @@ function entryIsLive(entry: string, path: string): boolean {
     return false;
   }
   if (!Number.isInteger(pid) || pid <= 0) return false;
+  return pidIsLive(pid);
+}
+
+export function pidIsLive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

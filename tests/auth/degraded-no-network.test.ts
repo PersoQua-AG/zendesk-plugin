@@ -45,7 +45,7 @@ describe('an incompletely configured server never reaches the network', () => {
 
   it('never puts the degraded empty-subdomain host into the failure message', async () => {
     const { ctx } = createServer(degradedEnv(), { fetchImpl: spyFetch() });
-    const err = await ctx.httpClient.request('/users/me.json').catch((e: unknown) => e as Error);
+    const err = (await ctx.httpClient.request('/users/me.json').catch((e: unknown) => e)) as Error;
     expect(err.message).not.toContain('.zendesk.com');
   });
 

@@ -32,9 +32,9 @@ const THROWS_SYNCHRONOUSLY: ReadonlyArray<readonly [string, number]> = [
 
 describe('startCallbackListener settles for every port listen() refuses', () => {
   it.each(THROWS_SYNCHRONOUSLY)('settles when the port is %s', async (_label, port) => {
-    const err = await settlesWithin(`startCallbackListener(${port})`, startCallbackListener(port, 'state', 5_000)).catch(
-      (e: unknown) => e as Error,
-    );
+    const err = (await settlesWithin(`startCallbackListener(${port})`, startCallbackListener(port, 'state', 5_000)).catch(
+      (e: unknown) => e,
+    )) as Error;
     expect(err.message).toContain('OAuth callback server could not start on port');
     expect(err.message).toContain('oauth_callback_port');
     // The node wording is replaced, not wrapped: no internals reach the MCP boundary.
@@ -42,9 +42,9 @@ describe('startCallbackListener settles for every port listen() refuses', () => 
   });
 
   it('names the configuration field and the range the user has to fix, and leaks no internals', async () => {
-    const err = await settlesWithin('startCallbackListener(70000)', startCallbackListener(70_000, 'state', 5_000)).catch(
-      (e: unknown) => e as Error,
-    );
+    const err = (await settlesWithin('startCallbackListener(70000)', startCallbackListener(70_000, 'state', 5_000)).catch(
+      (e: unknown) => e,
+    )) as Error;
     expect(err.message).toBe(
       'OAuth callback server could not start on port 70000 (extension configuration field ' +
         '"oauth_callback_port" must be a whole number between 1024 and 65535).',
