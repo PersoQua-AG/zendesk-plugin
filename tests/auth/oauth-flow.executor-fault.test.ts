@@ -20,7 +20,7 @@ vi.mock('node:http', async () => {
   return {
     ...actual,
     createServer: (...args: unknown[]) => {
-      const server = (actual.createServer as (...a: unknown[]) => Record<string, unknown>)(...args);
+      const server = (actual.createServer as unknown as (...a: unknown[]) => Record<string, unknown>)(...args);
       const on = server.on as (...a: unknown[]) => unknown;
       server.on = (...a: unknown[]) => {
         if (fault.throwOnListenerRegistration) throw fault.throwOnListenerRegistration;

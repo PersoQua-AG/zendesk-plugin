@@ -9,7 +9,7 @@ import { IdentityTokenStore } from '../../src/auth/identity-store.js';
 import { IdentityAuthResolver } from '../../src/auth/identity-resolver.js';
 import { IssuedTokenStore } from '../../src/auth/issued-token-store.js';
 import { EncryptedFile } from '../../src/auth/encrypted-file.js';
-import { RefreshTokenStore, RefreshTokenReplayError, RefreshInFlightError, type RefreshRecord, type ChainHead } from '../../src/auth/refresh-token-store.js';
+import { RefreshTokenStore, RefreshTokenReplayError, RefreshInFlightError, type RefreshRecord, type ChainHead, type SpendOutcome } from '../../src/auth/refresh-token-store.js';
 import type { OpaqueRecord } from '../../src/auth/opaque-token-store.js';
 import { ZendeskBridgeOAuthProvider } from '../../src/remote/bridge-oauth-provider.js';
 import { CONNECTOR } from '../../src/remote/connector-contract.js';
@@ -26,6 +26,12 @@ function thrown<T>(fn: () => unknown): T {
     return e as T;
   }
   throw new Error('expected the call to throw, and it did not');
+}
+
+// A first spend must come back as `spent`; a `repeat` here is a failure, not a record to read.
+function spentRecord(outcome: SpendOutcome): RefreshRecord {
+  if (outcome.kind !== 'spent') throw new Error(`expected a spend, got ${outcome.kind}`);
+  return outcome.record;
 }
 
 // Ages every spend in a refresh directory past the repeat-grace window and drops the stored
@@ -259,7 +265,7 @@ describe('AC3 — refresh tokens are single-use with rotation', () => {
   it('consume spends a token once and refuses a second presentation as a replay', () => {
     const b = build();
     const token = b.refresh!.mint('zendesk:777', 'claude.ai');
-    expect(b.refresh!.consume(token).record).toMatchObject({ identity: 'zendesk:777', clientId: 'claude.ai' });
+    expect(spentRecord(b.refresh!.consume(token))).toMatchObject({ identity: 'zendesk:777', clientId: 'claude.ai' });
     pastGraceWindow(join(b.dir, 'refresh'));
     expect(() => b.refresh!.consume(token)).toThrow(RefreshTokenReplayError);
   });
@@ -386,7 +392,7 @@ describe('AC5 — encrypted at rest, never logged, pruned on expiry', () => {
     const live = store.mint('zendesk:777', 'claude.ai');
     const dead = new RefreshTokenStore(dir, config.clientSecret, 1).mint('zendesk:888', 'claude.ai');
     store.prune(Date.now() + 10);
-    expect(store.consume(live).record).toMatchObject({ identity: 'zendesk:777' });
+    expect(spentRecord(store.consume(live))).toMatchObject({ identity: 'zendesk:777' });
     expect(() => store.consume(dead)).toThrow(InvalidTokenError);
   });
 
@@ -420,7 +426,7 @@ describe('RefreshTokenStore — the paths that only a damaged store reaches', ()
   it('revokeChain is a no-op when the live member is already gone', () => {
     const { s, dir } = store('vanishing');
     const token = s.mint('zendesk:777', 'claude.ai');
-    const chain = s.consume(token).record.chainId; // spend it: the chain now has no live member
+    const chain = spentRecord(s.consume(token)).chainId; // spend it: the chain now has no live member
     expect(readdirSync(dir).filter((n) => n.endsWith('.enc'))).toHaveLength(0);
     expect(s.revokeChain(chain)).toBe(0); // nothing to revoke, and no directory walk to find that out
   });
@@ -579,11 +585,11 @@ describe('rotation chains, as the provider actually builds them', () => {
   it('the family deadline is ABSOLUTE: rotation renews the token, never the chain', async () => {
     const b = build();
     const store = b.refresh!;
-    let rec = store.consume(store.mint('zendesk:777', 'claude.ai')).record;
+    let rec = spentRecord(store.consume(store.mint('zendesk:777', 'claude.ai')));
     const chainDeadline = rec.expiresAt;
     for (let i = 0; i < 3; i++) {
       await new Promise((r) => setTimeout(r, 5)); // make a renewed deadline measurably different
-      rec = store.consume(store.rotate(rec, 'claude.ai')).record;
+      rec = spentRecord(store.consume(store.rotate(rec, 'claude.ai')));
       // A sliding deadline is the evidence-decay defect: the chain would outlive the tombstones
       // that prove a theft against it. The descendant inherits the family's deadline exactly.
       expect(rec.expiresAt).toBe(chainDeadline);
@@ -705,7 +711,7 @@ describe('RefreshTokenStore — when the chain machinery itself fails', () => {
     const dir = dirFor('gone');
     const store = new RefreshTokenStore(dir, config.clientSecret, 60_000);
     const token = store.mint('zendesk:777', 'claude.ai');
-    const chainId = store.consume(token).record.chainId;
+    const chainId = spentRecord(store.consume(token)).chainId;
     const live = store.rotate({ identity: 'zendesk:777', clientId: 'claude.ai', chainId, expiresAt: Date.now() + 60_000 }, 'claude.ai');
     // Someone removed the live record out of band (a manual clean-up, a half-finished restore).
     rmSync(join(dir, `${createHash('sha256').update(live).digest('hex')}.enc`));
@@ -731,7 +737,7 @@ describe('fail-closed membership — a damaged chain head never frees a stolen t
     dirs.push(dir);
     const store = new RefreshTokenStore(dir, config.clientSecret, 3_600_000);
     const ancestor = store.mint('zendesk:777', 'claude.ai');
-    const successor = store.rotate(store.consume(ancestor).record, 'claude.ai');
+    const successor = store.rotate(spentRecord(store.consume(ancestor)), 'claude.ai');
     pastGraceWindow(dir); // this suite is about THEFT, not about a client retry
     return { store, dir, ancestor, successor };
   }
@@ -791,7 +797,7 @@ describe('fail-closed membership — a damaged chain head never frees a stolen t
       armed = false;
     }
     const store = new CrashAfterHead(dir, config.clientSecret, 3_600_000);
-    const rec = store.consume(store.mint('zendesk:777', 'claude.ai')).record;
+    const rec = spentRecord(store.consume(store.mint('zendesk:777', 'claude.ai')));
     store.armed = true;
     expect(() => store.rotate(rec, 'claude.ai')).toThrow(/CRASH/);
     store.armed = false;
@@ -817,7 +823,7 @@ describe('fail-closed membership — a damaged chain head never frees a stolen t
     }
     // Expiry is judged before anything is destroyed, so the token survives the excursion instead of
     // coming back as a replay that revokes the user's whole chain.
-    expect(store.consume(token).record).toMatchObject({ identity: 'zendesk:777' });
+    expect(spentRecord(store.consume(token))).toMatchObject({ identity: 'zendesk:777' });
   });
 
   it('a swept stale claim still leaves evidence, so a later replay reads as a replay', () => {
@@ -871,7 +877,7 @@ describe('record validation — encrypted is not the same as valid', () => {
     const dir = freshDir('twice');
     const store = new RefreshTokenStore(dir, config.clientSecret, 3_600_000);
     const token = store.mint('zendesk:777', 'claude.ai');
-    const rec = store.consume(token).record; // writes the real tombstone
+    const rec = spentRecord(store.consume(token)); // writes the real tombstone
     const spentBefore = readFileSync(join(dir, readdirSync(dir).find((n) => n.endsWith('.spent'))!), 'utf8');
 
     // A stale claim for the SAME token turns up (a crashed retry). Its conversion must not clobber
@@ -925,7 +931,7 @@ describe('a retry is not a theft', () => {
     const b = build();
     const store = b.refresh!;
     const token = store.mint('zendesk:777', 'claude.ai');
-    const rec = store.consume(token).record;
+    const rec = spentRecord(store.consume(token));
     // The winner has claimed and tombstoned but has not filed its answer yet — exactly where a
     // second process lands. Revoking here is what took the WINNER's session down too.
     const loser = thrown<Error>(() => store.consume(token));
@@ -1051,7 +1057,7 @@ describe('the grace window, when its own bookkeeping is damaged', () => {
 
   it('a corrupt receipt is no receipt: the retry is refused, not answered with rubbish', () => {
     const { store, dir, token } = spent('corrupt');
-    store.rememberRepeat(token, '{"access_token":"a"}', 'claude.ai', 'chain');
+    store.rememberRepeat(token, '{"access_token":"a"}', 'claude.ai');
     writeFileSync(repeatFile(dir), 'not-base64-ciphertext');
     expect(thrown<Error>(() => store.consume(token))).toBeInstanceOf(RefreshInFlightError);
   });
@@ -1063,7 +1069,7 @@ describe('the grace window, when its own bookkeeping is damaged', () => {
     ['receipt already expired', { payload: '{}', clientId: 'claude.ai', expiresAt: Date.now() - 1 }],
   ])('a receipt where the %s is ignored', (_label, body) => {
     const { store, dir, token } = spent('shape');
-    store.rememberRepeat(token, '{}', 'claude.ai', 'chain');
+    store.rememberRepeat(token, '{}', 'claude.ai');
     new EncryptedFile(repeatFile(dir), config.clientSecret).save(body);
     expect(thrown<Error>(() => store.consume(token))).toBeInstanceOf(RefreshInFlightError);
   });
@@ -1084,7 +1090,7 @@ describe('the grace window, when its own bookkeeping is damaged', () => {
     // A path whose parent is a regular file: the write cannot succeed, and must not propagate.
     writeFileSync(join(dir, 'blocked'), 'not a directory');
     const store = new RefreshTokenStore(join(dir, 'blocked'), config.clientSecret, 3_600_000);
-    expect(() => store.rememberRepeat('a'.repeat(64), '{}', 'claude.ai', 'chain')).not.toThrow();
+    expect(() => store.rememberRepeat('a'.repeat(64), '{}', 'claude.ai')).not.toThrow();
   });
 
   it('a claim whose name is not a claim is left alone by the sweep', () => {

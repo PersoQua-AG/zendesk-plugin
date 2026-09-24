@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true
+  },
+  // Partial on purpose: the rest of tests/ follows once its type errors are fixed (#11 follow-up).
+  "include": ["../src", "auth", "setup", "../vitest.config.ts"]
+}
