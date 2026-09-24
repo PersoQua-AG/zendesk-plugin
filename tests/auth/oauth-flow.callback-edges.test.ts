@@ -37,6 +37,11 @@ describe('the timeout after a callback with an unexpected state (#11 point 17)',
     );
   });
 
+  it('counts a callback with no state at all as unexpected too', async () => {
+    const message = await rejectionAfter(['/callback?code=c'], 200);
+    expect(message).toMatch(/unexpected state was received and ignored$/);
+  });
+
   it('keeps the plain timeout wording when no such callback arrived', async () => {
     expect(await rejectionAfter([], 200)).toBe('OAuth callback timed out after 200ms');
   });

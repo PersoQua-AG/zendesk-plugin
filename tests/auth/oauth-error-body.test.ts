@@ -76,6 +76,14 @@ describe('the token-endpoint error body reaching the user', () => {
     },
   );
 
+  // Every control goes, not only the first; and the trim runs after the filter, not before it.
+  it.each([
+    ['two of them', 'invalid\u0000‮_grant'],
+    ['one ahead of a leading space', '\u0000 invalid_grant'],
+  ])('drops controls with %s', async (_label, body) => {
+    expect(await messageFor(body)).toBe('Token exchange failed: 403 invalid_grant');
+  });
+
   it('still quotes a plain JSON error body', async () => {
     const body = '{"error":"invalid_grant"}';
     expect(await messageFor(body)).toBe(`Token exchange failed: 403 ${body}`);
