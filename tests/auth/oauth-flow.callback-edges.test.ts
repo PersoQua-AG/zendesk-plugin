@@ -8,7 +8,10 @@ afterEach(closeRawSockets);
 async function rejectionAfter(targets: string[], timeoutMs: number): Promise<string> {
   const port = freePort();
   const listener = await startCallbackListener(port, 'state-abc', timeoutMs);
-  const message = settlesWithin('the listener', listener.promise).catch((err: Error) => err.message);
+  const message = settlesWithin('the listener', listener.promise).then(
+    () => 'resolved, but a rejection was expected',
+    (err: Error) => err.message,
+  );
   try {
     for (const target of targets) await answerFromOurListener(port, target);
     return await message;
