@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { connect } from 'node:net';
 import { waitForAuthorizationCode } from '../../src/auth/oauth-flow.js';
+import { freePort } from './login-harness.js';
 
 function listenOn(port: number): Promise<Server> {
   return new Promise((resolve) => {
@@ -33,9 +34,10 @@ async function pipelineTwoCallbacks(port: number): Promise<void> {
 
 describe('waitForAuthorizationCode robustness', () => {
   it('rejects (does not throw uncaught) when the callback port is already in use', async () => {
-    const blocker = await listenOn(18990);
+    const port = freePort();
+    const blocker = await listenOn(port);
     try {
-      await expect(waitForAuthorizationCode(18990, 'state', 5_000)).rejects.toThrow(/server error/i);
+      await expect(waitForAuthorizationCode(port, 'state', 5_000)).rejects.toThrow(/server error/i);
     } finally {
       await new Promise<void>((r) => blocker.close(() => r()));
     }
@@ -46,16 +48,18 @@ describe('waitForAuthorizationCode robustness', () => {
   // or reject an already-resolved promise. Pipelined on ONE socket so both requests reach the
   // listener before it closes — no race, no timing assumption.
   it('ignores a replayed callback and keeps the first code', async () => {
-    const pending = waitForAuthorizationCode(18992, 'state', 10_000);
-    await pipelineTwoCallbacks(18992);
+    const port = freePort();
+    const pending = waitForAuthorizationCode(port, 'state', 10_000);
+    await pipelineTwoCallbacks(port);
 
-    await expect(pending).resolves.toEqual({ code: 'first', redirectUri: 'http://localhost:18992/callback' });
+    await expect(pending).resolves.toEqual({ code: 'first', redirectUri: `http://localhost:${port}/callback` });
   });
 
   it('rejects and closes the server when no callback arrives before the timeout', async () => {
-    await expect(waitForAuthorizationCode(18991, 'state', 30)).rejects.toThrow(/timed out/i);
+    const port = freePort();
+    await expect(waitForAuthorizationCode(port, 'state', 30)).rejects.toThrow(/timed out/i);
     // The port must be free again after the timeout closed the server.
-    const reuse = await listenOn(18991);
+    const reuse = await listenOn(port);
     await new Promise<void>((r) => reuse.close(() => r()));
   });
 });

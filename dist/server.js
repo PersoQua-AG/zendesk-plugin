@@ -83,6 +83,25 @@ function resolveOrDegrade(env) {
         };
     }
 }
+// mkdir can throw (EACCES/ENOSPC/ENOTDIR); tokens share the dir, so degrade like a bad config.
+function openCacheOrDegrade(auth) {
+    try {
+        return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')), cacheOk: true };
+    }
+    catch (err) {
+        const code = err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
+        const problem = `The extension's data directory cannot be used (${code}), so responses cannot be cached and ` +
+            `tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;
+        const reason = auth.ok ? problem : `${auth.reason.replace(/,? then reload the extension\.$/, '.')} ${problem}`;
+        const fail = () => {
+            throw new Error(reason);
+        };
+        // ResponseCache is nominal (private fields); tools only call save/load.
+        const stub = { save: fail, load: fail };
+        const cache = stub;
+        return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
+    }
+}
 // runLogin answers with configError before it reads anything else, so these values are never used;
 // they only satisfy the LoginDeps shape while the configuration is incomplete.
 const NO_OAUTH_CONFIG = { subdomain: '', clientId: '', clientSecret: '', callbackPort: 0, scopes: [] };
@@ -93,11 +112,14 @@ export function createServer(rawEnv = process.env, deps = {}) {
     // Drop unsubstituted ${user_config.*} placeholders once, up front, so every downstream default
     // (security level, markdown flag, report config) sees "absent" rather than a literal placeholder.
     const env = stripPlaceholders(rawEnv);
-    const auth = resolveOrDegrade(env);
-    const { dataDir, tokensPath } = auth;
+    const resolved = resolveOrDegrade(env);
+    const { auth, cache, cacheOk } = deps.cache
+        ? { auth: resolved, cache: deps.cache, cacheOk: true }
+        : openCacheOrDegrade(resolved);
+    const { tokensPath } = auth;
     const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
     const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
-    const authManager = deps.authManager ??
+    const authManager = (cacheOk ? deps.authManager : undefined) ??
         (auth.ok
             ? new AuthManager(new TokenStore(tokensPath, auth.config.clientSecret), auth.config)
             : // Stands in for AuthManager while the configuration is incomplete: every Zendesk request
@@ -107,7 +129,6 @@ export function createServer(rawEnv = process.env, deps = {}) {
     const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
     const subdomain = auth.ok ? auth.config.subdomain : '';
     const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
-    const cache = deps.cache ?? new ResponseCache(join(dataDir, 'cache'));
     const server = new McpServer({ name: 'zendesk', version: '1.0.0' });
     const ctx = {
         httpClient,
