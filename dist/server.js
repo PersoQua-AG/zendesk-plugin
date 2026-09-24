@@ -15,6 +15,7 @@ import { registerDirectoryTools } from './register/directory.js';
 import { registerBusinessRulesTools } from './register/business-rules.js';
 import { registerGuideTools } from './register/guide.js';
 import { registerAnalyticsTools } from './register/analytics.js';
+import { registerPrompts } from './register/prompts.js';
 import { parseReportConfig } from './tools/analytics/business-hours.js';
 import { argv } from 'node:process';
 import { join } from 'node:path';
@@ -152,6 +153,7 @@ export function createServer(rawEnv = process.env, deps = {}) {
     registerBusinessRulesTools(server, ctx);
     registerGuideTools(server, ctx);
     registerAnalyticsTools(server, ctx);
+    registerPrompts(server);
     return { server, ctx, rateLimiter, incrementalRateLimiter };
 }
 // Connect stdio only when run as the process entrypoint (node dist/server.js), so importing this
