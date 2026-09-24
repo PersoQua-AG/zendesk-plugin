@@ -6,6 +6,7 @@ import {
   refreshAccessToken,
   type OAuthConfig,
 } from '../../src/auth/oauth-flow.js';
+import { freePort } from './login-harness.js';
 
 const config: OAuthConfig = {
   subdomain: 'acme',
@@ -32,11 +33,12 @@ describe('buildAuthorizationUrl', () => {
 
 describe('waitForAuthorizationCode', () => {
   it('resolves with the code when the callback matches the expected state', async () => {
-    const pending = waitForAuthorizationCode(18977, 'expected-state');
-    await fetch('http://localhost:18977/callback?code=auth-code-1&state=expected-state');
+    const port = freePort();
+    const pending = waitForAuthorizationCode(port, 'expected-state');
+    await fetch(`http://localhost:${port}/callback?code=auth-code-1&state=expected-state`);
     const result = await pending;
     expect(result.code).toBe('auth-code-1');
-    expect(result.redirectUri).toBe('http://localhost:18977/callback');
+    expect(result.redirectUri).toBe(`http://localhost:${port}/callback`);
   });
 
   // The CSRF assurance in the shape it now has. A foreign `state` is still never accepted as the
@@ -44,18 +46,20 @@ describe('waitForAuthorizationCode', () => {
   // and the user's own callback still completes. Why the check moved ahead of `error=`, and the
   // same property driven from a raw socket, is in oauth-flow.stray-callback.test.ts.
   it('never accepts a code under a foreign state, and keeps waiting for the real one', async () => {
-    const pending = waitForAuthorizationCode(18978, 'expected-state');
-    expect((await fetch('http://localhost:18978/callback?code=foreign&state=wrong-state')).status).toBe(400);
-    await fetch('http://localhost:18978/callback?code=auth-code-1&state=expected-state').catch(() => {});
+    const port = freePort();
+    const pending = waitForAuthorizationCode(port, 'expected-state');
+    expect((await fetch(`http://localhost:${port}/callback?code=foreign&state=wrong-state`)).status).toBe(400);
+    await fetch(`http://localhost:${port}/callback?code=auth-code-1&state=expected-state`).catch(() => {});
     expect((await pending).code).toBe('auth-code-1');
   });
 
   // With `state`, because Zendesk sends it on the denial redirect too: this is what a real "the
   // user clicked Deny" looks like on the wire. Citation in src/auth/oauth-flow.ts.
   it('rejects when Zendesk reports an authorization error', async () => {
-    const pending = waitForAuthorizationCode(18979, 'expected-state');
+    const port = freePort();
+    const pending = waitForAuthorizationCode(port, 'expected-state');
     const assertion = expect(pending).rejects.toThrow(/access_denied/);
-    await fetch('http://localhost:18979/callback?error=access_denied&state=expected-state').catch(() => {});
+    await fetch(`http://localhost:${port}/callback?error=access_denied&state=expected-state`).catch(() => {});
     await assertion;
   });
 });
