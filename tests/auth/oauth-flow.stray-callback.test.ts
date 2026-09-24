@@ -156,9 +156,8 @@ describe('the timeout under a burst of stray callbacks', () => {
       .finally(() => (over = true));
 
     // Burst until the flow ends: how many requests fit in the window is the machine's business.
-    // The ceiling only stops a timer that never fires from opening sockets for 2s; it is no check.
     const outcomes: string[] = [];
-    while (!over && outcomes.length < 5000) {
+    while (!over) {
       outcomes.push(await strayOutcome(port, `wrong-${outcomes.length}`));
     }
     const inFlightAtSettle = over ? outcomes.splice(-1) : [];
