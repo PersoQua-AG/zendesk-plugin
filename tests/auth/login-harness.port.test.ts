@@ -10,6 +10,7 @@ import {
   answerFromOurListener,
   closeRawSockets,
   freePort,
+  pidIsLive,
   portClaimPath,
   sweepDeadClaims,
 } from './login-harness.js';
@@ -116,7 +117,8 @@ describe('the port a test is given', () => {
 //
 // Each case below states one rule of the sweep against the real sweepDeadClaims(), deterministically
 // — it plants the state and calls the sweep, rather than racing for it. Only entries this test owns
-// are planted: a staging name is a UUID, and a claim is one freePort() handed us.
+// are planted: a staging name is a UUID, and a claim is one freePort() handed us. Deterministic
+// in its verdict, not in who acts: a concurrent run's sweep may reclaim a planted claim first.
 describe('the sweep that reclaims the band', () => {
   const claimDir = dirname(portClaimPath(PORT_BAND_FIRST));
   const planted: string[] = [];
@@ -132,9 +134,8 @@ describe('the sweep that reclaims the band', () => {
     return path;
   }
 
-  // Who a claim names, or null once it is gone. The claim dir is shared with every concurrent run,
-  // whose sweep may remove a dead claim first and whose freePort() may then publish the same port
-  // for a live owner (#38) — so "the path is gone" is not ours to assert, "the dead owner is" is.
+  // Shared claim dir: a concurrent run may reclaim and reissue this port (#38); assert the owner.
+  // Another checkout's sweep can pass this without ours acting; one run still pins it.
   function claimOwner(path: string): string | null {
     try {
       return readFileSync(path, 'utf8');
@@ -142,6 +143,14 @@ describe('the sweep that reclaims the band', () => {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
     }
+  }
+
+  function expectReclaimed(claim: string, plantedOwner: string): void {
+    const owner = claimOwner(claim);
+    if (owner === null) return;
+    expect(owner).toMatch(/^\d+$/);
+    expect([String(process.pid), plantedOwner]).not.toContain(owner);
+    expect(pidIsLive(Number(owner))).toBe(true);
   }
 
   afterEach(() => {
@@ -166,6 +175,7 @@ describe('the sweep that reclaims the band', () => {
 
   // Age is the ONLY thing that condemns a staging file, so an abandoned one is still reclaimed —
   // the rule buys the owner a window, it does not leak the directory. MAX_CLAIM_AGE_MS is 30 min.
+  // The path check is safe here: a staging name is a UUID, so no other run can reissue it.
   it('reclaims a staging file left behind by a run that died', () => {
     const staging = plantStaging('', 31 * 60_000);
     sweepDeadClaims();
@@ -173,14 +183,15 @@ describe('the sweep that reclaims the band', () => {
   });
 
   // And the content rule still stands where it is correct. A claim is published by link(), so it is
-  // never observable half-written: one that reads empty has no owner and must go, or the band fills
-  // up with claims nothing holds. This is the half the fix must NOT have loosened.
+  // never observable half-written: one that reads empty has no owner and must be gone afterwards or
+  // taken over by a live foreign process, or the band fills up with claims nothing holds. This is
+  // the half the fix must NOT have loosened.
   it('reclaims a claim that names no owner', () => {
     const port = freePort();
     const claim = portClaimPath(port);
     truncateSync(claim, 0);
     sweepDeadClaims();
-    expect(claimOwner(claim)).not.toBe('');
+    expectReclaimed(claim, '');
   });
 
   it('reclaims a claim whose owner has exited, and keeps one whose owner is alive', () => {
@@ -194,10 +205,9 @@ describe('the sweep that reclaims the band', () => {
 
     sweepDeadClaims();
 
-    expect(claimOwner(abandoned)).not.toBe(String(dead.pid));
+    expectReclaimed(abandoned, String(dead.pid));
     // Ours names a pid that is this very process, so nothing about it can read as dead.
     expect(readFileSync(ours, 'utf8')).toBe(String(process.pid));
-    expect(existsSync(ours)).toBe(true);
   });
 });
 
