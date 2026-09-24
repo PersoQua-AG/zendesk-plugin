@@ -37,9 +37,8 @@ export class RateLimiter {
   }
 
   reportRetryAfter(seconds: number): void {
-    const capped = Number.isNaN(seconds)
-      ? MAX_RETRY_AFTER_SECONDS
-      : Math.min(seconds, MAX_RETRY_AFTER_SECONDS);
+    // NaN fails `<`: unknown wait -> longest safe wait, not the parser's 60 s default.
+    const capped = seconds < MAX_RETRY_AFTER_SECONDS ? seconds : MAX_RETRY_AFTER_SECONDS;
     this.retryAfterUntil = this.now() + capped * 1000;
   }
 }
