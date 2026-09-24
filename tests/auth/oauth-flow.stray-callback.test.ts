@@ -1,6 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { startCallbackListener } from '../../src/auth/oauth-flow.js';
-import { answerFromOurListener, closeRawSockets, freePort, rebind, settlesWithin } from './login-harness.js';
+import {
+  answerFromOurListener,
+  closeRawSockets,
+  freePort,
+  rawExchange,
+  rebind,
+  settlesWithin,
+} from './login-harness.js';
 
 // Two properties of the callback listener that a raw socket, and only a raw socket, can state.
 //
@@ -141,21 +148,52 @@ describe('a denial that does carry the expected state', () => {
 // `state` must therefore also be unable to hold the listener open past it by talking to it — and
 // the timeout must still be the reason the flow ends, not a stray request's.
 describe('the timeout under a burst of stray callbacks', () => {
-  it('still fires, and still with its own wording', async () => {
+  it('still fires, still with its own wording, and takes the listener down with it', async () => {
     const port = freePort();
     const listener = await startCallbackListener(port, 'state-abc', 300);
-    const assertion = settlesWithin('the timed-out listener', listener.promise).catch((err: Error) => err.message);
+    let over = false;
+    const ended = settlesWithin('the timed-out listener', listener.promise)
+      .catch((err: Error) => err.message)
+      .finally(() => (over = true));
 
-    // Enough requests to span the whole window, each one a fresh connection the handler must answer.
-    for (let i = 0; i < 25; i += 1) {
-      expect(await answerFromOurListener(port, `/callback?error=denied&state=wrong-${i}`)).toEqual({
-        statusLine: 'HTTP/1.1 400 Bad Request',
-        body: 'State mismatch',
-      });
+    // Burst until the flow ends: how many requests fit in the window is the machine's business.
+    const outcomes: string[] = [];
+    while (!over) {
+      outcomes.push(await strayOutcome(port, `wrong-${outcomes.length}`));
     }
+    const inFlightAtSettle = over ? outcomes.splice(-1) : [];
+    const seen = `while open ${tally(outcomes)}, in flight at settle ${tally(inFlightAtSettle)}`;
 
-    expect(await assertion).toBe('OAuth callback timed out after 300ms');
-    // And the timer released the port rather than merely settling the promise.
+    expect(await ended, seen).toBe('OAuth callback timed out after 300ms');
+    const unanswered = outcomes.filter((o) => o !== ANSWERED);
+    expect(unanswered, `a stray request was not answered 400; ${seen}`).toEqual([]);
+    // close() may refuse, reset or drop the one in flight; a port clash is a foreign status line.
+    const confirming = [ANSWERED, 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', NO_STATUS_LINE];
+    const unexpected = inFlightAtSettle.filter((o) => !confirming.includes(o));
+    expect(unexpected, `unexpected in flight at settle; ${seen}`).toEqual([]);
+    // The flow has rejected, so a listener that still answers was settled without being closed.
+    const afterTimeout = await strayOutcome(port, 'wrong-after-timeout');
+    expect(afterTimeout, `after the timeout; ${seen}`).toBe('ECONNREFUSED');
     await rebind(port);
   });
 });
+
+const ANSWERED = 'HTTP/1.1 400 Bad Request: State mismatch';
+const NO_STATUS_LINE = 'no status line';
+
+// One stray request's fate as a single string: the answer, or the socket error code that ended it.
+async function strayOutcome(port: number, state: string): Promise<string> {
+  try {
+    const target = `/callback?error=denied&state=${state}`;
+    const answer = await settlesWithin(`stray ${state}`, rawExchange(port, target));
+    return answer.statusLine === '' ? NO_STATUS_LINE : `${answer.statusLine}: ${answer.body}`;
+  } catch (err) {
+    return err instanceof Error && 'code' in err ? String(err.code) : String(err);
+  }
+}
+
+function tally(outcomes: string[]): string {
+  const counts: Record<string, number> = {};
+  for (const o of outcomes) counts[o] = (counts[o] ?? 0) + 1;
+  return JSON.stringify(counts);
+}
