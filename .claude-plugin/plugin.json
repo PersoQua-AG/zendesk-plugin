@@ -67,7 +67,7 @@
   "mcpServers": {
     "zendesk": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/server.js"],
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/plugin/server.js"],
       "env": {
         "ZENDESK_SUBDOMAIN": "${user_config.zendesk_subdomain}",
         "ZENDESK_OAUTH_CLIENT_ID": "${user_config.oauth_client_id}",
