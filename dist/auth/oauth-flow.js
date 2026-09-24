@@ -44,7 +44,8 @@ export function buildAuthorizationUrl(config, codeChallenge, state, redirectUriO
 // configuration field the user must fix; rendering it as "unknown error code" would trade a
 // nonexistent injection gain (the set above already contains nothing executable, and the caller
 // already holds `state`) for a user who cannot tell what went wrong.
-const NOT_NQCHAR = /[^\x20-\x21\x23-\x5B\x5D-\x7E]/g;
+// '<' '>' dropped though NQCHAR allows them: no real code uses them and they could forge markup.
+const NOT_NQCHAR = /[^\x20-\x21\x23-\x3B\x3D\x3F-\x5B\x5D-\x7E]/g;
 // Long enough for any real code plus a word of context, short enough that nothing can pad the tool
 // result with content of its own. The longest value Zendesk documents is 21 characters.
 const MAX_ERROR_CODE_CHARS = 100;
@@ -57,6 +58,8 @@ function sanitizeErrorCode(raw) {
         ? `${cleaned.slice(0, MAX_ERROR_CODE_CHARS)}… (truncated)`
         : cleaned;
 }
+// Named in the timeout, never with the state value: a state bug must not look like a mere timeout.
+const STRAY_STATE_NOTE = '; a callback with an unexpected state was received and ignored';
 // Resolves only once the port is actually bound, and REJECTS on a bind failure (e.g. EADDRINUSE) —
 // so a caller never receives a listener whose callback could never land, and never has to inspect
 // an error returned as a value.
@@ -74,6 +77,7 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
             // actually holds. Enforced by scripts/assert-executor-safety.mjs.
             try {
                 let settled = false;
+                let ignoredStrayState = false;
                 server = createServer((req, res) => {
                     // req.url is typed `string | undefined` but is always set on a request the parser accepted,
                     // so the fallback exists for the type only and no test can reach it.
@@ -122,6 +126,7 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                     // authorization request"). So a denial still settles AT ONCE, and nobody waits out the
                     // window for an answer that already exists.
                     if (url.searchParams.get('state') !== expectedState) {
+                        ignoredStrayState = true;
                         res.writeHead(400, { 'Content-Type': 'text/plain' }).end('State mismatch');
                         return;
                     }
@@ -142,7 +147,8 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                     finish(() => resolve({ code, redirectUri: redirectUri(port) }));
                 });
                 const timer = setTimeout(() => {
-                    finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms`)));
+                    const stray = ignoredStrayState ? STRAY_STATE_NOTE : '';
+                    finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms${stray}`)));
                 }, timeoutMs);
                 timer.unref?.();
                 const finish = (settle) => {
@@ -202,15 +208,19 @@ export async function waitForAuthorizationCode(port, expectedState, timeoutMs = 
 // NFR-1: an error body reaches the user. Zendesk answers with a short JSON error, but anything in
 // front of it (a WAF, a captive portal, a proxy) can answer with a whole HTML page — measured: an
 // ~8 KB Cloudflare challenge carrying a cf_chl_tk token, all on ONE line, which a first-line-only
-// cut passes through untouched. So the body is capped on BOTH axes, and markup is dropped entirely
-// rather than quoted.
+// cut passes through untouched. So the body is capped on BOTH axes, and a line carrying an angle
+// bracket anywhere is dropped entirely rather than quoted.
 const MAX_ERROR_BODY_CHARS = 200;
+const LINE_BREAK = /[\n\r\u0085\u2028\u2029]/;
+// Controls and bidi overrides; the callback's error code loses them to NOT_NQCHAR above.
+const CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]/g;
+// Returns '' for a blank body, so the caller can end the message at the status.
 function summarizeErrorBody(raw) {
-    const firstLine = raw.split('\n')[0].trim();
-    if (firstLine.startsWith('<'))
+    const firstLine = raw.split(LINE_BREAK)[0].replace(CONTROL_OR_BIDI, '').trim();
+    if (/[<>]/.test(firstLine))
         return '(non-text response body omitted)';
     return firstLine.length > MAX_ERROR_BODY_CHARS
-        ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated)`
+        ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS).replace(/[\uD800-\uDBFF]$/, '')}… (truncated)`
         : firstLine;
 }
 // Unlike the callback timeout above, this one bounds a MACHINE step: one POST to Zendesk's token
@@ -239,7 +249,8 @@ async function postToken(subdomain, body, fetchImpl, errorLabel) {
             signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
         });
         if (!response.ok) {
-            throw new Error(`${errorLabel}: ${response.status} ${summarizeErrorBody(await response.text())}`);
+            const detail = summarizeErrorBody(await response.text());
+            throw new Error(`${errorLabel}: ${response.status}${detail ? ` ${detail}` : ''}`);
         }
         const parsed = tokenResponseSchema.safeParse(await response.json());
         if (!parsed.success) {

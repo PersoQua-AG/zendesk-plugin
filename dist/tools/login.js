@@ -26,8 +26,10 @@ let activeFlow = null;
 export function abortLoginFlow() {
     if (!activeFlow)
         return;
-    activeFlow.close();
+    // Forgotten before close(): a close() that throws must not pin this flow for every later login.
+    const flow = activeFlow;
     activeFlow = null;
+    flow.close();
 }
 // Tokens the store can decrypt and that carry a refresh token are enough: the server refreshes
 // silently from there, so a new authorization-code round trip would only cost the user a browser
