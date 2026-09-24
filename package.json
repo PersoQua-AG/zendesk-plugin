@@ -9,7 +9,7 @@
     "zendesk-remote": "dist/bin/remote.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && esbuild src/server.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/plugin/server.js",
+    "build": "tsc -p tsconfig.json && esbuild src/plugin/stdio.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/plugin/server.js",
     "prepare": "npm run build",
     "test": "vitest run",
     "check:executors": "node scripts/assert-executor-safety.mjs",
