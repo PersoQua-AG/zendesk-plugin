@@ -73,9 +73,7 @@ export function buildAuthorizationUrl(
 // configuration field the user must fix; rendering it as "unknown error code" would trade a
 // nonexistent injection gain (the set above already contains nothing executable, and the caller
 // already holds `state`) for a user who cannot tell what went wrong.
-//
-// '<' and '>' (0x3C, 0x3E) are dropped as well, although NQCHAR allows them: no documented code uses
-// them, and without them the value cannot write envelope-like markup once failureText is fenced.
+// '<' '>' dropped though NQCHAR allows them: no real code uses them and they could forge markup.
 const NOT_NQCHAR = /[^\x20-\x21\x23-\x3B\x3D\x3F-\x5B\x5D-\x7E]/g;
 
 // Long enough for any real code plus a word of context, short enough that nothing can pad the tool
@@ -272,10 +270,13 @@ export async function waitForAuthorizationCode(
 // cut passes through untouched. So the body is capped on BOTH axes, and a line carrying an angle
 // bracket anywhere is dropped entirely rather than quoted.
 const MAX_ERROR_BODY_CHARS = 200;
+const LINE_BREAK = /[\n\r\u0085\u2028\u2029]/;
+// Controls and bidi overrides; the callback's error code loses them to NOT_NQCHAR above.
+const CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]/g;
 
 // Returns '' for a blank body, so the caller can end the message at the status.
 function summarizeErrorBody(raw: string): string {
-  const firstLine = raw.split('\n')[0].trim();
+  const firstLine = raw.split(LINE_BREAK)[0].replace(CONTROL_OR_BIDI, '').trim();
   if (/[<>]/.test(firstLine)) return '(non-text response body omitted)';
   return firstLine.length > MAX_ERROR_BODY_CHARS
     ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS).replace(/[\uD800-\uDBFF]$/, '')}… (truncated)`

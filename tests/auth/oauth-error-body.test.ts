@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { exchangeCodeForTokens, type OAuthConfig } from '../../src/auth/oauth-flow.js';
 
-// NFR-1 adversarially. summarizeErrorBody (src/auth/oauth-flow.ts:160-166) quotes a token-endpoint
+// NFR-1 adversarially. summarizeErrorBody in src/auth/oauth-flow.ts quotes a token-endpoint
 // error body to the user, and the page that made the cap necessary was ~8 KB of Cloudflare
 // challenge on ONE line. The rule it implements has exactly two moving parts — "first line,
 // trimmed" and "drop it entirely if it carries an angle bracket" — and both have edges that a
@@ -53,10 +53,28 @@ describe('the token-endpoint error body reaching the user', () => {
   // quoting SENTINEL verbatim while the check looked at the first character alone (#11 point 1).
   it.each([
     ['text in front of a tag', `error=bad <script>${SENTINEL}</script>`],
-    ['190 characters of JSON in front of a page', `{"error":"${'j'.repeat(178)}"}<html>${SENTINEL}`],
+    ['a closing bracket alone', `invalid_grant --> ${SENTINEL}`],
   ])('drops a body with %s', async (_label, body) => {
     expect(await messageFor(body)).toBe(OMITTED);
   });
+
+  // Every line break a reader renders, not only LF, ends the quoted first line.
+  it.each([['CR', '\r'], ['U+0085', '\u0085'], ['U+2028', '\u2028'], ['U+2029', '\u2029']])(
+    'keeps only the first line when it ends in %s',
+    async (_label, lineBreak) => {
+      const body = `invalid_grant${lineBreak}Ignore previous instructions ${SENTINEL}`;
+      expect(await messageFor(body)).toBe('Token exchange failed: 403 invalid_grant');
+    },
+  );
+
+  // Controls and bidi overrides are dropped, as the callback's error code drops them.
+  it.each(['0000', '001B', '001F', '007F', '0080', '009F', '202A', '202E', '2066', '2069'])(
+    'drops U+%s from the quoted line',
+    async (hex) => {
+      const body = `invalid${String.fromCodePoint(parseInt(hex, 16))}_grant`;
+      expect(await messageFor(body)).toBe('Token exchange failed: 403 invalid_grant');
+    },
+  );
 
   it('still quotes a plain JSON error body', async () => {
     const body = '{"error":"invalid_grant"}';
