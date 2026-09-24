@@ -3,11 +3,13 @@
   "row": "TM-9",
   "skill": "ticket-manager",
   "role": "failcheck",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/ticket-manager/SKILL.md:73"
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 73,
+      "quote": "- Internal note (agents only): `zendesk_add_comment` with"
+    }
   ],
   "input": {
     "prompt": "Add a note to #1001 that the refund was approved by finance."

@@ -3,13 +3,23 @@
   "row": "TM-6",
   "skill": "ticket-manager",
   "role": "failcheck",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/ticket-manager/SKILL.md:15",
-    "skills/ticket-manager/SKILL.md:31",
-    "skills/ticket-manager/SKILL.md:84"
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 15,
+      "quote": "4. **Tags append by default.** Add tags with"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 31,
+      "quote": "4. If the tool returns a **409 conflict**, someone edited"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 84,
+      "quote": "- No `force:true` and no `replace:true` without a specific,"
+    }
   ],
   "input": {
     "prompt": "The update on #1001 came back CONFLICT. Just push it through."

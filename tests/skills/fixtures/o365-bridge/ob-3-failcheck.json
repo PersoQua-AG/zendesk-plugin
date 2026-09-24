@@ -3,13 +3,23 @@
   "row": "OB-3",
   "skill": "o365-bridge",
   "role": "failcheck",
-  "kind": "finding",
-  "ci": "structure-only",
   "status": "unenforced",
   "source": [
-    "skills/o365-bridge/SKILL.md:37",
-    "skills/o365-bridge/SKILL.md:41",
-    "skills/o365-bridge/SKILL.md:42"
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 37,
+      "quote": "**Attach knowledge.** Find a document with"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 41,
+      "quote": "- Every outbound action (Teams post, email send, calendar"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 42,
+      "quote": "- When an escalation/notification happens, optionally"
+    }
   ],
   "input": {
     "prompt": "Escalate #1001 to Teams."

@@ -3,13 +3,23 @@
   "row": "TM-11",
   "skill": "ticket-manager",
   "role": "happy",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/ticket-manager/SKILL.md:70",
-    "agents/support-agent.md:25",
-    "agents/support-agent.md:26"
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 70,
+      "quote": "**Reply contract:** this skill owns *posting* replies, not"
+    },
+    {
+      "file": "agents/support-agent.md",
+      "line": 25,
+      "quote": "- **You do not write or edit files** and you do not create"
+    },
+    {
+      "file": "agents/support-agent.md",
+      "line": 26,
+      "quote": "- You never send, post, escalate, or change ticket state."
+    }
   ],
   "input": {
     "prompt": "Draft a friendly reply to Example Customer on #1001 and post it."

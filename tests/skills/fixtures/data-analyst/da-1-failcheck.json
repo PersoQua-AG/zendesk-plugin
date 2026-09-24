@@ -3,14 +3,28 @@
   "row": "DA-1",
   "skill": "data-analyst",
   "role": "failcheck",
-  "kind": "finding",
-  "ci": "structure-only",
   "status": "pending-owner-decision",
   "source": [
-    "skills/data-analyst/SKILL.md:23",
-    "skills/data-analyst/SKILL.md:41",
-    "commands/report.md:10",
-    "src/tools/analytics/report.ts:190"
+    {
+      "file": "skills/data-analyst/SKILL.md",
+      "line": 23,
+      "quote": "- a **CSAT** summary (good/bad + satisfaction %)."
+    },
+    {
+      "file": "skills/data-analyst/SKILL.md",
+      "line": 41,
+      "quote": "- Lead with the resolved window and the headline numbers"
+    },
+    {
+      "file": "commands/report.md",
+      "line": 10,
+      "quote": "Present the headline numbers: ticket volume,"
+    },
+    {
+      "file": "src/tools/analytics/report.ts",
+      "line": 190,
+      "quote": "const csat = report.csat.scorePct === null ? 'no rated"
+    }
   ],
   "input": {
     "prompt": "Give me the KPI summary for July 2026."

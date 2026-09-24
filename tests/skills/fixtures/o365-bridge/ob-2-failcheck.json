@@ -3,13 +3,23 @@
   "row": "OB-2",
   "skill": "o365-bridge",
   "role": "failcheck",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/o365-bridge/SKILL.md:14",
-    "skills/o365-bridge/SKILL.md:17",
-    "commands/escalate.md:11"
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 14,
+      "quote": "**If they are absent or unauthorized, stop and tell the"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 17,
+      "quote": "Do not attempt the M365 action and do not change any"
+    },
+    {
+      "file": "commands/escalate.md",
+      "line": 11,
+      "quote": "Use the `o365-bridge` skill. First detect whether the"
+    }
   ],
   "input": {
     "prompt": "/zendesk:escalate 1001",

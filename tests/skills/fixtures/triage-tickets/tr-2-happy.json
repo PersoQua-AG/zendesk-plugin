@@ -3,11 +3,13 @@
   "row": "TR-2",
   "skill": "triage-tickets",
   "role": "happy",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/triage-tickets/SKILL.md:25"
+    {
+      "file": "skills/triage-tickets/SKILL.md",
+      "line": 25,
+      "quote": "Order by, in priority: (1) already-breached or"
+    }
   ],
   "input": {
     "prompt": "What should I work on next?",

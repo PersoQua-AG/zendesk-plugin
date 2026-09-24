@@ -3,14 +3,28 @@
   "row": "TM-8",
   "skill": "ticket-manager",
   "role": "failcheck",
-  "kind": "finding",
-  "ci": "structure-only",
   "status": "unenforced",
   "source": [
-    "skills/ticket-manager/SKILL.md:3",
-    "skills/ticket-manager/SKILL.md:47",
-    "skills/ticket-manager/SKILL.md:48",
-    "src/register/tickets.ts:17"
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 3,
+      "quote": "description: Write and manage the Zendesk ticket lifecycle"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 47,
+      "quote": "- **`closed` is terminal.** A closed ticket cannot be"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 48,
+      "quote": "- **Never move a ticket back to `new`** — `new` is the"
+    },
+    {
+      "file": "src/register/tickets.ts",
+      "line": 17,
+      "quote": "status: z.enum(['new', 'open', 'pending', 'hold', 'solved',"
+    }
   ],
   "input": {
     "prompt": "Reopen ticket #1003 (status: closed) and set it back to new."

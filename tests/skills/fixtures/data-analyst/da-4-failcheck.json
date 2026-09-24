@@ -3,11 +3,13 @@
   "row": "DA-4",
   "skill": "data-analyst",
   "role": "failcheck",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/data-analyst/SKILL.md:44"
+    {
+      "file": "skills/data-analyst/SKILL.md",
+      "line": 44,
+      "quote": "- If a figure is unavailable (e.g. no CSAT ratings in the"
+    }
   ],
   "input": {
     "prompt": "How was satisfaction last week?",

@@ -3,13 +3,23 @@
   "row": "OB-2",
   "skill": "o365-bridge",
   "role": "happy",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/o365-bridge/SKILL.md:12",
-    "skills/o365-bridge/SKILL.md:25",
-    "skills/o365-bridge/SKILL.md:33"
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 12,
+      "quote": "Before any bridge action, check whether Microsoft 365 tools"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 25,
+      "quote": "Build a concise summary + the ticket's Zendesk URL"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 33,
+      "quote": "**Email via Outlook.** Send a ticket summary to a colleague"
+    }
   ],
   "input": {
     "prompt": "Email a summary of #1001 to colleague@example.com.",

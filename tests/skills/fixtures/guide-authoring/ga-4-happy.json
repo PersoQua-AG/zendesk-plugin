@@ -3,13 +3,23 @@
   "row": "GA-4",
   "skill": "guide-authoring",
   "role": "happy",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/guide-authoring/SKILL.md:19",
-    "skills/guide-authoring/SKILL.md:20",
-    "skills/guide-authoring/SKILL.md:36"
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 19,
+      "quote": "1. Create the base article in `en-us`:"
+    },
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 20,
+      "quote": "2. Add the German translation:"
+    },
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 36,
+      "quote": "For each create/update, show the target"
+    }
   ],
   "input": {
     "prompt": "Write a KB article \"Resetting your password\" in section 3001, English and German. German text: \"Passwort zuruecksetzen ...\"."

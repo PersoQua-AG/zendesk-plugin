@@ -3,11 +3,13 @@
   "row": "OB-4",
   "skill": "o365-bridge",
   "role": "failcheck",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/o365-bridge/SKILL.md:25"
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 25,
+      "quote": "Build a concise summary + the ticket's Zendesk URL"
+    }
   ],
   "input": {
     "prompt": "Attach the refund policy from SharePoint to #1001.",

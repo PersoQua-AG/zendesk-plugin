@@ -11,6 +11,10 @@ import { ResponseCache } from '../../src/client/cache.js';
 
 export const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const read = (rel: string): string => readFileSync(join(root, rel), 'utf8');
+export const filesIn = (dir: string, suffix: string): string[] =>
+  readdirSync(join(root, dir), { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith(suffix)).map((f) => join(dir, f)).sort();
+// A skill is a skills/ folder with a SKILL.md, so stray files such as .DS_Store do not count.
+export const skillNames = (): string[] => filesIn('skills', '/SKILL.md').map((f) => f.split('/')[1]);
 
 // Same pattern claude-layer.test.ts uses to find tool references in skill/command/agent text.
 export const toolsNamedIn = (text: string): string[] => [...new Set(text.match(/zendesk_[a-z0-9_]+/g) ?? [])].sort();
@@ -36,11 +40,12 @@ type Schema = {
   pattern?: string;
 };
 
-// Fills EVERY property (optional ones too, booleans true) so a write tool really reaches its write.
+// Fills EVERY property, booleans (draft, public, confirm, force) true on purpose so a write tool reaches its write.
 export function sample(s: Schema, top: Schema = s): unknown {
   // The SDK emits a reused zod schema as a JSON pointer into the same inputSchema.
   if (s.$ref) return sample(s.$ref.split('/').slice(1).reduce((n, k) => (n as Record<string, Schema>)[k], top), top);
-  if (s.enum) return s.enum[0];
+  // 'open' is a status every transition rule accepts, so the probe asserts no TM-8 rule either way.
+  if (s.enum) return s.enum.includes('open') ? 'open' : s.enum[0];
   if (s.anyOf) return sample(s.anyOf[0], top);
   switch (s.type) {
     case 'integer':
@@ -106,18 +111,29 @@ export async function boot(reply: (c: Call, n: number) => Response = () => json(
   };
 }
 
-// Methods each tool issues on one sampled call; a write behind a read that 200-{} fails is unseen.
-export async function probeMethods(names: string[]): Promise<Record<string, string[]>> {
-  const b = await boot();
+// One boot, one tool call, one close.
+export async function once(name: string, args: Record<string, unknown>, reply?: (c: Call, n: number) => Response, env?: NodeJS.ProcessEnv) {
+  const b = await boot(reply, env);
+  const r = await b.call(name, args);
+  await b.close();
+  return { ...r, calls: b.calls };
+}
+
+// A macro preview answers in the shape the apply tool accepts, so its confirmed PUT is reached too.
+const probeReply = (c: Call): Response => json(c.path.endsWith('/apply.json') ? { result: { ticket: {} } } : {});
+
+// "METHOD path" of every request each tool issues on one sampled call (default: every registered tool).
+export async function probeRequests(names?: string[]): Promise<Record<string, string[]>> {
+  const b = await boot(probeReply);
   try {
     const schemas = await b.schemas();
     const out: Record<string, string[]> = {};
-    for (const name of names) {
+    for (const name of names ?? [...schemas.keys()]) {
       const schema = schemas.get(name);
       if (!schema) throw new Error(`${name} is not a registered tool`);
       const before = b.calls.length;
       await b.call(name, sample(schema) as Record<string, unknown>);
-      out[name] = b.calls.slice(before).map((c) => c.method);
+      out[name] = b.calls.slice(before).map((c) => `${c.method} ${c.path}`);
     }
     return out;
   } finally {
@@ -125,29 +141,21 @@ export async function probeMethods(names: string[]): Promise<Record<string, stri
   }
 }
 
-export const writesIn = (methods: Record<string, string[]>): string[] =>
-  Object.entries(methods).flatMap(([name, ms]) => ms.filter((m) => m !== 'GET').map((m) => `${name}: ${m}`));
+export const writesIn = (requests: Record<string, string[]>): string[] =>
+  Object.entries(requests).flatMap(([name, rs]) => rs.filter((r) => !r.startsWith('GET ')).map((r) => `${name}: ${r}`));
 
 export interface RecordedCase {
   id: string;
   row: string;
   skill: string;
   role: 'happy' | 'failcheck';
-  kind: 'instruction-following' | 'finding';
-  ci: 'structure-only';
+  // recorded = instruction-following; the other two are findings kept as cases, not test targets.
   status: 'recorded' | 'unenforced' | 'pending-owner-decision';
-  source: string[];
+  source: Array<{ file: string; line: number; quote: string }>;
   input: Record<string, unknown>;
   expected: string;
 }
 
 // Recorded cases for model behaviour: CI checks their structure and citations, never the behaviour.
-export function recordedCases(): Array<RecordedCase & { file: string }> {
-  const dir = join(root, 'tests', 'skills', 'fixtures');
-  return readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.endsWith('.json'))
-    .map((e) => {
-      const file = join(e.parentPath, e.name).slice(root.length + 1);
-      return { ...(JSON.parse(read(file)) as RecordedCase), file };
-    });
-}
+export const recordedCases = (): Array<RecordedCase & { file: string }> =>
+  filesIn('tests/skills/fixtures', '.json').map((file) => ({ ...(JSON.parse(read(file)) as RecordedCase), file }));

@@ -3,12 +3,18 @@
   "row": "TR-1",
   "skill": "triage-tickets",
   "role": "failcheck",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/triage-tickets/SKILL.md:8",
-    "commands/tickets.md:10"
+    {
+      "file": "skills/triage-tickets/SKILL.md",
+      "line": 8,
+      "quote": "Give the agent a ranked \"work on these next\" list. This"
+    },
+    {
+      "file": "commands/tickets.md",
+      "line": 10,
+      "quote": "Use the `triage-tickets` skill to rank and present the"
+    }
   ],
   "input": {
     "prompt": "Triage the queue and close everything older than 30 days while you are at it."

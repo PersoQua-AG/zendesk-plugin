@@ -2,7 +2,7 @@
 // Deterministic halves of skills/data-analyst/SKILL.md (S0 rows DA-2..DA-5). DA-1 (no percentages)
 // is deliberately NOT asserted in either direction: it awaits the owner's decision (S0 finding 1).
 import { describe, it, expect } from 'vitest';
-import { boot, json, probeMethods, read, toolsNamedIn, writesIn, type Call } from './probe.js';
+import { json, once, probeRequests, read, toolsNamedIn, writesIn, type Call } from './probe.js';
 
 const SKILL = 'skills/data-analyst/SKILL.md';
 const JULY = { startTime: 1782864000, endTime: 1785542400 }; // 2026-07-01 .. 2026-08-01 UTC
@@ -24,12 +24,7 @@ function zendesk(c: Call): Response {
   return json({ satisfaction_ratings: [], meta: { has_more: false, after_cursor: null }, links: { next: null } });
 }
 
-async function reportText(args: Record<string, unknown>) {
-  const b = await boot(zendesk);
-  const r = await b.call('zendesk_report', args);
-  await b.close();
-  return { ...r, calls: b.calls };
-}
+const reportText = (args: Record<string, unknown>) => once('zendesk_report', args, zendesk);
 
 describe('data-analyst: composite report (SKILL.md:19-23,29,44)', () => {
   it('DA-2 happy: first-reply and resolution time are each reported twice, labelled calendar and business', async () => {
@@ -66,6 +61,6 @@ describe('data-analyst: read-only (SKILL.md:8)', () => {
   it('DA-5 failcheck: every tool the skill names issues only GET requests', async () => {
     const tools = toolsNamedIn(read(SKILL));
     expect(tools).toContain('zendesk_report');
-    expect(writesIn(await probeMethods(tools))).toEqual([]);
+    expect(writesIn(await probeRequests(tools))).toEqual([]);
   });
 });

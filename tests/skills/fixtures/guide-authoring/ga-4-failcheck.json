@@ -3,11 +3,13 @@
   "row": "GA-4",
   "skill": "guide-authoring",
   "role": "failcheck",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/guide-authoring/SKILL.md:21"
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 21,
+      "quote": "Ask the user for the German text; if they only supply"
+    }
   ],
   "input": {
     "prompt": "Publish this English article and add German too, you can translate it."

@@ -3,11 +3,13 @@
   "row": "GA-5",
   "skill": "guide-authoring",
   "role": "failcheck",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "skills/guide-authoring/SKILL.md:14"
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 14,
+      "quote": "- You need a `sectionId` to create an article and a"
+    }
   ],
   "input": {
     "prompt": "Put a new article about invoices into the Billing section."

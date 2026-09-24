@@ -3,11 +3,13 @@
   "row": "CMD-1",
   "skill": "commands",
   "role": "happy",
-  "kind": "instruction-following",
-  "ci": "structure-only",
   "status": "recorded",
   "source": [
-    "commands/search.md:10"
+    {
+      "file": "commands/search.md",
+      "line": 10,
+      "quote": "Run `zendesk_search` with `query:\"$ARGUMENTS\"`. If the"
+    }
   ],
   "input": {
     "prompt": "/zendesk:search refund example.com"
