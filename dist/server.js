@@ -83,6 +83,27 @@ function resolveOrDegrade(env) {
         };
     }
 }
+// The cache mkdirs under the data directory, which can throw (EACCES, ENOSPC, ENOTDIR). The token
+// store lives in the same directory, so the whole server degrades exactly like an incomplete
+// configuration: it starts, and every tool names the errno and the remedy. Never the path.
+function openCacheOrDegrade(auth) {
+    try {
+        return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')) };
+    }
+    catch (err) {
+        const code = err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
+        const problem = `The extension's data directory is not writable (${code}), so responses cannot be cached and ` +
+            `tokens cannot be stored. Free up disk space or fix the directory's permissions, then reload the extension.`;
+        const reason = auth.ok ? problem : `${auth.reason} ${problem}`;
+        const fail = () => {
+            throw new Error(reason);
+        };
+        // ResponseCache's private fields make it nominal; this stand-in only has to answer save/load,
+        // the two methods the tools call, and ToolContext lives outside this slice's scope.
+        const cache = { save: fail, load: fail };
+        return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache };
+    }
+}
 // runLogin answers with configError before it reads anything else, so these values are never used;
 // they only satisfy the LoginDeps shape while the configuration is incomplete.
 const NO_OAUTH_CONFIG = { subdomain: '', clientId: '', clientSecret: '', callbackPort: 0, scopes: [] };
@@ -93,8 +114,9 @@ export function createServer(rawEnv = process.env, deps = {}) {
     // Drop unsubstituted ${user_config.*} placeholders once, up front, so every downstream default
     // (security level, markdown flag, report config) sees "absent" rather than a literal placeholder.
     const env = stripPlaceholders(rawEnv);
-    const auth = resolveOrDegrade(env);
-    const { dataDir, tokensPath } = auth;
+    const resolved = resolveOrDegrade(env);
+    const { auth, cache } = deps.cache ? { auth: resolved, cache: deps.cache } : openCacheOrDegrade(resolved);
+    const { tokensPath } = auth;
     const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
     const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
     const authManager = deps.authManager ??
@@ -107,7 +129,6 @@ export function createServer(rawEnv = process.env, deps = {}) {
     const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
     const subdomain = auth.ok ? auth.config.subdomain : '';
     const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
-    const cache = deps.cache ?? new ResponseCache(join(dataDir, 'cache'));
     const server = new McpServer({ name: 'zendesk', version: '1.0.0' });
     const ctx = {
         httpClient,
