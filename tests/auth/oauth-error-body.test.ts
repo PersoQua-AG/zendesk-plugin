@@ -3,11 +3,11 @@ import { exchangeCodeForTokens, type OAuthConfig } from '../../src/auth/oauth-fl
 
 // NFR-1 adversarially. summarizeErrorBody (src/auth/oauth-flow.ts:160-166) quotes a token-endpoint
 // error body to the user, and the page that made the cap necessary was ~8 KB of Cloudflare
-// challenge on ONE line. The rule it implements has exactly two moving parts — "first line, trimmed"
-// and "drop it entirely if it starts with `<`" — and both have edges that a happy-path body never
-// reaches: a byte-order mark ahead of the `<`, an HTML comment ahead of the `<html>`, a CRLF line
-// end, a body sitting exactly on the 200-character cap, and a body whose 200th character is the
-// first half of a surrogate pair.
+// challenge on ONE line. The rule it implements has exactly two moving parts — "first line,
+// trimmed" and "drop it entirely if it carries an angle bracket" — and both have edges that a
+// happy-path body never reaches: a byte-order mark ahead of the `<`, an HTML comment ahead of the
+// `<html>`, a CRLF line end, a body sitting exactly on the 200-character cap, and a body whose
+// 200th character is the first half of a surrogate pair.
 const config: OAuthConfig = {
   subdomain: 'acme',
   clientId: 'client-123',
@@ -49,16 +49,23 @@ describe('the token-endpoint error body reaching the user', () => {
     expect(await messageFor(`invalid_grant\r\n${page('')}`)).toBe('Token exchange failed: 403 invalid_grant');
   });
 
-  // The cap is the second axis, and it is what bounds the damage when markup does NOT lead: a body
-  // is quoted, but never more than 200 characters of it, so no 8 KB page can ride out on one line.
-  it('caps a single-line body at 200 characters however the markup is buried in it', async () => {
-    const buried = `{"error":"invalid_grant","hint":"${'z'.repeat(400)}"}${page('')}`;
-    const message = await messageFor(buried);
-    expect(message).not.toContain(SENTINEL);
-    expect(message).toContain('(truncated)');
-    expect(message).toContain('invalid_grant');
-    // 'Token exchange failed: 403 ' + 200 + '… (truncated)'
-    expect(message).toHaveLength(240);
+  // Markup anywhere on the first line is dropped, not only at its start: both bodies were measured
+  // quoting SENTINEL verbatim while the check looked at the first character alone (#11 point 1).
+  it.each([
+    ['text in front of a tag', `error=bad <script>${SENTINEL}</script>`],
+    ['190 characters of JSON in front of a page', `{"error":"${'j'.repeat(178)}"}<html>${SENTINEL}`],
+  ])('drops a body with %s', async (_label, body) => {
+    expect(await messageFor(body)).toBe(OMITTED);
+  });
+
+  it('still quotes a plain JSON error body', async () => {
+    const body = '{"error":"invalid_grant"}';
+    expect(await messageFor(body)).toBe(`Token exchange failed: 403 ${body}`);
+  });
+
+  // An empty body leaves nothing to quote, so the message ends at the status (#11 point 4).
+  it.each([[''], ['  \n'], ['\r\n\t']])('ends at the status for a blank body %j', async (body) => {
+    expect(await messageFor(body)).toBe('Token exchange failed: 403');
   });
 
   it.each([
@@ -72,13 +79,11 @@ describe('the token-endpoint error body reaching the user', () => {
     expect(message).not.toContain('a'.repeat(201));
   });
 
-  // The cap cuts by UTF-16 code unit, so a 200th character that is the first half of a surrogate
-  // pair leaves a lone half behind (measured: 'a'.repeat(199) + '😀' yields one). It is cosmetic —
-  // the pair carries no secret and a well-formed JSON.stringify escapes it — so it is reported, not
-  // pinned red here. What must hold either way is that nothing past the cap escapes.
-  it('never carries content past the cap out, even when the cut lands mid-character', async () => {
+  // The cap counts UTF-16 code units, so a cut on the 200th could leave half a pair (#11 point 5).
+  it('never leaves a lone surrogate behind when the cut lands mid-character', async () => {
     const message = await messageFor(`${'a'.repeat(199)}😀${SENTINEL}`);
     expect(message).not.toContain(SENTINEL);
     expect(message).toContain('(truncated)');
+    expect(message).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
   });
 });

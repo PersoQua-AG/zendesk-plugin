@@ -260,15 +260,16 @@ export async function waitForAuthorizationCode(
 // NFR-1: an error body reaches the user. Zendesk answers with a short JSON error, but anything in
 // front of it (a WAF, a captive portal, a proxy) can answer with a whole HTML page — measured: an
 // ~8 KB Cloudflare challenge carrying a cf_chl_tk token, all on ONE line, which a first-line-only
-// cut passes through untouched. So the body is capped on BOTH axes, and markup is dropped entirely
-// rather than quoted.
+// cut passes through untouched. So the body is capped on BOTH axes, and a line carrying an angle
+// bracket anywhere is dropped entirely rather than quoted.
 const MAX_ERROR_BODY_CHARS = 200;
 
+// Returns '' for a blank body, so the caller can end the message at the status.
 function summarizeErrorBody(raw: string): string {
   const firstLine = raw.split('\n')[0].trim();
-  if (firstLine.startsWith('<')) return '(non-text response body omitted)';
+  if (/[<>]/.test(firstLine)) return '(non-text response body omitted)';
   return firstLine.length > MAX_ERROR_BODY_CHARS
-    ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS)}… (truncated)`
+    ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS).replace(/[\uD800-\uDBFF]$/, '')}… (truncated)`
     : firstLine;
 }
 
@@ -305,7 +306,8 @@ async function postToken(
       signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
-      throw new Error(`${errorLabel}: ${response.status} ${summarizeErrorBody(await response.text())}`);
+      const detail = summarizeErrorBody(await response.text());
+      throw new Error(`${errorLabel}: ${response.status}${detail ? ` ${detail}` : ''}`);
     }
     const parsed = tokenResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
