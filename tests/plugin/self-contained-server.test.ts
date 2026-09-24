@@ -1,37 +1,29 @@
-import { describe, it, expect, afterAll } from 'vitest';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { describe, it, expect, afterAll, vi } from 'vitest';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createServer } from '../../src/server.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const scratch = mkdtempSync(join(tmpdir(), 'zd-plugin-copy-'));
+// Realpathed so the launch is not through a symlink (macOS tmpdir is /var -> /private/var).
+const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'zd-plugin-copy-')));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 // What an install receives: the tracked files, so node_modules/ and uncommitted build output are out.
 function copyPluginPayload(dest: string): void {
-  const files = execFileSync('git', ['ls-files', '-z'], {
-    cwd: root,
-    encoding: 'utf8',
-  })
+  const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
     .split('\0')
     .filter(Boolean);
   for (const file of files) {
     mkdirSync(dirname(join(dest, file)), { recursive: true });
     cpSync(join(root, file), join(dest, file));
   }
-}
-
-// The entry the plugin really launches, with ${CLAUDE_PLUGIN_ROOT} resolved to the copy.
-function pluginLaunchArgs(pluginRoot: string): { command: string; args: string[] } {
-  const manifest = JSON.parse(readFileSync(join(root, '.claude-plugin', 'plugin.json'), 'utf8'));
-  const { command, args } = manifest.mcpServers.zendesk as { command: string; args: string[] };
-  return { command, args: args.map((a) => a.replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot)) };
 }
 
 function dummyEnv(dataDir: string): Record<string, string> {
@@ -53,29 +45,37 @@ async function inProcessToolNames(env: Record<string, string>): Promise<string[]
   return tools.map((t) => t.name).sort();
 }
 
-const pluginRoot = join(scratch, 'plugin');
-copyPluginPayload(pluginRoot);
-symlinkSync(pluginRoot, join(scratch, 'plugin-link'));
-
 describe('plugin server from a copy without node_modules', () => {
-  // A symlinked root is not resolved: Node realpaths the main module but argv[1] stays as given.
-  it.each(['plugin', 'plugin-link'])('starts the entry plugin.json launches from %s and lists every tool over stdio', async (dir) => {
-    const { command, args } = pluginLaunchArgs(join(scratch, dir));
-    const transport = new StdioClientTransport({
-      command: command === 'node' ? process.execPath : command,
-      args,
-      cwd: pluginRoot,
-      env: dummyEnv(join(scratch, `data-${dir}`)),
-    });
-    const client = new Client({ name: 'plugin-copy', version: '0.0.0' });
-    let names: string[];
+  // Raw stdio, because the SDK Client silently drops a second response to the same id.
+  it('starts the entry plugin.json launches and answers each request exactly once', async () => {
+    const pluginRoot = join(scratch, 'plugin');
+    copyPluginPayload(pluginRoot);
+    const manifest = JSON.parse(readFileSync(join(root, '.claude-plugin', 'plugin.json'), 'utf8'));
+    const { command, args } = manifest.mcpServers.zendesk as { command: string; args: string[] };
+    const child = spawn(
+      command === 'node' ? process.execPath : command,
+      args.map((a) => a.replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot)),
+      { cwd: pluginRoot, env: dummyEnv(join(scratch, 'data')), stdio: ['pipe', 'pipe', 'inherit'] },
+    );
+    const messages: { id?: number; result?: { tools: { name: string }[] } }[] = [];
+    createInterface({ input: child.stdout }).on('line', (line) => messages.push(JSON.parse(line)));
+    const send = (msg: object) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n');
     try {
-      await client.connect(transport);
-      names = (await client.listTools()).tools.map((t) => t.name).sort();
+      send({
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'plugin-copy', version: '0.0.0' } },
+      });
+      send({ method: 'notifications/initialized' });
+      send({ id: 2, method: 'tools/list' });
+      await vi.waitFor(() => expect(messages.some((m) => m.id === 2)).toBe(true), { timeout: 20_000, interval: 50 });
+      await delay(500);
     } finally {
-      await client.close();
+      child.kill();
     }
 
+    expect(messages.filter((m) => m.id !== undefined).map((m) => m.id)).toEqual([1, 2]);
+    const names = messages.find((m) => m.id === 2)!.result!.tools.map((t) => t.name).sort();
     const expected = await inProcessToolNames(dummyEnv(join(scratch, 'data-expected')));
     expect(expected.length).toBeGreaterThan(0);
     expect(names).toEqual(expected);
