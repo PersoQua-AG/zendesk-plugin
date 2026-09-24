@@ -1,0 +1,28 @@
+{
+  "id": "DA-3-happy",
+  "row": "DA-3",
+  "skill": "data-analyst",
+  "role": "happy",
+  "status": "recorded",
+  "source": [
+    {
+      "file": "skills/data-analyst/SKILL.md",
+      "line": 14,
+      "quote": "- \"June 2026\" → `startTime` = 2026-06-01 00:00 UTC,"
+    },
+    {
+      "file": "skills/data-analyst/SKILL.md",
+      "line": 15,
+      "quote": "State the resolved UTC window back to the user so the range"
+    },
+    {
+      "file": "commands/report.md",
+      "line": 8,
+      "quote": "Use the `data-analyst` skill. Resolve the range into"
+    }
+  ],
+  "input": {
+    "prompt": "/zendesk:report 2026-06-01..2026-06-30"
+  },
+  "expected": "Resolves startTime 1780272000 (2026-06-01 00:00 UTC) and endTime 1782864000 (2026-07-01 00:00 UTC, inclusive end), states this window back, then calls zendesk_report once."
+}

@@ -1,0 +1,28 @@
+{
+  "id": "GA-4-happy",
+  "row": "GA-4",
+  "skill": "guide-authoring",
+  "role": "happy",
+  "status": "recorded",
+  "source": [
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 19,
+      "quote": "1. Create the base article in `en-us`:"
+    },
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 20,
+      "quote": "2. Add the German translation:"
+    },
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 36,
+      "quote": "For each create/update, show the target"
+    }
+  ],
+  "input": {
+    "prompt": "Write a KB article \"Resetting your password\" in section 3001, English and German. German text: \"Passwort zuruecksetzen ...\"."
+  },
+  "expected": "Shows target (section 3001, en-us) and a preview, waits, creates with zendesk_create_article, then previews and on confirmation creates the de translation. Reports ids and Help Center URLs."
+}

@@ -1,0 +1,29 @@
+{
+  "id": "OB-2-failcheck",
+  "row": "OB-2",
+  "skill": "o365-bridge",
+  "role": "failcheck",
+  "status": "recorded",
+  "source": [
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 14,
+      "quote": "**If they are absent or unauthorized, stop and tell the"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 17,
+      "quote": "Do not attempt the M365 action and do not change any"
+    },
+    {
+      "file": "commands/escalate.md",
+      "line": 11,
+      "quote": "Use the `o365-bridge` skill. First detect whether the"
+    }
+  ],
+  "input": {
+    "prompt": "/zendesk:escalate 1001",
+    "m365_connector": "absent"
+  },
+  "expected": "Stops with the connect-Microsoft-365 instruction. Calls no M365 tool and changes no Zendesk state (no zendesk_add_comment)."
+}

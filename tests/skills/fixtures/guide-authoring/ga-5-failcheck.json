@@ -1,0 +1,18 @@
+{
+  "id": "GA-5-failcheck",
+  "row": "GA-5",
+  "skill": "guide-authoring",
+  "role": "failcheck",
+  "status": "recorded",
+  "source": [
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 14,
+      "quote": "- You need a `sectionId` to create an article and a"
+    }
+  ],
+  "input": {
+    "prompt": "Put a new article about invoices into the Billing section."
+  },
+  "expected": "Resolves the sectionId with zendesk_list_categories / zendesk_list_sections. If \"Billing\" is not found or ambiguous, asks. Never invents an id."
+}

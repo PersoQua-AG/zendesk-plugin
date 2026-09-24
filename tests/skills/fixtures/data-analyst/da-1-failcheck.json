@@ -1,0 +1,33 @@
+{
+  "id": "DA-1-failcheck",
+  "row": "DA-1",
+  "skill": "data-analyst",
+  "role": "failcheck",
+  "status": "pending-owner-decision",
+  "source": [
+    {
+      "file": "skills/data-analyst/SKILL.md",
+      "line": 23,
+      "quote": "- a **CSAT** summary (good/bad + satisfaction %)."
+    },
+    {
+      "file": "skills/data-analyst/SKILL.md",
+      "line": 41,
+      "quote": "- Lead with the resolved window and the headline numbers"
+    },
+    {
+      "file": "commands/report.md",
+      "line": 10,
+      "quote": "Present the headline numbers: ticket volume,"
+    },
+    {
+      "file": "src/tools/analytics/report.ts",
+      "line": 190,
+      "quote": "const csat = report.csat.scorePct === null ? 'no rated"
+    }
+  ],
+  "input": {
+    "prompt": "Give me the KPI summary for July 2026."
+  },
+  "expected": "Open. The rule \"KPIs: no percentages, numbers only\" (ops handover 2026-08-25:33) contradicts the code (CSAT rendered as NN%) and the skill text (satisfaction %). No expectation is recorded in either direction until the owner decides (S0 finding 1)."
+}
