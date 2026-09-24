@@ -181,7 +181,7 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
   const subdomain = auth.ok ? auth.config.subdomain : '';
   const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
 
-  const server = new McpServer({ name: 'zendesk', version: '1.0.0' });
+  const server = new McpServer({ name: 'zendesk', version: '1.0.1' });
   const ctx: ToolContext = {
     httpClient,
     cache,

@@ -1,6 +1,6 @@
 {
   "name": "zendesk-plugin",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "engines": { "node": ">=20" },
@@ -9,7 +9,7 @@
     "zendesk-remote": "dist/bin/remote.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && esbuild src/server.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/plugin/server.js",
     "prepare": "npm run build",
     "test": "vitest run",
     "check:executors": "node scripts/assert-executor-safety.mjs",
@@ -28,6 +28,7 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@vitest/coverage-v8": "^2.1.9",
+    "esbuild": "^0.28.2",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   }
