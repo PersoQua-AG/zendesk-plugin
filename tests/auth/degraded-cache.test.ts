@@ -4,11 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createServer } from '../../src/server.js';
+import { createServer, type ServerDeps } from '../../src/server.js';
 
-// Issue #11 point 12: the response cache mkdirs under the data directory, and that can throw
-// (EACCES, ENOSPC). A data directory that is a FILE makes mkdirSync throw ENOTDIR deterministically,
-// without chmod and even as root. The server must still start and every tool must name the cause.
+// A FILE as data dir makes mkdirSync throw ENOTDIR deterministically, no chmod, even as root.
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -32,8 +30,8 @@ function configuredEnv(dataDir: string): NodeJS.ProcessEnv {
   };
 }
 
-async function connect(env: NodeJS.ProcessEnv, fetchImpl?: typeof fetch) {
-  const { server } = createServer(env, { fetchImpl });
+async function connect(env: NodeJS.ProcessEnv, deps: ServerDeps = {}) {
+  const { server } = createServer(env, deps);
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'degraded-cache', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);
@@ -46,16 +44,12 @@ function textOf(result: unknown): string {
 
 function expectCacheProblem(text: string, dataDir: string): void {
   expect(text).toContain('ENOTDIR');
-  expect(text).toMatch(/data directory is not writable/);
+  expect(text).toMatch(/data directory cannot be used/);
   expect(text).not.toContain(dataDir);
   expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
 }
 
 describe('createServer with a data directory the cache cannot be created in', () => {
-  it('does not throw', () => {
-    expect(() => createServer(configuredEnv(unwritableDataDir()))).not.toThrow();
-  });
-
   it('still lists the full tool surface', async () => {
     const client = await connect(configuredEnv(unwritableDataDir()));
     const names = (await client.listTools()).tools.map((t) => t.name);
@@ -73,7 +67,7 @@ describe('createServer with a data directory the cache cannot be created in', ()
   it('answers a Zendesk tool with the cache problem, without fetching', async () => {
     const dataDir = unwritableDataDir();
     const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
-    const client = await connect(configuredEnv(dataDir), fetchImpl);
+    const client = await connect(configuredEnv(dataDir), { fetchImpl });
     expectCacheProblem(textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} })), dataDir);
     expect(fetchImpl).not.toHaveBeenCalled();
     await client.close();
@@ -87,12 +81,23 @@ describe('createServer with a data directory the cache cannot be created in', ()
     await client.close();
   });
 
+  it('holds the degrade even with an injected TokenProvider, without fetching', async () => {
+    const dataDir = unwritableDataDir();
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+    const authManager = { getAccessToken: vi.fn(async () => 'tok') };
+    const client = await connect(configuredEnv(dataDir), { fetchImpl, authManager });
+    expectCacheProblem(textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} })), dataDir);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await client.close();
+  });
+
   it('names both problems when the configuration is incomplete as well', async () => {
     const dataDir = unwritableDataDir();
     const client = await connect({ ZENDESK_OAUTH_CLIENT_ID: 'client-abc', CLAUDE_PLUGIN_DATA: dataDir });
     const text = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
     expect(text).toContain('zendesk_subdomain');
     expectCacheProblem(text, dataDir);
+    expect(text.match(/reload the extension/g)).toHaveLength(1);
     await client.close();
   });
 });
