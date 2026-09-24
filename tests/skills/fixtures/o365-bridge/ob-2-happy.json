@@ -1,0 +1,19 @@
+{
+  "id": "OB-2-happy",
+  "row": "OB-2",
+  "skill": "o365-bridge",
+  "role": "happy",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/o365-bridge/SKILL.md:12",
+    "skills/o365-bridge/SKILL.md:25",
+    "skills/o365-bridge/SKILL.md:33"
+  ],
+  "input": {
+    "prompt": "Email a summary of #1001 to colleague@example.com.",
+    "m365_connector": "connected"
+  },
+  "expected": "Builds the summary from zendesk_get_ticket + zendesk_list_comments with the ticket URL, confirms recipient and body, then sends or drafts via the discovered Outlook tool."
+}

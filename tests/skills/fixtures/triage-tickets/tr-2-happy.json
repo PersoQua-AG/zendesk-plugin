@@ -1,0 +1,46 @@
+{
+  "id": "TR-2-happy",
+  "row": "TR-2",
+  "skill": "triage-tickets",
+  "role": "happy",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/triage-tickets/SKILL.md:25"
+  ],
+  "input": {
+    "prompt": "What should I work on next?",
+    "queue": [
+      {
+        "id": 2001,
+        "priority": "normal",
+        "status": "open",
+        "sla": "breached",
+        "updated": "2026-07-01T09:00:00Z"
+      },
+      {
+        "id": 2002,
+        "priority": "urgent",
+        "status": "open",
+        "sla": "ok",
+        "updated": "2026-07-02T09:00:00Z"
+      },
+      {
+        "id": 2003,
+        "priority": "low",
+        "status": "pending",
+        "sla": "ok",
+        "updated": "2026-06-20T09:00:00Z"
+      },
+      {
+        "id": 2004,
+        "priority": "low",
+        "status": "open",
+        "sla": "ok",
+        "updated": "2026-06-25T09:00:00Z"
+      }
+    ]
+  },
+  "expected": "Ranks 2001 (breached SLA), 2002 (urgent), 2003 (oldest pending), 2004 (age) in a short table with a reason per row. No raw JSON."
+}

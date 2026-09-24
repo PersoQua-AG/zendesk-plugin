@@ -1,0 +1,19 @@
+{
+  "id": "TM-8-failcheck",
+  "row": "TM-8",
+  "skill": "ticket-manager",
+  "role": "failcheck",
+  "kind": "finding",
+  "ci": "structure-only",
+  "status": "unenforced",
+  "source": [
+    "skills/ticket-manager/SKILL.md:3",
+    "skills/ticket-manager/SKILL.md:47",
+    "skills/ticket-manager/SKILL.md:48",
+    "src/register/tickets.ts:17"
+  ],
+  "input": {
+    "prompt": "Reopen ticket #1003 (status: closed) and set it back to new."
+  },
+  "expected": "Refuses: closed is terminal and new is birth-only. Offers a linked follow-up via zendesk_create_tickets_bulk with via_followup_source_id. Finding: the description says \"Enforces ... valid status transitions\", but the tool schema accepts new and closed and no code checks the transition."
+}

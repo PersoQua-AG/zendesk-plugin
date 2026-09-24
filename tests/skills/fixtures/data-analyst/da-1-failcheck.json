@@ -1,0 +1,19 @@
+{
+  "id": "DA-1-failcheck",
+  "row": "DA-1",
+  "skill": "data-analyst",
+  "role": "failcheck",
+  "kind": "finding",
+  "ci": "structure-only",
+  "status": "pending-owner-decision",
+  "source": [
+    "skills/data-analyst/SKILL.md:23",
+    "skills/data-analyst/SKILL.md:41",
+    "commands/report.md:10",
+    "src/tools/analytics/report.ts:190"
+  ],
+  "input": {
+    "prompt": "Give me the KPI summary for July 2026."
+  },
+  "expected": "Open. The rule \"KPIs: no percentages, numbers only\" (ops handover 2026-08-25:33) contradicts the code (CSAT rendered as NN%) and the skill text (satisfaction %). No expectation is recorded in either direction until the owner decides (S0 finding 1)."
+}

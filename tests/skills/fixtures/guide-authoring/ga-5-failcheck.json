@@ -1,0 +1,16 @@
+{
+  "id": "GA-5-failcheck",
+  "row": "GA-5",
+  "skill": "guide-authoring",
+  "role": "failcheck",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/guide-authoring/SKILL.md:14"
+  ],
+  "input": {
+    "prompt": "Put a new article about invoices into the Billing section."
+  },
+  "expected": "Resolves the sectionId with zendesk_list_categories / zendesk_list_sections. If \"Billing\" is not found or ambiguous, asks. Never invents an id."
+}

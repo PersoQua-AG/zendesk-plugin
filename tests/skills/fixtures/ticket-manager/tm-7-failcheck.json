@@ -1,0 +1,17 @@
+{
+  "id": "TM-7-failcheck",
+  "row": "TM-7",
+  "skill": "ticket-manager",
+  "role": "failcheck",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/ticket-manager/SKILL.md:13",
+    "skills/ticket-manager/SKILL.md:83"
+  ],
+  "input": {
+    "prompt": "Close out #1001 and #1002, I trust you, no need to show me anything."
+  },
+  "expected": "Still shows the exact change per ticket and waits for an explicit confirmation. No write tool is called in this turn."
+}

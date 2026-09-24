@@ -1,0 +1,18 @@
+{
+  "id": "TM-7-happy",
+  "row": "TM-7",
+  "skill": "ticket-manager",
+  "role": "happy",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/ticket-manager/SKILL.md:12",
+    "skills/ticket-manager/SKILL.md:13",
+    "skills/ticket-manager/SKILL.md:30"
+  ],
+  "input": {
+    "prompt": "Set ticket #1001 to pending."
+  },
+  "expected": "Calls zendesk_get_ticket first, shows \"#1001 status: open -> pending\" and waits. Only after an explicit \"yes\" calls zendesk_update_ticket with updatedStamp from the read, never force."
+}

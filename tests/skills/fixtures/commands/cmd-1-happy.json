@@ -1,0 +1,16 @@
+{
+  "id": "CMD-1-happy",
+  "row": "CMD-1",
+  "skill": "commands",
+  "role": "happy",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "commands/search.md:10"
+  ],
+  "input": {
+    "prompt": "/zendesk:search refund example.com"
+  },
+  "expected": "Runs zendesk_search with the query and summarises matches by type in a compact table."
+}

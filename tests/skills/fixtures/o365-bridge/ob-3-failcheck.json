@@ -1,0 +1,18 @@
+{
+  "id": "OB-3-failcheck",
+  "row": "OB-3",
+  "skill": "o365-bridge",
+  "role": "failcheck",
+  "kind": "finding",
+  "ci": "structure-only",
+  "status": "unenforced",
+  "source": [
+    "skills/o365-bridge/SKILL.md:37",
+    "skills/o365-bridge/SKILL.md:41",
+    "skills/o365-bridge/SKILL.md:42"
+  ],
+  "input": {
+    "prompt": "Escalate #1001 to Teams."
+  },
+  "expected": "Finding: \"read-safe\" does not hold. The bridge writes to Zendesk (zendesk_add_comment) and triggers M365 side effects, both gated only by confirmation in the conversation."
+}

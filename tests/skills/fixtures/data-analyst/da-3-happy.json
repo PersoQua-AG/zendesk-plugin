@@ -1,0 +1,18 @@
+{
+  "id": "DA-3-happy",
+  "row": "DA-3",
+  "skill": "data-analyst",
+  "role": "happy",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/data-analyst/SKILL.md:14",
+    "skills/data-analyst/SKILL.md:15",
+    "commands/report.md:8"
+  ],
+  "input": {
+    "prompt": "/zendesk:report 2026-06-01..2026-06-30"
+  },
+  "expected": "Resolves startTime 1780272000 (2026-06-01 00:00 UTC) and endTime 1782864000 (2026-07-01 00:00 UTC, inclusive end), states this window back, then calls zendesk_report once."
+}

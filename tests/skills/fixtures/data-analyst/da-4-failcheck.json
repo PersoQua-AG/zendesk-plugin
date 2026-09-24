@@ -1,0 +1,17 @@
+{
+  "id": "DA-4-failcheck",
+  "row": "DA-4",
+  "skill": "data-analyst",
+  "role": "failcheck",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/data-analyst/SKILL.md:44"
+  ],
+  "input": {
+    "prompt": "How was satisfaction last week?",
+    "report_line": "CSAT: no rated responses"
+  },
+  "expected": "Says there were no rated responses in the window. Never reports satisfaction as 0 or as a measured value."
+}

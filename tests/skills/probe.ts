@@ -1,5 +1,5 @@
 // tests/skills/probe.ts
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -127,3 +127,27 @@ export async function probeMethods(names: string[]): Promise<Record<string, stri
 
 export const writesIn = (methods: Record<string, string[]>): string[] =>
   Object.entries(methods).flatMap(([name, ms]) => ms.filter((m) => m !== 'GET').map((m) => `${name}: ${m}`));
+
+export interface RecordedCase {
+  id: string;
+  row: string;
+  skill: string;
+  role: 'happy' | 'failcheck';
+  kind: 'instruction-following' | 'finding';
+  ci: 'structure-only';
+  status: 'recorded' | 'unenforced' | 'pending-owner-decision';
+  source: string[];
+  input: Record<string, unknown>;
+  expected: string;
+}
+
+// Recorded cases for model behaviour: CI checks their structure and citations, never the behaviour.
+export function recordedCases(): Array<RecordedCase & { file: string }> {
+  const dir = join(root, 'tests', 'skills', 'fixtures');
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.json'))
+    .map((e) => {
+      const file = join(e.parentPath, e.name).slice(root.length + 1);
+      return { ...(JSON.parse(read(file)) as RecordedCase), file };
+    });
+}

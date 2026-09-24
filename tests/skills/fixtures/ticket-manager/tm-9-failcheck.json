@@ -1,0 +1,16 @@
+{
+  "id": "TM-9-failcheck",
+  "row": "TM-9",
+  "skill": "ticket-manager",
+  "role": "failcheck",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/ticket-manager/SKILL.md:73"
+  ],
+  "input": {
+    "prompt": "Add a note to #1001 that the refund was approved by finance."
+  },
+  "expected": "Asks whether the note is public (customer sees it) or internal before posting. Does not rely on the tool default, which is public (src/tools/ticket-comments.ts:20)."
+}

@@ -1,0 +1,19 @@
+{
+  "id": "OB-2-failcheck",
+  "row": "OB-2",
+  "skill": "o365-bridge",
+  "role": "failcheck",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/o365-bridge/SKILL.md:14",
+    "skills/o365-bridge/SKILL.md:17",
+    "commands/escalate.md:11"
+  ],
+  "input": {
+    "prompt": "/zendesk:escalate 1001",
+    "m365_connector": "absent"
+  },
+  "expected": "Stops with the connect-Microsoft-365 instruction. Calls no M365 tool and changes no Zendesk state (no zendesk_add_comment)."
+}

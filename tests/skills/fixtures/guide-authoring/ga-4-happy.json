@@ -1,0 +1,18 @@
+{
+  "id": "GA-4-happy",
+  "row": "GA-4",
+  "skill": "guide-authoring",
+  "role": "happy",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/guide-authoring/SKILL.md:19",
+    "skills/guide-authoring/SKILL.md:20",
+    "skills/guide-authoring/SKILL.md:36"
+  ],
+  "input": {
+    "prompt": "Write a KB article \"Resetting your password\" in section 3001, English and German. German text: \"Passwort zuruecksetzen ...\"."
+  },
+  "expected": "Shows target (section 3001, en-us) and a preview, waits, creates with zendesk_create_article, then previews and on confirmation creates the de translation. Reports ids and Help Center URLs."
+}

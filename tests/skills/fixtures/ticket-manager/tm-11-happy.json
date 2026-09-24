@@ -1,0 +1,18 @@
+{
+  "id": "TM-11-happy",
+  "row": "TM-11",
+  "skill": "ticket-manager",
+  "role": "happy",
+  "kind": "instruction-following",
+  "ci": "structure-only",
+  "status": "recorded",
+  "source": [
+    "skills/ticket-manager/SKILL.md:70",
+    "agents/support-agent.md:25",
+    "agents/support-agent.md:26"
+  ],
+  "input": {
+    "prompt": "Draft a friendly reply to Example Customer on #1001 and post it."
+  },
+  "expected": "Delegates the wording to the support-agent subagent, shows its draft, and posts with zendesk_add_comment only after the user confirms text and visibility. The subagent itself calls no write tool."
+}
