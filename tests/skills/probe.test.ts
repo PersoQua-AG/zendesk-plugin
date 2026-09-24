@@ -1,5 +1,5 @@
 // tests/skills/probe.test.ts
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { probeRequests, writesIn } from './probe.js';
 
 // Every write the probe sees, pinned: a write tool it stops reaching, or a new one, turns this red.
@@ -32,14 +32,17 @@ const WRITES = [
 
 // The read-only verdicts in this suite are only worth something if the probe really drives every
 // tool to Zendesk and really sees every write. Both are checked here, not assumed.
-describe('skill-eval probe', async () => {
-  const requests = await probeRequests();
+describe('skill-eval probe', () => {
+  let requests: Record<string, string[]>;
+  beforeAll(async () => {
+    requests = await probeRequests();
+  });
 
   it('drives every registered tool to at least one Zendesk request, except the local cache replay', () => {
     expect(Object.keys(requests).filter((n) => requests[n].length === 0)).toEqual(['zendesk_query']);
   });
 
   it('sees exactly the known write tools and their writes', () => {
-    expect(writesIn(requests)).toEqual(WRITES);
+    expect(writesIn(requests).sort()).toEqual([...WRITES].sort());
   });
 });

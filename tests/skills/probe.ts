@@ -114,9 +114,11 @@ export async function boot(reply: (c: Call, n: number) => Response = () => json(
 // One boot, one tool call, one close.
 export async function once(name: string, args: Record<string, unknown>, reply?: (c: Call, n: number) => Response, env?: NodeJS.ProcessEnv) {
   const b = await boot(reply, env);
-  const r = await b.call(name, args);
-  await b.close();
-  return { ...r, calls: b.calls };
+  try {
+    return { ...(await b.call(name, args)), calls: b.calls };
+  } finally {
+    await b.close();
+  }
 }
 
 // A macro preview answers in the shape the apply tool accepts, so its confirmed PUT is reached too.
