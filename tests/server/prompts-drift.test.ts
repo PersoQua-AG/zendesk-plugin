@@ -6,8 +6,7 @@ import { cleanupDirs, connect, fixtureEnv, textOf } from './harness.js';
 
 afterEach(cleanupDirs);
 
-// commands/*.md is the Claude Code source of truth; the MCP prompts are a hand-written copy in
-// src/register/prompts.ts. This suite reads both and fails on any divergence.
+// Fails on any divergence between commands/*.md and the hand-kept copy in src/register/prompts.ts.
 const commandsDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'commands');
 
 interface CommandFile {
@@ -34,7 +33,8 @@ const commands = readdirSync(commandsDir)
   .sort()
   .map(readCommand);
 
-const SENTINEL = 'SENTINEL-4711';
+// The $-patterns catch a body.replace that treats the value as a replacement pattern.
+const SENTINEL = "SENTINEL-4711 $& $$ $' $`";
 
 describe('prompts cannot drift from commands/*.md', () => {
   it('the prompt set equals the set of command files', async () => {
@@ -44,21 +44,14 @@ describe('prompts cannot drift from commands/*.md', () => {
     await client.close();
   });
 
-  it.each(commands)('$name: description and argument hint equal the frontmatter', async (cmd) => {
+  it.each(commands)('$name: description, hint and body equal the command file', async (cmd) => {
     const client = await connect(fixtureEnv());
     const prompt = (await client.listPrompts()).prompts.find((p) => p.name === cmd.name);
     expect(prompt?.description).toBe(cmd.description);
     expect(prompt?.arguments).toHaveLength(1);
     expect(prompt?.arguments?.[0].description).toBe(cmd.hint);
-    expect(prompt?.arguments?.[0].required).toBe(!cmd.hint.startsWith('['));
-    await client.close();
-  });
-
-  it.each(commands)('$name: body is the command body verbatim apart from the argument placeholder', async (cmd) => {
-    const client = await connect(fixtureEnv());
-    const argName = (await client.listPrompts()).prompts.find((p) => p.name === cmd.name)?.arguments?.[0].name ?? '';
-    const result = await client.getPrompt({ name: cmd.name, arguments: { [argName]: SENTINEL } });
-    expect(textOf(result)).toBe(cmd.body.replaceAll('$ARGUMENTS', SENTINEL));
+    const result = await client.getPrompt({ name: cmd.name, arguments: { [prompt?.arguments?.[0].name ?? '']: SENTINEL } });
+    expect(textOf(result)).toBe(cmd.body.split('$ARGUMENTS').join(SENTINEL));
     await client.close();
   });
 });

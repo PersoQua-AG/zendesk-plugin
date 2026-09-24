@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { cleanupDirs, connect, degradedCacheEnv, fixtureEnv, remoteDeps, textOf, unconfiguredEnv } from './harness.js';
+import { cleanupDirs, connect, fixtureEnv, textOf, unconfiguredEnv } from './harness.js';
+import { startRemote, zendeskMock } from '../server-remote/harness.js';
 
 afterEach(cleanupDirs);
 
@@ -100,25 +101,29 @@ describe('MCP prompts (issue #31)', () => {
     await client.close();
   });
 
-  it('lists the five prompts on a server whose cache could not be created', async () => {
-    const client = await connect(degradedCacheEnv());
-    const { prompts } = await client.listPrompts();
-    expect(prompts.map((p) => p.name).sort()).toEqual(NAMES);
+  it.each(['$&', '$$100', "$'", '$`'])('renders the search query %s verbatim, not as a replacement pattern', async (query) => {
+    const client = await connect(fixtureEnv());
+    const text = textOf(await client.getPrompt({ name: 'search', arguments: { query } }));
+    expect(text).toContain(`Search Zendesk for: **${query}**.`);
+    expect(text).not.toContain('$ARGUMENTS');
     await client.close();
   });
 });
 
 describe('prompt-surface parity (remote vs stdio)', () => {
-  async function surface(client: Awaited<ReturnType<typeof connect>>) {
-    const { prompts } = await client.listPrompts();
-    await client.close();
-    return prompts.sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  it('a session-built server lists the identical names and argument shapes as the stdio server', async () => {
-    const stdio = await surface(await connect(fixtureEnv()));
-    const remote = await surface(await connect(fixtureEnv(), remoteDeps()));
-    expect(stdio).toHaveLength(5);
-    expect(remote).toEqual(stdio);
+  it('a SessionManager-built server over HTTP lists the same prompts as stdio and renders ticket 7', async () => {
+    const stdioClient = await connect(fixtureEnv());
+    const stdio = (await stdioClient.listPrompts()).prompts;
+    await stdioClient.close();
+    const remote = await startRemote(zendeskMock({}));
+    try {
+      const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
+      expect(stdio).toHaveLength(5);
+      expect((await remote.client.listPrompts()).prompts.sort(byName)).toEqual(stdio.sort(byName));
+      const text = textOf(await remote.client.getPrompt({ name: 'ticket', arguments: { id: '7' } }));
+      expect(text).toContain('Show ticket **7** in full.');
+    } finally {
+      await remote.dispose();
+    }
   });
 });

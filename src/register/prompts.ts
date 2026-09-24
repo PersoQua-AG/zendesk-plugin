@@ -7,17 +7,8 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 
-interface PromptSpec {
-  name: string;
-  description: string;
-  argument: string;
-  hint: string;
-  body: string;
-}
-
-// Hand-kept copies of commands/*.md (the bundle ships without commands/); tests/server/prompts-drift
-// fails on any divergence. `[hint]` marks the argument optional, `<hint>` required.
-const PROMPTS: readonly PromptSpec[] = [
+// Hand-kept copies of commands/*.md (not in the bundle); prompts-drift.test pins them.
+const PROMPTS = [
   {
     name: 'ticket',
     description: 'Show a full Zendesk ticket — fields, comments, metrics, and audit trail.',
@@ -85,14 +76,7 @@ Use the \`o365-bridge\` skill. First detect whether the Microsoft 365 connector 
 
 const isRequired = (hint: string): boolean => !hint.startsWith('[');
 
-// Blank counts as absent, like an omitted optional argument, so the body's own "if none was
-// provided, ask and stop" line applies instead of a claim about an empty value.
-function render(body: string, value: string | undefined): string {
-  return body.replaceAll('$ARGUMENTS', value?.trim() ?? '');
-}
-
-// Low-level handlers, not registerPrompt: SDK 1.29 rejects an omitted `arguments` object even for
-// an all-optional prompt, and its error does not name the missing argument.
+// Raw handlers: SDK 1.29 registerPrompt rejects an omitted `arguments` and then names no arg.
 export function registerPrompts(server: McpServer): void {
   server.server.registerCapabilities({ prompts: {} });
   server.server.setRequestHandler(ListPromptsRequestSchema, () => ({
@@ -112,9 +96,11 @@ export function registerPrompts(server: McpServer): void {
         `Prompt ${prompt.name} requires the argument "${prompt.argument}" (${prompt.hint})`,
       );
     }
+    // Blank = absent (the body's "ask and stop" applies); a replacer fn keeps `$&` etc. literal.
+    const text = prompt.body.replaceAll('$ARGUMENTS', () => value?.trim() ?? '');
     return {
       description: prompt.description,
-      messages: [{ role: 'user', content: { type: 'text', text: render(prompt.body, value) } }],
+      messages: [{ role: 'user', content: { type: 'text', text } }],
     };
   });
 }
