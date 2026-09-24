@@ -73,8 +73,10 @@ let activeFlow: ActiveFlow | null = null;
 // the next case.
 export function abortLoginFlow(): void {
   if (!activeFlow) return;
-  activeFlow.close();
+  // Forgotten before close(): a close() that throws must not pin this flow for every later login.
+  const flow = activeFlow;
   activeFlow = null;
+  flow.close();
 }
 
 // Tokens the store can decrypt and that carry a refresh token are enough: the server refreshes
