@@ -1,0 +1,28 @@
+{
+  "id": "TM-7-happy",
+  "row": "TM-7",
+  "skill": "ticket-manager",
+  "role": "happy",
+  "status": "recorded",
+  "source": [
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 12,
+      "quote": "1. **Read before you write.** Fetch the ticket with"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 13,
+      "quote": "2. **Confirm before every write.** Show the exact change"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 30,
+      "quote": "3. Propose the change; on confirmation call"
+    }
+  ],
+  "input": {
+    "prompt": "Set ticket #1001 to pending."
+  },
+  "expected": "Calls zendesk_get_ticket first, shows \"#1001 status: open -> pending\" and waits. Only after an explicit \"yes\" calls zendesk_update_ticket with updatedStamp from the read, never force."
+}

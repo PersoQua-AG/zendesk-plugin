@@ -1,0 +1,28 @@
+{
+  "id": "CMD-1-failcheck",
+  "row": "CMD-1",
+  "skill": "commands",
+  "role": "failcheck",
+  "status": "recorded",
+  "source": [
+    {
+      "file": "commands/ticket.md",
+      "line": 8,
+      "quote": "If no numeric ticket id was provided, ask for one and stop."
+    },
+    {
+      "file": "commands/search.md",
+      "line": 8,
+      "quote": "If the query is empty, ask what to search for and stop."
+    },
+    {
+      "file": "commands/escalate.md",
+      "line": 9,
+      "quote": "If no numeric ticket id was provided, ask for one and stop."
+    }
+  ],
+  "input": {
+    "prompt": "/zendesk:ticket"
+  },
+  "expected": "Asks for the numeric ticket id and stops. Calls no tool. Same for /zendesk:search with an empty query and /zendesk:escalate without an id."
+}

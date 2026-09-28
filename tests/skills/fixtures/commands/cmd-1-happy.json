@@ -1,0 +1,18 @@
+{
+  "id": "CMD-1-happy",
+  "row": "CMD-1",
+  "skill": "commands",
+  "role": "happy",
+  "status": "recorded",
+  "source": [
+    {
+      "file": "commands/search.md",
+      "line": 10,
+      "quote": "Run `zendesk_search` with `query:\"$ARGUMENTS\"`. If the"
+    }
+  ],
+  "input": {
+    "prompt": "/zendesk:search refund example.com"
+  },
+  "expected": "Runs zendesk_search with the query and summarises matches by type in a compact table."
+}

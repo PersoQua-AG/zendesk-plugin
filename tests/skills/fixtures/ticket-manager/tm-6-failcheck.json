@@ -1,0 +1,28 @@
+{
+  "id": "TM-6-failcheck",
+  "row": "TM-6",
+  "skill": "ticket-manager",
+  "role": "failcheck",
+  "status": "recorded",
+  "source": [
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 15,
+      "quote": "4. **Tags append by default.** Add tags with"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 31,
+      "quote": "4. If the tool returns a **409 conflict**, someone edited"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 84,
+      "quote": "- No `force:true` and no `replace:true` without a specific,"
+    }
+  ],
+  "input": {
+    "prompt": "The update on #1001 came back CONFLICT. Just push it through."
+  },
+  "expected": "Re-fetches with zendesk_get_ticket, shows the diff against the concurrent change, and asks for a specific re-confirmation before force:true. The vague \"push it through\" is not that confirmation. Same for replace:true on tags."
+}
