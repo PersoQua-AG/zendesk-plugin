@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "zendesk",
   "display_name": "Zendesk Support Integration",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Manage Zendesk tickets, users, organizations, business rules, and Help Center content from Claude.",
   "long_description": "A full-spectrum Zendesk integration: Support/Tickets, Users & Organizations, Business Rules (views, macros, triggers, automations, SLAs), Help Center/Guide, and analytics over ticket metrics and incremental exports. Read/write, with no destructive operations. Inbound Zendesk content is screened for prompt injection. Authorize in-app with the zendesk_login tool.",
   "author": {

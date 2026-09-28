@@ -840,12 +840,12 @@ describe('the audit is wired in front of publication', () => {
     for (const specifier of imports) expect(specifier).toMatch(/^node:/);
   });
 
-  it('is stamped 1.0.0, with every other declaration held by the manifest validator', () => {
+  it('is stamped 1.0.1, with every other declaration held by the manifest validator', () => {
     // scripts/validate-manifests.mjs owns the fan-out across all seven hand-kept sites and is CI's
     // first step; tests/plugin/pack-script.test.ts drives it. Repeating it here would be a third
     // owner for one question.
-    expect(JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')).version).toBe('1.0.0');
-    expect(pkg.version).toBe('1.0.0');
+    expect(JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')).version).toBe('1.0.1');
+    expect(pkg.version).toBe('1.0.1');
     expect(execFileSync('node', [join(root, 'scripts', 'validate-manifests.mjs')], { encoding: 'utf8' })).toContain(
       'Version agreement',
     );
@@ -868,7 +868,9 @@ describe('the audit is wired in front of publication', () => {
 // =============================================================================================
 describe('the real packer', () => {
   function packTree(files: Record<string, string>): Tree {
-    const tree = makeTree();
+    // The real manifest is copied in below, so the fixture package.json must carry its version.
+    const version = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')).version as string;
+    const tree = makeTree({ manifestVersion: version, packageVersion: version });
     rmSync(tree.bundle);
     // A real .mcpbignore, so the audit script itself does not end up inside the fixture bundle.
     writeFileSync(join(tree.dir, '.mcpbignore'), 'scripts/\n');
