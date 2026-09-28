@@ -7,7 +7,7 @@
   },
   "metadata": {
     "description": "Full-spectrum Zendesk integration for Claude Code — tickets, users, business rules, Guide, analytics.",
-    "version": "1.0.0"
+    "version": "1.0.1"
   },
   "plugins": [
     {

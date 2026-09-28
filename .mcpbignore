@@ -19,6 +19,8 @@ deploy/
 skills/
 commands/
 agents/
+# The self-contained server the plugin launches (#45); the extension runs dist/server.js instead.
+dist/plugin/
 
 # Internal repo files with no role inside the bundle.
 HANDOVER.md
