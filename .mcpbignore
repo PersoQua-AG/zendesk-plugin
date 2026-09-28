@@ -22,6 +22,7 @@ agents/
 
 # Internal repo files with no role inside the bundle.
 HANDOVER.md
+.persoqua.yml
 scripts/
 
 # Runtime state, never build input: the token store and the response cache live in the data dir,
