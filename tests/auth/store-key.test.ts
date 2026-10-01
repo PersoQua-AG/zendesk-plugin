@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
+  CONFIG_ACCOUNTS,
   encKeyStrengthBytes,
+  keychainAvailable,
+  readKeychainConfig,
   resolveTokenStoreKey,
   runSecurity,
   UNSUPPORTED_PLATFORM,
+  writeKeychainConfig,
   type SecurityOutcome,
 } from '../../src/auth/store-key.js';
 
@@ -95,5 +99,80 @@ describe('the runner that actually starts the process', () => {
     // No such binary: ENOENT carries no exit status, and -1 is not 44, so it can never be mistaken
     // for "the item is not there" — which is exactly the non-macOS case.
     expect(runSecurity([], '/nonexistent/security').status).toBe(-1);
+  });
+});
+
+// The three values the first-run setup page collects. They are in the Keychain beside the store key by
+// owner decision: the client id is internal, and the instance name is not to lie around either.
+describe('the OAuth configuration in the Keychain', () => {
+  const CONFIG = {
+    ZENDESK_SUBDOMAIN: 'acme',
+    ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
+    ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
+  };
+
+  it('is read under one service and three accounts, each as an argument array', () => {
+    const { run, calls } = recorder([
+      { status: 0, output: 'acme\n' },
+      { status: 0, output: 'client-abc\n' },
+      { status: 0, output: 'secret-xyz\n' },
+    ]);
+    expect(readKeychainConfig('darwin', run)).toEqual(CONFIG);
+    expect(calls).toEqual([
+      ['find-generic-password', '-s', 'zendesk-plugin', '-a', 'oauth-subdomain', '-w'],
+      ['find-generic-password', '-s', 'zendesk-plugin', '-a', 'oauth-client-id', '-w'],
+      ['find-generic-password', '-s', 'zendesk-plugin', '-a', 'oauth-client-secret', '-w'],
+    ]);
+  });
+
+  it('reports a missing item as absent, and a blank one too', () => {
+    const { run } = recorder([
+      { status: ITEM_NOT_FOUND, output: '' },
+      { status: 0, output: '   \n' },
+      { status: 0, output: 'secret-xyz\n' },
+    ]);
+    expect(readKeychainConfig('darwin', run)).toEqual({ ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz' });
+  });
+
+  // The dangerous one: answering "nothing is stored" for a keychain that merely could not be opened
+  // would send a configured user back through setup and overwrite what is in there.
+  it('throws rather than reading as empty when the keychain cannot be opened', () => {
+    const { run } = recorder([{ status: 51, output: '' }]);
+    expect(() => readKeychainConfig('darwin', run)).toThrow(/could not be read/);
+  });
+
+  it('is simply absent off macOS, so an env-configured install is never made to depend on it', () => {
+    const { run, calls } = recorder([]);
+    expect(readKeychainConfig('linux', run)).toEqual({});
+    expect(calls).toEqual([]);
+    expect(keychainAvailable('linux')).toBe(false);
+    expect(keychainAvailable('darwin')).toBe(true);
+  });
+
+  it('is written as three items, replacing what an earlier attempt left behind', () => {
+    const { run, calls } = recorder([]);
+    writeKeychainConfig(CONFIG, 'darwin', run);
+    expect(calls.map((args) => args.slice(0, 5))).toEqual(
+      Object.values(CONFIG_ACCOUNTS).map((account) => ['add-generic-password', '-s', 'zendesk-plugin', '-a', account]),
+    );
+    for (const args of calls) {
+      expect(args[5]).toBe('-w');
+      expect(args[7]).toBe('-U');
+    }
+    expect(calls.map((args) => args[6])).toEqual(['acme', 'client-abc', 'secret-xyz']);
+  });
+
+  it('names the item but never the value when a write fails', () => {
+    const { run } = recorder([{ status: 0, output: '' }, { status: 45, output: '' }]);
+    expect(() => writeKeychainConfig(CONFIG, 'darwin', run)).toThrow(
+      '"oauth-client-id" could not be written to the macOS Keychain (security exited 45).',
+    );
+    expect(() => writeKeychainConfig(CONFIG, 'darwin', recorder([{ status: 0, output: '' }, { status: 45, output: '' }]).run)).not.toThrow(
+      /client-abc/,
+    );
+  });
+
+  it('refuses to write off macOS instead of dropping the values somewhere weaker', () => {
+    expect(() => writeKeychainConfig(CONFIG, 'linux', recorder([]).run)).toThrow(UNSUPPORTED_PLATFORM);
   });
 });

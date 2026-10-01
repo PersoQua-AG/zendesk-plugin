@@ -21,8 +21,11 @@ import {
   type AuthorizationResult,
   type CallbackListener,
   type OAuthConfig,
+  type SetupRoute,
 } from '../auth/oauth-flow.js';
 import { TokenStore, type StoredTokens } from '../auth/token-store.js';
+import { writeKeychainConfig } from '../auth/store-key.js';
+import { createSetupRoute, newSetupToken, setupUrl, SETUP_TIMEOUT_MS, type SetupValues } from './setup.js';
 
 export interface LoginDeps {
   config: OAuthConfig;
@@ -37,8 +40,19 @@ export interface LoginDeps {
   // open the URL, sign in, clear SSO/2FA, approve — which is the same step the CLI bounds, so the
   // default is the CLI's (DEFAULT_CALLBACK_TIMEOUT_MS). Deliberately NOT a user_config field.
   callbackTimeoutMs?: number;
-  listen?: (port: number, state: string, timeoutMs: number) => Promise<CallbackListener>;
+  // Present when a first-run setup can actually be offered — the Keychain is writable and the data
+  // directory works. Absent means the degraded wording in `configError` is the whole answer, because
+  // a page that collects three values nothing can store would be a worse answer than none.
+  setup?: SetupDeps;
+  listen?: (port: number, state: string, timeoutMs: number, setup?: SetupRoute) => Promise<CallbackListener>;
   exchange?: typeof exchangeCodeForTokens;
+}
+
+export interface SetupDeps {
+  writeConfig?: (values: SetupValues) => void;
+  // How long the page and the authorization behind it stay reachable. Longer than a login's window:
+  // the human step here includes creating an OAuth client in Zendesk.
+  timeoutMs?: number;
 }
 
 export interface LoginOptions {
@@ -56,9 +70,16 @@ const UNREADABLE_STORE =
 // flow, not start a rival one on the same port with a fresh state.
 interface ActiveFlow {
   verifier: string;
+  // Empty until the setup page has supplied a configuration: on a first run the authorization URL
+  // cannot exist yet, because the subdomain and the client id are what the page is for.
   url: string;
   outcome: FlowOutcome;
   close: () => void;
+  // Set by the setup page, and then preferred over deps.config everywhere: the server resolved its
+  // configuration before any of this existed, so deps carries the empty one.
+  config?: OAuthConfig;
+  // What to repeat while the page has not been submitted yet.
+  setupUrl?: string;
 }
 
 type FlowOutcome =
@@ -157,6 +178,74 @@ async function beginFlow(
   ].join('\n');
 }
 
+// Call 1 on a machine that has no configuration at all: bind the listener, serve the page, and answer
+// with nothing but its URL. The authorization URL does not exist yet and no value does either, so
+// there is nothing else this answer could carry. The verifier and the `state` are generated HERE
+// because neither depends on the configuration — which is what lets one listener and one flow span
+// setup AND the authorization that follows it, with no second port and no rebind.
+async function beginSetup(
+  deps: LoginDeps,
+  setup: SetupDeps,
+  listen: NonNullable<LoginDeps['listen']>,
+  // What to say when nothing could be bound: the degraded wording the server already produced, which
+  // names what is missing. Passed in rather than read off deps so there is no second reading of it.
+  fallback: string,
+): Promise<string> {
+  const verifier = generateCodeVerifier();
+  const state = randomBytes(16).toString('base64url');
+  const token = newSetupToken();
+  const timeoutMs = setup.timeoutMs ?? SETUP_TIMEOUT_MS;
+  const port = deps.config.callbackPort;
+  const write = setup.writeConfig ?? writeKeychainConfig;
+
+  // Assigned once the listener is up, the way oauth-flow.ts assigns its own forward references: there
+  // is no such thing as a flow whose listener failed to bind, and a placeholder close() would be a
+  // function nothing ever calls. The submit closure below reaches it lazily, which it may: the page's
+  // URL — and with it the only token that opens the route — is published after the bind.
+  let flow!: ActiveFlow;
+  const page = setupUrl(port, token);
+  const route = createSetupRoute({
+    port,
+    token,
+    submit: (values) => {
+      write(values);
+      const config: OAuthConfig = {
+        ...deps.config,
+        subdomain: values.ZENDESK_SUBDOMAIN,
+        clientId: values.ZENDESK_OAUTH_CLIENT_ID,
+        clientSecret: values.ZENDESK_OAUTH_CLIENT_SECRET,
+      };
+      flow.config = config;
+      flow.url = buildAuthorizationUrl(config, generateCodeChallenge(verifier), state);
+      return flow.url;
+    },
+  });
+
+  let listener: CallbackListener;
+  try {
+    listener = await listen(port, state, timeoutMs, route);
+  } catch {
+    // Nothing was bound, so there is no page to send anyone to. The degraded wording is the better
+    // answer here: it names what is missing and where to put it.
+    return fallback;
+  }
+  flow = { verifier, url: '', outcome: { kind: 'pending' }, close: listener.close, setupUrl: page };
+  void listener.promise.then(
+    (result) => {
+      flow.outcome = { kind: 'received', result };
+    },
+    (err: unknown) => {
+      flow.outcome = { kind: 'failed', text: failureText(err, deps) };
+    },
+  );
+  activeFlow = flow;
+  return [
+    'Zendesk is not set up on this machine yet. Open this page in your browser \u2014 it runs locally, it explains how to create the OAuth client in your Zendesk, and it collects the three values:',
+    page,
+    `Nothing has to be typed into the chat, and the client secret never reaches it. The page continues into the Zendesk login by itself; afterwards run zendesk_login once more. It stays open for ${Math.round(timeoutMs / 60_000)} minute(s).`,
+  ].join('\n');
+}
+
 // Call 2: whatever the running flow has become by now.
 async function collectFlow(
   flow: ActiveFlow,
@@ -164,6 +253,13 @@ async function collectFlow(
   exchange: typeof exchangeCodeForTokens,
 ): Promise<string> {
   const outcome = flow.outcome;
+  if (outcome.kind === 'pending' && flow.setupUrl && !flow.config) {
+    return [
+      'Zendesk setup is still open. Open this page in your browser and enter the three values from your Zendesk OAuth client:',
+      flow.setupUrl,
+      'The page continues into the Zendesk login by itself. Then run zendesk_login again.',
+    ].join('\n');
+  }
   if (outcome.kind === 'pending') {
     // The URL is repeated on purpose: by now the user may well have lost the first message, and
     // the state inside it is still the one this listener validates against.
@@ -181,7 +277,8 @@ async function collectFlow(
   if (outcome.kind === 'failed') return `${outcome.text} ${RETRY_FRESH}`;
 
   try {
-    const tokens = await exchange(deps.config, outcome.result.code, flow.verifier, outcome.result.redirectUri);
+    const config = flow.config ?? deps.config;
+    const tokens = await exchange(config, outcome.result.code, flow.verifier, outcome.result.redirectUri);
     new TokenStore(deps.tokensPath, deps.tokenStoreKey).save({
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -190,7 +287,12 @@ async function collectFlow(
   } catch (err) {
     return `${failureText(err, deps)} ${RETRY_FRESH}`;
   }
-  return 'Authorization complete — the Zendesk credentials are stored encrypted and are refreshed automatically. Verify with zendesk_get_me.';
+  // A flow that came through setup configured the plugin mid-session, and this process resolved its
+  // configuration at startup: the Zendesk client it holds is still the empty one. Saying so is the
+  // honest end of that path — see the note in src/server.ts on why it does not re-resolve itself.
+  return flow.config
+    ? 'Authorization complete — the configuration and the Zendesk credentials are stored encrypted. Reload the plugin (or restart the app) so this session picks up the new configuration, then verify with zendesk_get_me.'
+    : 'Authorization complete — the Zendesk credentials are stored encrypted and are refreshed automatically. Verify with zendesk_get_me.';
 }
 
 // Two zendesk_login calls can OVERLAP: the tool asks to be called twice, and a model that emits
@@ -213,16 +315,22 @@ export function runLogin(deps: LoginDeps, options: LoginOptions = {}): Promise<s
 }
 
 async function runQueuedLogin(deps: LoginDeps, options: LoginOptions): Promise<string> {
-  if (deps.configError) return deps.configError;
-
   const timeoutMs = deps.callbackTimeoutMs ?? DEFAULT_CALLBACK_TIMEOUT_MS;
   const listen = deps.listen ?? startCallbackListener;
   const exchange = deps.exchange ?? exchangeCodeForTokens;
 
   // force means "start over": abandon a flow in progress instead of collecting it, so a user who
-  // lost the browser tab is not stuck until the listener times out.
+  // lost the browser tab is not stuck until the listener times out. It is also how setup is reached a
+  // SECOND time — a subdomain typed wrong, a client replaced, an account switched — because the
+  // branch below runs again from scratch, on the same single-flight lock as every other login.
   if (options.force) abortLoginFlow();
   if (activeFlow) return collectFlow(activeFlow, deps, exchange);
+
+  // No usable configuration: the first-run page is the answer, not an error. Only where one can
+  // actually be stored, though — otherwise the degraded wording stands.
+  if (deps.configError) {
+    return deps.setup ? beginSetup(deps, deps.setup, listen, deps.configError) : deps.configError;
+  }
 
   const existing = readExistingTokens(deps);
   if (!options.force && existing.tokens) {

@@ -11,15 +11,20 @@ import { join } from 'node:path';
 import { AuthManager } from '../../src/auth/auth-manager.js';
 import { TokenStore } from '../../src/auth/token-store.js';
 import { runLogin, type LoginDeps } from '../../src/tools/login.js';
+import type { SetupValues } from '../../src/tools/setup.js';
 import type { CallbackListener, OAuthConfig } from '../../src/auth/oauth-flow.js';
 import { exchangeCodeForTokens, refreshAccessToken } from '../../src/auth/oauth-flow.js';
+import { DEFAULT_SCOPES } from '../../src/auth/config.js';
 import { config, dataDir, deps, freePort, setupLoginHarness, tokensPath } from '../auth/login-harness.js';
 
 setupLoginHarness('token-canary-');
 
 const ACCESS = 'CANARY-ACCESS-9f3b1c7e-do-not-print';
 const REFRESH = 'CANARY-REFRESH-4a8d2e60-do-not-print';
-const CANARIES = [ACCESS, REFRESH];
+// The client secret joins them: since #68 it is typed into a local page, and the whole reason that page
+// exists rather than a question in the chat is that this value must never reach the model.
+const CLIENT_SECRET = 'CANARY-SECRET-7c1e5b92-do-not-print';
+const CANARIES = [ACCESS, REFRESH, CLIENT_SECRET];
 
 const tokenResponse = { accessToken: ACCESS, refreshToken: REFRESH, expiresIn: 3600 };
 
@@ -138,5 +143,62 @@ describe('a token that went through the whole flow', () => {
     expect(failure).toMatch(/400 invalid_grant/);
     expectNoCanary(failure, 'the refresh failure');
     expectNoCanary(console_.lines(), 'the console');
+  });
+});
+
+describe('a client secret typed into the setup page', () => {
+  it('is stored and never appears in a tool answer, a log line or a file', async () => {
+    const console_ = captureConsole();
+    const port = freePort();
+    const stored: SetupValues[] = [];
+    const login: LoginDeps = {
+      config: { subdomain: '', clientId: '', callbackPort: port, scopes: DEFAULT_SCOPES },
+      tokensPath,
+      tokenStoreKey: 'a-key',
+      configError: 'Missing required environment variable: ZENDESK_SUBDOMAIN.',
+      setup: { writeConfig: (values) => stored.push(values), timeoutMs: 60_000 },
+      exchange: async () => tokenResponse,
+    };
+
+    const started = await runLogin(login);
+    const setupPageUrl = new URL(started.split(/\s+/).find((w) => w.startsWith('http://')) as string);
+    const submitted = await fetch(setupPageUrl, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: setupPageUrl.origin },
+      body: new URLSearchParams({ subdomain: 'acme', client_id: 'client-abc', client_secret: CLIENT_SECRET }).toString(),
+    });
+    const redirect = submitted.headers.get('location') as string;
+    const body = await submitted.text();
+
+    // It reached the store — otherwise this case would pass on a flow that never carried it.
+    expect(stored).toEqual([
+      { ZENDESK_SUBDOMAIN: 'acme', ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_OAUTH_CLIENT_SECRET: CLIENT_SECRET },
+    ]);
+    // And it is in none of the places it could have come out of. The authorization URL is the sharpest
+    // one: a client_secret query parameter there would hand the secret to Zendesk's logs and to the
+    // browser history in one step.
+    expectNoCanary(body, 'the setup response body');
+    expectNoCanary(redirect, 'the authorization redirect');
+    expectNoCanary(started, 'the tool answer that started setup');
+    expectNoCanary(await runLogin(login), 'the tool answer while setup is pending');
+
+    // Every failure path of the same page, too: a bad field, a replay, and a foreign origin.
+    for (const [label, init] of [
+      ['a rejected field', { body: new URLSearchParams({ subdomain: 'nope.zendesk.com', client_id: 'c', client_secret: CLIENT_SECRET }).toString(), origin: setupPageUrl.origin }],
+      ['a foreign origin', { body: new URLSearchParams({ subdomain: 'acme', client_id: 'c', client_secret: CLIENT_SECRET }).toString(), origin: 'https://evil.example.com' }],
+    ] as const) {
+      const answer = await fetch(setupPageUrl, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: init.origin },
+        body: init.body,
+      });
+      expectNoCanary(await answer.text(), label);
+    }
+
+    expectNoCanary(console_.lines(), 'the console');
+    expectNoCanary(dataDirContents(), 'the data directory');
+    console_.restore();
   });
 });

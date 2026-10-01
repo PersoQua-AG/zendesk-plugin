@@ -1,9 +1,11 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { resolveTokenStoreKey } from './store-key.js';
+import { CONFIG_ACCOUNTS, readKeychainConfig, resolveTokenStoreKey, } from './store-key.js';
 export const DEFAULT_CALLBACK_PORT = 8976;
 const DATA_DIR_NAME = 'zendesk-plugin';
-const DEFAULT_SCOPES = ['read', 'write'];
+// Exported because the first-run setup page states which scopes the plugin asks for, and an incomplete
+// start still has to carry them into the authorization the page continues into.
+export const DEFAULT_SCOPES = ['read', 'write'];
 // A Desktop Extension is unpacked into a versioned directory and its working directory is the
 // host's, not the extension's — so a relative default would put tokens.enc somewhere arbitrary and
 // lose it on update. Resolve an absolute per-user data dir instead. Platform/env are parameters so
@@ -113,7 +115,13 @@ const SUBDOMAIN_NOT_A_HOST_RULE = `extension configuration field "${USER_CONFIG_
 // Surrounding whitespace is a copy-paste artifact, not an opinion: trimmed, not rejected, because
 // "acme " and "acme" are indistinguishable in the settings dialog that produced them.
 function subdomain(env) {
-    const raw = required(env, 'ZENDESK_SUBDOMAIN').trim();
+    return validateSubdomain(required(env, 'ZENDESK_SUBDOMAIN'));
+}
+// Exported because the first-run setup page takes the same value from a form, and a value that this
+// resolver would refuse must be refused THERE, where the person can still correct it — not stored and
+// then rejected at the next start. One rule, one implementation.
+export function validateSubdomain(value) {
+    const raw = value.trim();
     if (!SUBDOMAIN_PATTERN.test(raw) || raw.length > MAX_SUBDOMAIN_LENGTH) {
         throw new Error(`Invalid environment variable: ZENDESK_SUBDOMAIN="${raw}" (${SUBDOMAIN_RULE}).`);
     }
@@ -138,6 +146,22 @@ function subdomain(env) {
     }
     return raw;
 }
+// Env WINS, the Keychain fills the gaps: an install that passes everything through the environment
+// (Claude Code as it works today) behaves exactly as it did, and — because the Keychain is read only
+// when something is actually missing — never touches it at all, so it cannot be broken by a locked
+// one either. A Keychain that cannot be read throws rather than reading as empty: see readKeychainConfig.
+function withKeychainConfig(env, readConfig) {
+    const missing = Object.keys(CONFIG_ACCOUNTS).filter((name) => !env[name]);
+    if (missing.length === 0)
+        return env;
+    const stored = readConfig();
+    const filled = { ...env };
+    for (const name of missing) {
+        if (stored[name])
+            filled[name] = stored[name];
+    }
+    return filled;
+}
 // Only an env var that HAS a user_config field may be required: the error names that field, and a
 // name without one is a compile error here rather than a fallback that names the raw env var.
 function required(env, name) {
@@ -154,8 +178,8 @@ function required(env, name) {
 //
 // readStoreKey is a parameter for the same reason platform/env are parameters on defaultDataDir: the
 // resolution is testable without touching a real Keychain.
-export function resolveAuthConfig(rawEnv, readStoreKey = resolveTokenStoreKey) {
-    const env = stripPlaceholders(rawEnv);
+export function resolveAuthConfig(rawEnv, readStoreKey = resolveTokenStoreKey, readConfig = readKeychainConfig) {
+    const env = withKeychainConfig(stripPlaceholders(rawEnv), readConfig);
     // Falsy-coalesce (not ??): an empty-string env var is "absent", not a value.
     // Otherwise CLAUDE_PLUGIN_DATA='' → tokens.enc at the fs root, and
     // ZENDESK_OAUTH_CALLBACK_PORT='' → Number('')===0 → bind to port 0.

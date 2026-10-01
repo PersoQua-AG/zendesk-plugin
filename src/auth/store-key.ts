@@ -1,18 +1,42 @@
 // src/auth/store-key.ts
+// Everything this plugin keeps in the macOS Keychain: the token-store key, and — since the first-run
+// setup page — the three OAuth values the customer enters there (subdomain, client id, client
+// secret). One file, because there is one way in: the `security` built-in, reached with an ARGUMENT
+// ARRAY and never a shell string, so no value here can be word-split or interpreted by a shell. Both
+// the guard in tests/plugin/no-process-spawn.test.ts and the single sanctioned child process depend
+// on that staying true of exactly this file.
+//
 // The key the token store is encrypted with. It is a RANDOM 32-byte value kept in the macOS
 // Keychain, deliberately not the OAuth client secret: rotating the client secret must not brick the
 // stored tokens, and the client secret must not double as the decrypt-all key. Same reasoning, same
 // shape and the same entropy floor as the remote path's REMOTE_TOKEN_ENC_KEY
 // (src/remote/remote-server.ts:78-88), which is where this pattern already runs in production.
 //
-// The Keychain is reached through the macOS `security` built-in with an ARGUMENT ARRAY — never a
-// shell string, so no value here can be word-split or interpreted by a shell.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
 const SECURITY_BIN = '/usr/bin/security';
 const SERVICE = 'zendesk-plugin';
 const ACCOUNT = 'token-store-key';
+
+// The three OAuth values, by the env var each one stands in for — so the merge in ./config.ts is a
+// plain object spread and neither side needs to know the other's spelling. The client id and the
+// subdomain are in here beside the secret by owner decision: the id is internal, and the instance
+// name is not to lie around in the open either.
+export const CONFIG_ACCOUNTS = {
+  ZENDESK_SUBDOMAIN: 'oauth-subdomain',
+  ZENDESK_OAUTH_CLIENT_ID: 'oauth-client-id',
+  ZENDESK_OAUTH_CLIENT_SECRET: 'oauth-client-secret',
+} as const;
+
+export type ConfigEnvName = keyof typeof CONFIG_ACCOUNTS;
+export type KeychainConfig = Partial<Record<ConfigEnvName, string>>;
+
+// macOS only, and the one place that is decided. Windows and Linux are #69; nothing falls back to
+// anything weaker, here or anywhere else.
+export function keychainAvailable(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'darwin';
+}
 
 // `security` exits 44 for "item not found" — the ordinary first-run case. Any other non-zero exit is
 // a locked or unreadable Keychain, and that must NOT be mistaken for "no key yet": creating a second
@@ -55,6 +79,15 @@ export function runSecurity(args: string[], bin: string = SECURITY_BIN): Securit
   }
 }
 
+// A non-zero exit that is NOT "item not found": locked, access denied, user cancelled. Never carries
+// `output`, because on a read path stdout is the value itself.
+function unreadable(status: number): Error {
+  return new Error(
+    `The macOS Keychain could not be read (security exited ${status}). Unlock the login keychain, ` +
+      'allow access when asked, then try again.',
+  );
+}
+
 export const UNSUPPORTED_PLATFORM =
   'The Zendesk token store needs a key from the macOS Keychain, and this is not macOS. A Windows or ' +
   'Linux key source is issue #69 (github.com/PersoQua-AG/zendesk-plugin/issues/69); there is ' +
@@ -66,7 +99,7 @@ export function resolveTokenStoreKey(
   platform: NodeJS.Platform = process.platform,
   run: RunSecurity = runSecurity,
 ): string {
-  if (platform !== 'darwin') throw new Error(UNSUPPORTED_PLATFORM);
+  if (!keychainAvailable(platform)) throw new Error(UNSUPPORTED_PLATFORM);
 
   const found = run(['find-generic-password', '-s', SERVICE, '-a', ACCOUNT, '-w']);
   if (found.status === 0) {
@@ -79,12 +112,7 @@ export function resolveTokenStoreKey(
     }
     return key;
   }
-  if (found.status !== ITEM_NOT_FOUND) {
-    throw new Error(
-      `The macOS Keychain could not be read for the token-store key (security exited ${found.status}). ` +
-        'Unlock the login keychain, then reload the extension.',
-    );
-  }
+  if (found.status !== ITEM_NOT_FOUND) throw unreadable(found.status);
 
   const key = randomBytes(MIN_ENC_KEY_BYTES).toString('base64');
   // ponytail: the new key travels as an argv element, so it is visible to `ps` for the lifetime of
@@ -97,4 +125,48 @@ export function resolveTokenStoreKey(
     );
   }
   return key;
+}
+
+const configEntries = Object.entries(CONFIG_ACCOUNTS) as [ConfigEnvName, string][];
+
+// What the setup page stored, if anything. A missing item is simply absent — that is the first run,
+// not a failure — while a Keychain that cannot be READ throws, because answering "nothing is stored"
+// for a locked keychain would send a configured user back through setup and overwrite what is there.
+//
+// Returns {} off macOS rather than throwing: an env-configured install (Claude Code as it works
+// today) must not be made to depend on a key source that platform does not have.
+export function readKeychainConfig(
+  platform: NodeJS.Platform = process.platform,
+  run: RunSecurity = runSecurity,
+): KeychainConfig {
+  if (!keychainAvailable(platform)) return {};
+  const stored: KeychainConfig = {};
+  for (const [name, account] of configEntries) {
+    const found = run(['find-generic-password', '-s', SERVICE, '-a', account, '-w']);
+    if (found.status === ITEM_NOT_FOUND) continue;
+    if (found.status !== 0) throw unreadable(found.status);
+    // `security -w` ends its output with a newline; an item that holds only whitespace is as absent
+    // as a missing one, and must not pass the required() check downstream as a value.
+    const value = found.output.trim();
+    if (value) stored[name] = value;
+  }
+  return stored;
+}
+
+// All three or nothing: a half-written set would leave the plugin configured with a subdomain and no
+// client, which is a state the setup page cannot tell apart from a fresh machine. -U so a retry
+// replaces what an earlier attempt left behind instead of failing on a collision.
+export function writeKeychainConfig(
+  values: Required<KeychainConfig>,
+  platform: NodeJS.Platform = process.platform,
+  run: RunSecurity = runSecurity,
+): void {
+  if (!keychainAvailable(platform)) throw new Error(UNSUPPORTED_PLATFORM);
+  for (const [name, account] of configEntries) {
+    const added = run(['add-generic-password', '-s', SERVICE, '-a', account, '-w', values[name], '-U']);
+    if (added.status !== 0) {
+      // The account name, never the value.
+      throw new Error(`"${account}" could not be written to the macOS Keychain (security exited ${added.status}).`);
+    }
+  }
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { defaultDataDir, resolveAuthConfig } from '../../src/auth/config.js';
-import { readStoreKey, TEST_STORE_KEY } from './store-key-stub.js';
+import { noStoredConfig, readStoreKey, TEST_STORE_KEY } from './store-key-stub.js';
 
 const fullEnv = (): NodeJS.ProcessEnv => ({
   ZENDESK_SUBDOMAIN: 'acme',
@@ -73,9 +73,10 @@ describe('resolveAuthConfig', () => {
   it('leaves clientSecret undefined when none is configured, and when it is blank', () => {
     const without = fullEnv();
     delete without.ZENDESK_OAUTH_CLIENT_SECRET;
-    expect(resolveAuthConfig(without, readStoreKey).config.clientSecret).toBeUndefined();
+    expect(resolveAuthConfig(without, readStoreKey, noStoredConfig).config.clientSecret).toBeUndefined();
     expect(
-      resolveAuthConfig({ ...fullEnv(), ZENDESK_OAUTH_CLIENT_SECRET: '' }, readStoreKey).config.clientSecret,
+      resolveAuthConfig({ ...fullEnv(), ZENDESK_OAUTH_CLIENT_SECRET: '' }, readStoreKey, noStoredConfig).config
+        .clientSecret,
     ).toBeUndefined();
   });
 
@@ -90,7 +91,67 @@ describe('resolveAuthConfig', () => {
     (name) => {
       const env = fullEnv();
       delete env[name];
-      expect(() => resolveAuthConfig(env)).toThrow(`Missing required environment variable: ${name}`);
+      expect(() => resolveAuthConfig(env, readStoreKey, noStoredConfig)).toThrow(
+        `Missing required environment variable: ${name}`,
+      );
     },
   );
+});
+
+// Env WINS over the Keychain, so Claude Code with environment variables behaves exactly as it did
+// before the first-run page existed, and an install can always be overridden from outside.
+describe('the Keychain as the second source of the three OAuth values', () => {
+  const STORED = {
+    ZENDESK_SUBDOMAIN: 'stored-sub',
+    ZENDESK_OAUTH_CLIENT_ID: 'stored-id',
+    ZENDESK_OAUTH_CLIENT_SECRET: 'stored-secret',
+  };
+
+  it('fills what the environment does not carry', () => {
+    const { config } = resolveAuthConfig({}, readStoreKey, () => STORED);
+    expect(config.subdomain).toBe('stored-sub');
+    expect(config.clientId).toBe('stored-id');
+    expect(config.clientSecret).toBe('stored-secret');
+  });
+
+  it('never overrides a value the environment carries', () => {
+    const { config } = resolveAuthConfig(fullEnv(), readStoreKey, () => STORED);
+    expect(config.subdomain).toBe('acme');
+    expect(config.clientId).toBe('client-abc');
+    expect(config.clientSecret).toBe('secret-xyz');
+  });
+
+  it('is not even consulted when the environment is complete', () => {
+    let reads = 0;
+    resolveAuthConfig(fullEnv(), readStoreKey, () => {
+      reads += 1;
+      return {};
+    });
+    // Not an optimization: a fully env-configured install must not be breakable by a locked keychain.
+    expect(reads).toBe(0);
+  });
+
+  it('is consulted once, however many values are missing', () => {
+    let reads = 0;
+    const partial = { ZENDESK_SUBDOMAIN: 'acme' };
+    resolveAuthConfig(partial, readStoreKey, () => {
+      reads += 1;
+      return STORED;
+    });
+    expect(reads).toBe(1);
+  });
+
+  it('lets a keychain that cannot be read fail the resolution, rather than reading as empty', () => {
+    expect(() =>
+      resolveAuthConfig({}, readStoreKey, () => {
+        throw new Error('The macOS Keychain could not be read (security exited 51).');
+      }),
+    ).toThrow(/could not be read/);
+  });
+
+  it('validates a stored subdomain exactly as it validates an env one', () => {
+    expect(() => resolveAuthConfig({}, readStoreKey, () => ({ ...STORED, ZENDESK_SUBDOMAIN: 'acme.zendesk.com' }))).toThrow(
+      /ZENDESK_SUBDOMAIN="acme\.zendesk\.com"/,
+    );
+  });
 });

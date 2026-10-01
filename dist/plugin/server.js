@@ -21119,6 +21119,14 @@ import { randomBytes } from "node:crypto";
 var SECURITY_BIN = "/usr/bin/security";
 var SERVICE = "zendesk-plugin";
 var ACCOUNT = "token-store-key";
+var CONFIG_ACCOUNTS = {
+  ZENDESK_SUBDOMAIN: "oauth-subdomain",
+  ZENDESK_OAUTH_CLIENT_ID: "oauth-client-id",
+  ZENDESK_OAUTH_CLIENT_SECRET: "oauth-client-secret"
+};
+function keychainAvailable(platform = process.platform) {
+  return platform === "darwin";
+}
 var ITEM_NOT_FOUND = 44;
 var MIN_ENC_KEY_BYTES = 32;
 function encKeyStrengthBytes(key) {
@@ -21134,9 +21142,14 @@ function runSecurity(args, bin = SECURITY_BIN) {
     return { status: typeof status === "number" ? status : -1, output: "" };
   }
 }
+function unreadable(status) {
+  return new Error(
+    `The macOS Keychain could not be read (security exited ${status}). Unlock the login keychain, allow access when asked, then try again.`
+  );
+}
 var UNSUPPORTED_PLATFORM = "The Zendesk token store needs a key from the macOS Keychain, and this is not macOS. A Windows or Linux key source is issue #69 (github.com/PersoQua-AG/zendesk-plugin/issues/69); there is deliberately no weaker fallback.";
 function resolveTokenStoreKey(platform = process.platform, run = runSecurity) {
-  if (platform !== "darwin") throw new Error(UNSUPPORTED_PLATFORM);
+  if (!keychainAvailable(platform)) throw new Error(UNSUPPORTED_PLATFORM);
   const found = run(["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"]);
   if (found.status === 0) {
     const key2 = found.output.trim();
@@ -21147,11 +21160,7 @@ function resolveTokenStoreKey(platform = process.platform, run = runSecurity) {
     }
     return key2;
   }
-  if (found.status !== ITEM_NOT_FOUND) {
-    throw new Error(
-      `The macOS Keychain could not be read for the token-store key (security exited ${found.status}). Unlock the login keychain, then reload the extension.`
-    );
-  }
+  if (found.status !== ITEM_NOT_FOUND) throw unreadable(found.status);
   const key = randomBytes(MIN_ENC_KEY_BYTES).toString("base64");
   const added = run(["add-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w", key, "-U"]);
   if (added.status !== 0) {
@@ -21160,6 +21169,28 @@ function resolveTokenStoreKey(platform = process.platform, run = runSecurity) {
     );
   }
   return key;
+}
+var configEntries = Object.entries(CONFIG_ACCOUNTS);
+function readKeychainConfig(platform = process.platform, run = runSecurity) {
+  if (!keychainAvailable(platform)) return {};
+  const stored = {};
+  for (const [name, account] of configEntries) {
+    const found = run(["find-generic-password", "-s", SERVICE, "-a", account, "-w"]);
+    if (found.status === ITEM_NOT_FOUND) continue;
+    if (found.status !== 0) throw unreadable(found.status);
+    const value = found.output.trim();
+    if (value) stored[name] = value;
+  }
+  return stored;
+}
+function writeKeychainConfig(values, platform = process.platform, run = runSecurity) {
+  if (!keychainAvailable(platform)) throw new Error(UNSUPPORTED_PLATFORM);
+  for (const [name, account] of configEntries) {
+    const added = run(["add-generic-password", "-s", SERVICE, "-a", account, "-w", values[name], "-U"]);
+    if (added.status !== 0) {
+      throw new Error(`"${account}" could not be written to the macOS Keychain (security exited ${added.status}).`);
+    }
+  }
 }
 
 // src/auth/config.ts
@@ -21219,7 +21250,10 @@ var SUBDOMAIN_PATTERN = /^[a-z0-9-]+$/i;
 var SUBDOMAIN_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" must be the subdomain by itself \u2014 letters, digits and dashes, at most ${MAX_SUBDOMAIN_LENGTH} characters; for acme.zendesk.com the value is "acme"`;
 var SUBDOMAIN_NOT_A_HOST_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" is not a usable host name \u2014 a value starting with "xn--" is an internationalized-domain prefix and this one does not decode; for acme.zendesk.com the value is "acme"`;
 function subdomain(env) {
-  const raw = required2(env, "ZENDESK_SUBDOMAIN").trim();
+  return validateSubdomain(required2(env, "ZENDESK_SUBDOMAIN"));
+}
+function validateSubdomain(value) {
+  const raw = value.trim();
   if (!SUBDOMAIN_PATTERN.test(raw) || raw.length > MAX_SUBDOMAIN_LENGTH) {
     throw new Error(`Invalid environment variable: ZENDESK_SUBDOMAIN="${raw}" (${SUBDOMAIN_RULE}).`);
   }
@@ -21230,6 +21264,16 @@ function subdomain(env) {
   }
   return raw;
 }
+function withKeychainConfig(env, readConfig) {
+  const missing = Object.keys(CONFIG_ACCOUNTS).filter((name) => !env[name]);
+  if (missing.length === 0) return env;
+  const stored = readConfig();
+  const filled = { ...env };
+  for (const name of missing) {
+    if (stored[name]) filled[name] = stored[name];
+  }
+  return filled;
+}
 function required2(env, name) {
   const value = env[name];
   if (!value) {
@@ -21239,8 +21283,8 @@ function required2(env, name) {
   }
   return value;
 }
-function resolveAuthConfig(rawEnv, readStoreKey = resolveTokenStoreKey) {
-  const env = stripPlaceholders(rawEnv);
+function resolveAuthConfig(rawEnv, readStoreKey = resolveTokenStoreKey, readConfig = readKeychainConfig) {
+  const env = withKeychainConfig(stripPlaceholders(rawEnv), readConfig);
   const raw = env.CLAUDE_PLUGIN_DATA;
   if (raw && !isAbsolute(raw)) {
     throw new Error(
@@ -21305,7 +21349,7 @@ function sanitizeErrorCode(raw) {
   return cleaned.length > MAX_ERROR_CODE_CHARS ? `${cleaned.slice(0, MAX_ERROR_CODE_CHARS)}\u2026 (truncated)` : cleaned;
 }
 var STRAY_STATE_NOTE = "; a callback with an unexpected state was received and ignored";
-function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
+function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS, setup) {
   return new Promise((bound, bindFailed) => {
     let close;
     let bindings;
@@ -21320,6 +21364,18 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
             url = new URL(rawUrl, `http://localhost:${port}`);
           } catch {
             res.writeHead(400, { "Content-Type": "text/plain" }).end("Bad request target");
+            return;
+          }
+          if (setup && url.pathname === "/setup") {
+            const write = (answer2) => void res.writeHead(answer2.status, answer2.headers).end(answer2.body);
+            void setup.handle(req, url).then(
+              write,
+              () => write({
+                status: 500,
+                headers: { "Content-Type": "text/plain; charset=utf-8" },
+                body: "Setup failed. Call the Zendesk tool again to start over."
+              })
+            );
             return;
           }
           if (url.pathname !== "/callback") {
@@ -21846,7 +21902,7 @@ function okWithHandle(r) {
 }
 
 // src/tools/login.ts
-import { randomBytes as randomBytes5 } from "node:crypto";
+import { randomBytes as randomBytes6 } from "node:crypto";
 import { dirname as dirname2 } from "node:path";
 
 // src/auth/pkce.ts
@@ -21856,6 +21912,167 @@ function generateCodeVerifier() {
 }
 function generateCodeChallenge(verifier) {
   return createHash2("sha256").update(verifier).digest("base64url");
+}
+
+// src/tools/setup.ts
+import { randomBytes as randomBytes5, timingSafeEqual } from "node:crypto";
+var SETUP_TIMEOUT_MS = 9e5;
+var MAX_BODY_BYTES = 4096;
+var HTML = { "Content-Type": "text/html; charset=utf-8" };
+function newSetupToken() {
+  return randomBytes5(32).toString("base64url");
+}
+function setupUrl(port, token) {
+  return `http://127.0.0.1:${port}/setup?t=${token}`;
+}
+function tokenMatches(given, expected) {
+  if (!given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+function originAllowed(req, port) {
+  const origin = req.headers.origin;
+  if (typeof origin !== "string") return false;
+  return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`].includes(origin);
+}
+function readBody(req) {
+  return new Promise((done, failed) => {
+    let body = "";
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        req.destroy();
+        failed(new Error("setup form too large"));
+        return;
+      }
+      body += chunk.toString("utf8");
+    });
+    req.on("end", () => done(body));
+    req.on("error", (err) => failed(err));
+  });
+}
+var FIELD_PROBLEM = {
+  ZENDESK_SUBDOMAIN: `Die Subdomain besteht nur aus Buchstaben, Zahlen und Bindestrichen \u2014 f\xFCr acme.zendesk.com ist der Wert \u201Eacme" (h\xF6chstens ${MAX_SUBDOMAIN_LENGTH} Zeichen).`,
+  ZENDESK_OAUTH_CLIENT_ID: "Die Client-ID fehlt oder enth\xE4lt Zeichen, die dort nicht vorkommen.",
+  ZENDESK_OAUTH_CLIENT_SECRET: "Das Client-Secret fehlt oder enth\xE4lt Zeichen, die dort nicht vorkommen."
+};
+var MAX_FIELD_CHARS = 512;
+var CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+function plainField(raw) {
+  if (raw === null) return null;
+  const value = raw.trim();
+  if (!value || value.length > MAX_FIELD_CHARS || CONTROL_CHARS.test(value)) return null;
+  return value;
+}
+function parseSetupForm(body) {
+  const form = new URLSearchParams(body);
+  const clientId = plainField(form.get("client_id"));
+  const clientSecret = plainField(form.get("client_secret"));
+  const rawSubdomain = plainField(form.get("subdomain"));
+  let subdomain2;
+  try {
+    subdomain2 = validateSubdomain(rawSubdomain ?? "");
+  } catch {
+    return { problem: "ZENDESK_SUBDOMAIN" };
+  }
+  if (!clientId) return { problem: "ZENDESK_OAUTH_CLIENT_ID" };
+  if (!clientSecret) return { problem: "ZENDESK_OAUTH_CLIENT_SECRET" };
+  return {
+    values: {
+      ZENDESK_SUBDOMAIN: subdomain2,
+      ZENDESK_OAUTH_CLIENT_ID: clientId,
+      ZENDESK_OAUTH_CLIENT_SECRET: clientSecret
+    }
+  };
+}
+var escapeHtml = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+function setupPage(port, token, problem) {
+  const redirectUri2 = `http://localhost:${port}/callback`;
+  const error2 = problem ? `<p class="error">${escapeHtml(FIELD_PROBLEM[problem])} Bitte korrigieren und erneut absenden.</p>` : "";
+  return `<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zendesk-Plugin einrichten</title>
+<style>
+:root { color-scheme: light dark; }
+body { font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0 auto; max-width: 42rem; padding: 2rem 1rem 4rem; }
+h1 { font-size: 1.5rem; margin-bottom: .25rem; }
+h2 { font-size: 1.1rem; margin-top: 2rem; }
+ol, ul { padding-left: 1.25rem; }
+li { margin: .4rem 0; }
+code { background: rgba(127,127,127,.18); border-radius: .25rem; padding: .1rem .3rem; }
+label { display: block; font-weight: 600; margin-top: 1rem; }
+input { box-sizing: border-box; font: inherit; margin-top: .3rem; padding: .5rem; width: 100%; }
+button { font: inherit; font-weight: 600; margin-top: 1.5rem; padding: .6rem 1.2rem; }
+.error { background: rgba(200,40,40,.14); border-left: .25rem solid #c82828; padding: .75rem; }
+.note { opacity: .8; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>Zendesk-Plugin einrichten</h1>
+<p>Einmalig pro Zendesk-Instanz. Diese Seite l\xE4uft lokal auf diesem Rechner; die Werte verlassen ihn nicht und gehen nicht durch den Chat.</p>
+${error2}
+<h2>1. OAuth-Client in Ihrem Zendesk anlegen</h2>
+<p>Im Zendesk Admin Center: <strong>Apps und Integrationen \u2192 APIs \u2192 OAuth-Clients \u2192 \u201EOAuth-Client hinzuf\xFCgen"</strong>. Tragen Sie dort ein:</p>
+<ul>
+<li><strong>Weiterleitungs-URL:</strong> <code>${redirectUri2}</code> \u2014 genau so, sonst weist Zendesk die Anmeldung ab.</li>
+<li><strong>Art von Client:</strong> vertraulich (confidential).</li>
+<li><strong>Zugriffsart:</strong> leer lassen. Leer bedeutet, dass alle Berechtigungen erlaubt sind; das Plugin fordert <code>read write</code> an.</li>
+</ul>
+<p class="note">Nach dem Speichern zeigt Zendesk das Client-Secret <strong>einmal</strong> an. Kopieren Sie es jetzt.</p>
+<h2>2. Werte hier eintragen</h2>
+<form method="post" action="/setup?t=${escapeHtml(token)}" autocomplete="off">
+<label>Subdomain
+<input name="subdomain" placeholder="acme" required autofocus spellcheck="false" autocapitalize="off">
+</label>
+<label>Eindeutige Kennung (Client-ID)
+<input name="client_id" required spellcheck="false" autocapitalize="off">
+</label>
+<label>Client-Secret
+<input name="client_secret" type="password" required spellcheck="false">
+</label>
+<button type="submit">Speichern und anmelden</button>
+</form>
+<p class="note">Beim Speichern geht es direkt weiter zur Zendesk-Anmeldung. Danach kann dieses Fenster geschlossen werden.</p>
+</body>
+</html>
+`;
+}
+var answer = (status, body, headers = HTML) => ({
+  status,
+  headers,
+  body
+});
+var notFound = () => answer(404, "Not found", { "Content-Type": "text/plain; charset=utf-8" });
+function createSetupRoute(deps) {
+  let spent = false;
+  return {
+    handle: async (req, url) => {
+      if (spent || !tokenMatches(url.searchParams.get("t"), deps.token)) return notFound();
+      if (req.method === "GET") return answer(200, setupPage(deps.port, deps.token));
+      if (req.method !== "POST") {
+        return answer(405, "Use POST to submit the setup form.", {
+          "Content-Type": "text/plain; charset=utf-8",
+          Allow: "GET, POST"
+        });
+      }
+      if (!originAllowed(req, deps.port)) {
+        return answer(403, "Diese Anfrage kam nicht von der Einrichtungsseite.");
+      }
+      const parsed = parseSetupForm(await readBody(req));
+      if ("problem" in parsed) return answer(400, setupPage(deps.port, deps.token, parsed.problem));
+      const authorizationUrl = deps.submit(parsed.values);
+      spent = true;
+      return answer(303, "Weiter zur Zendesk-Anmeldung \u2026", {
+        "Content-Type": "text/plain; charset=utf-8",
+        Location: authorizationUrl
+      });
+    }
+  };
 }
 
 // src/tools/login.ts
@@ -21885,7 +22102,7 @@ function failureText(err, deps) {
 }
 async function beginFlow(deps, listen, timeoutMs) {
   const verifier = generateCodeVerifier();
-  const state = randomBytes5(16).toString("base64url");
+  const state = randomBytes6(16).toString("base64url");
   let url;
   let listener;
   try {
@@ -21910,8 +22127,62 @@ async function beginFlow(deps, listen, timeoutMs) {
     `Then run zendesk_login a second time to finish \u2014 this call does not wait for you. The authorization stays open for ${Math.round(timeoutMs / 6e4)} minute(s); after that, run zendesk_login to start over.`
   ].join("\n");
 }
+async function beginSetup(deps, setup, listen, fallback) {
+  const verifier = generateCodeVerifier();
+  const state = randomBytes6(16).toString("base64url");
+  const token = newSetupToken();
+  const timeoutMs = setup.timeoutMs ?? SETUP_TIMEOUT_MS;
+  const port = deps.config.callbackPort;
+  const write = setup.writeConfig ?? writeKeychainConfig;
+  let flow;
+  const page = setupUrl(port, token);
+  const route = createSetupRoute({
+    port,
+    token,
+    submit: (values) => {
+      write(values);
+      const config2 = {
+        ...deps.config,
+        subdomain: values.ZENDESK_SUBDOMAIN,
+        clientId: values.ZENDESK_OAUTH_CLIENT_ID,
+        clientSecret: values.ZENDESK_OAUTH_CLIENT_SECRET
+      };
+      flow.config = config2;
+      flow.url = buildAuthorizationUrl(config2, generateCodeChallenge(verifier), state);
+      return flow.url;
+    }
+  });
+  let listener;
+  try {
+    listener = await listen(port, state, timeoutMs, route);
+  } catch {
+    return fallback;
+  }
+  flow = { verifier, url: "", outcome: { kind: "pending" }, close: listener.close, setupUrl: page };
+  void listener.promise.then(
+    (result) => {
+      flow.outcome = { kind: "received", result };
+    },
+    (err) => {
+      flow.outcome = { kind: "failed", text: failureText(err, deps) };
+    }
+  );
+  activeFlow = flow;
+  return [
+    "Zendesk is not set up on this machine yet. Open this page in your browser \u2014 it runs locally, it explains how to create the OAuth client in your Zendesk, and it collects the three values:",
+    page,
+    `Nothing has to be typed into the chat, and the client secret never reaches it. The page continues into the Zendesk login by itself; afterwards run zendesk_login once more. It stays open for ${Math.round(timeoutMs / 6e4)} minute(s).`
+  ].join("\n");
+}
 async function collectFlow(flow, deps, exchange) {
   const outcome = flow.outcome;
+  if (outcome.kind === "pending" && flow.setupUrl && !flow.config) {
+    return [
+      "Zendesk setup is still open. Open this page in your browser and enter the three values from your Zendesk OAuth client:",
+      flow.setupUrl,
+      "The page continues into the Zendesk login by itself. Then run zendesk_login again."
+    ].join("\n");
+  }
   if (outcome.kind === "pending") {
     return [
       `Still waiting for the Zendesk authorization callback on port ${deps.config.callbackPort}. Open this URL in your browser and approve access:`,
@@ -21922,7 +22193,8 @@ async function collectFlow(flow, deps, exchange) {
   abortLoginFlow();
   if (outcome.kind === "failed") return `${outcome.text} ${RETRY_FRESH}`;
   try {
-    const tokens = await exchange(deps.config, outcome.result.code, flow.verifier, outcome.result.redirectUri);
+    const config2 = flow.config ?? deps.config;
+    const tokens = await exchange(config2, outcome.result.code, flow.verifier, outcome.result.redirectUri);
     new TokenStore(deps.tokensPath, deps.tokenStoreKey).save({
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -21931,7 +22203,7 @@ async function collectFlow(flow, deps, exchange) {
   } catch (err) {
     return `${failureText(err, deps)} ${RETRY_FRESH}`;
   }
-  return "Authorization complete \u2014 the Zendesk credentials are stored encrypted and are refreshed automatically. Verify with zendesk_get_me.";
+  return flow.config ? "Authorization complete \u2014 the configuration and the Zendesk credentials are stored encrypted. Reload the plugin (or restart the app) so this session picks up the new configuration, then verify with zendesk_get_me." : "Authorization complete \u2014 the Zendesk credentials are stored encrypted and are refreshed automatically. Verify with zendesk_get_me.";
 }
 var queue = Promise.resolve();
 var settled = () => {
@@ -21942,12 +22214,14 @@ function runLogin(deps, options = {}) {
   return next;
 }
 async function runQueuedLogin(deps, options) {
-  if (deps.configError) return deps.configError;
   const timeoutMs = deps.callbackTimeoutMs ?? DEFAULT_CALLBACK_TIMEOUT_MS;
   const listen = deps.listen ?? startCallbackListener;
   const exchange = deps.exchange ?? exchangeCodeForTokens;
   if (options.force) abortLoginFlow();
   if (activeFlow) return collectFlow(activeFlow, deps, exchange);
+  if (deps.configError) {
+    return deps.setup ? beginSetup(deps, deps.setup, listen, deps.configError) : deps.configError;
+  }
   const existing = readExistingTokens(deps);
   if (!options.force && existing.tokens) {
     return "Already authorized with Zendesk \u2014 the stored credentials are usable and are refreshed automatically. Verify with zendesk_get_me, or call zendesk_login with force=true to authorize again.";
@@ -22021,7 +22295,7 @@ function registerDiagnosticsTool(server, deps) {
 }
 
 // src/security/screen.ts
-import { randomBytes as randomBytes6 } from "node:crypto";
+import { randomBytes as randomBytes7 } from "node:crypto";
 var INJECTION_PATTERNS = [
   /ignore\s+(all\s+)?(previous|prior|above)\s+instructions/i,
   /disregard\s+(all\s+)?(previous|prior|above)/i,
@@ -22047,7 +22321,7 @@ function screenContent(text, sourceLabel, securityLevel = "standard") {
   if (securityLevel === "strict" && attemptedBreakout) {
     matched.push("delimiter-breakout-attempt");
   }
-  const nonce = randomBytes6(6).toString("hex");
+  const nonce = randomBytes7(6).toString("hex");
   const marker = `zendesk-content-${sourceLabel}-${nonce}`;
   const wrapped = `<${marker}>
 ${neutralized}
@@ -22311,11 +22585,11 @@ ${screened.lines.join("\n")}`;
 }
 
 // src/util/markdown.ts
-function escapeHtml(s) {
+function escapeHtml2(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function inline(text) {
-  return escapeHtml(text).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>").replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+  return escapeHtml2(text).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>").replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
 }
 function markdownToHtml(md) {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
@@ -24772,9 +25046,9 @@ function parseMarkdownDefault(raw) {
   );
   return true;
 }
-function resolveOrDegrade(env, readStoreKey) {
+function resolveOrDegrade(env, readStoreKey, readConfig) {
   try {
-    return { ok: true, ...resolveAuthConfig(env, readStoreKey) };
+    return { ok: true, ...resolveAuthConfig(env, readStoreKey, readConfig) };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     const dataDir = dataDirOf(env);
@@ -24801,15 +25075,30 @@ function openCacheOrDegrade(auth) {
     return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
   }
 }
-var NO_OAUTH_CONFIG = { subdomain: "", clientId: "", callbackPort: 0, scopes: [] };
+var noOAuthConfig = (callbackPort2) => ({ subdomain: "", clientId: "", callbackPort: callbackPort2, scopes: DEFAULT_SCOPES });
 function createServer3(rawEnv = process.env, deps = {}) {
   const env = stripPlaceholders(rawEnv);
-  const resolved = resolveOrDegrade(env, deps.readStoreKey);
+  const resolved = resolveOrDegrade(env, deps.readStoreKey, deps.readConfig);
   const { auth, cache, cacheOk } = deps.cache ? { auth: resolved, cache: deps.cache, cacheOk: true } : openCacheOrDegrade(resolved);
   const { tokensPath } = auth;
   const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
   const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
-  const login = deps.authManager ? void 0 : auth.ok ? { config: auth.config, tokensPath, tokenStoreKey: auth.tokenStoreKey } : { config: NO_OAUTH_CONFIG, tokensPath, tokenStoreKey: "", configError: auth.reason };
+  const callbackPort2 = auth.ok ? auth.config.callbackPort : DEFAULT_CALLBACK_PORT;
+  let setupKey;
+  if (!auth.ok && cacheOk) {
+    try {
+      setupKey = (deps.readStoreKey ?? resolveTokenStoreKey)();
+    } catch {
+      setupKey = void 0;
+    }
+  }
+  const login = deps.authManager ? void 0 : auth.ok ? { config: auth.config, tokensPath, tokenStoreKey: auth.tokenStoreKey } : {
+    config: noOAuthConfig(callbackPort2),
+    tokensPath,
+    tokenStoreKey: setupKey ?? "",
+    configError: auth.reason,
+    setup: setupKey ? {} : void 0
+  };
   const authManager = (cacheOk ? deps.authManager : void 0) ?? (auth.ok ? new AuthManager(
     new TokenStore(tokensPath, auth.tokenStoreKey),
     auth.config,
@@ -24822,6 +25111,13 @@ function createServer3(rawEnv = process.env, deps = {}) {
   ) : (
     // Stands in for AuthManager while the configuration is incomplete: every Zendesk request
     // fails at the token boundary with the actionable message instead of reaching the network.
+    //
+    // It does NOT re-resolve after the first-run setup page has stored a configuration mid
+    // session, although it could: the subdomain is bound into ZendeskHttpClient at construction
+    // (src/client/http-client.ts:32), so healing the token boundary alone would send every request
+    // to https://.zendesk.com. Making the client take a late subdomain is a wider change than #68
+    // asked for, so the setup flow ends by saying that the plugin has to be reloaded — which is
+    // what the degraded message has always said, and what the host does on its own next start.
     { getAccessToken: () => Promise.reject(new Error(auth.reason)) }
   ));
   const rateLimiter = deps.rateLimiter ?? new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
@@ -24838,10 +25134,7 @@ function createServer3(rawEnv = process.env, deps = {}) {
   };
   registerAuthTools(server, login);
   if (login) {
-    registerDiagnosticsTool(server, {
-      rawEnv,
-      callbackPort: auth.ok ? auth.config.callbackPort : DEFAULT_CALLBACK_PORT
-    });
+    registerDiagnosticsTool(server, { rawEnv, callbackPort: callbackPort2 });
   }
   registerCoreTools(server, ctx);
   registerTicketTools(server, ctx);

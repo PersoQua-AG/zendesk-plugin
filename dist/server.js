@@ -2,7 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { AuthManager } from './auth/auth-manager.js';
 import { TokenStore } from './auth/token-store.js';
-import { dataDirOf, DEFAULT_CALLBACK_PORT, resolveAuthConfig, stripPlaceholders, USER_CONFIG_FIELD_BY_ENV, } from './auth/config.js';
+import { dataDirOf, DEFAULT_CALLBACK_PORT, DEFAULT_SCOPES, resolveAuthConfig, stripPlaceholders, USER_CONFIG_FIELD_BY_ENV, } from './auth/config.js';
+import { resolveTokenStoreKey } from './auth/store-key.js';
 import { warnConfig } from './util/warn-config.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
@@ -69,12 +70,12 @@ function parseMarkdownDefault(raw) {
         `default, rather than reading it as a "no".`);
     return true;
 }
-function resolveOrDegrade(env, readStoreKey) {
+function resolveOrDegrade(env, readStoreKey, readConfig) {
     try {
         // The spread READS tokenStoreKey, which is where the Keychain is actually reached — deliberately
         // inside this try, so a key source that cannot answer (another platform, a locked keychain)
         // degrades with its message like any other incomplete configuration instead of killing the server.
-        return { ok: true, ...resolveAuthConfig(env, readStoreKey) };
+        return { ok: true, ...resolveAuthConfig(env, readStoreKey, readConfig) };
     }
     catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
@@ -109,9 +110,11 @@ function openCacheOrDegrade(auth) {
         return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
     }
 }
-// runLogin answers with configError before it reads anything else, so these values are never used;
-// they only satisfy the LoginDeps shape while the configuration is incomplete.
-const NO_OAUTH_CONFIG = { subdomain: '', clientId: '', callbackPort: 0, scopes: [] };
+// The configuration an incomplete start carries. The subdomain and the client id are genuinely absent
+// — that is what the first-run page collects — but the PORT and the SCOPES are not: the page has to
+// name the redirect URL the customer must register, and the authorization it continues into has to ask
+// for the same scopes every other start asks for.
+const noOAuthConfig = (callbackPort) => ({ subdomain: '', clientId: '', callbackPort, scopes: DEFAULT_SCOPES });
 // Build and fully wire the MCP server (auth, rate buckets, cache, ctx, all tool registration)
 // without connecting a transport — so the wiring is importable and testable. Reads env from the
 // argument (defaults to process.env) so a test can inject a fixture environment.
@@ -119,13 +122,33 @@ export function createServer(rawEnv = process.env, deps = {}) {
     // Drop unsubstituted ${user_config.*} placeholders once, up front, so every downstream default
     // (security level, markdown flag, report config) sees "absent" rather than a literal placeholder.
     const env = stripPlaceholders(rawEnv);
-    const resolved = resolveOrDegrade(env, deps.readStoreKey);
+    const resolved = resolveOrDegrade(env, deps.readStoreKey, deps.readConfig);
     const { auth, cache, cacheOk } = deps.cache
         ? { auth: resolved, cache: deps.cache, cacheOk: true }
         : openCacheOrDegrade(resolved);
     const { tokensPath } = auth;
     const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
     const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
+    const callbackPort = auth.ok ? auth.config.callbackPort : DEFAULT_CALLBACK_PORT;
+    // Can a first-run setup be offered? Only if what it produces can be STORED, and that is one
+    // question with one answer: a Keychain that yields the token-store key is one the three OAuth values
+    // can be written to as well — and on a platform that has no Keychain at all it is the same answer
+    // again, because the key source refuses there (#69). Asking it here, in a try, is what keeps the
+    // fresh-machine case
+    // honest — a locked keychain, or a user who denies access, leaves `setupKey` unset and the degraded
+    // wording (which then names the Keychain itself, because resolveAuthConfig reads it before anything
+    // honest: a locked keychain, or a user who denies access, leaves `setupKey` unset and the degraded
+    // wording (which then names the Keychain itself, because resolveAuthConfig reads it before anything
+    // else) stands instead of a page that could not save what it collected.
+    let setupKey;
+    if (!auth.ok && cacheOk) {
+        try {
+            setupKey = (deps.readStoreKey ?? resolveTokenStoreKey)();
+        }
+        catch {
+            setupKey = undefined;
+        }
+    }
     // Only the local (stdio/extension) path can receive the localhost OAuth callback; an injected
     // TokenProvider means the remote bridge already owns authorization. Kept out of ctx so the OAuth
     // client secret inside LoginDeps stays out of reach of the other 64 registrars.
@@ -133,7 +156,13 @@ export function createServer(rawEnv = process.env, deps = {}) {
         ? undefined
         : auth.ok
             ? { config: auth.config, tokensPath, tokenStoreKey: auth.tokenStoreKey }
-            : { config: NO_OAUTH_CONFIG, tokensPath, tokenStoreKey: '', configError: auth.reason };
+            : {
+                config: noOAuthConfig(callbackPort),
+                tokensPath,
+                tokenStoreKey: setupKey ?? '',
+                configError: auth.reason,
+                setup: setupKey ? {} : undefined,
+            };
     const authManager = (cacheOk ? deps.authManager : undefined) ??
         (auth.ok
             ? new AuthManager(new TokenStore(tokensPath, auth.tokenStoreKey), auth.config, undefined, 
@@ -144,6 +173,13 @@ export function createServer(rawEnv = process.env, deps = {}) {
             login && (() => runLogin(login)))
             : // Stands in for AuthManager while the configuration is incomplete: every Zendesk request
                 // fails at the token boundary with the actionable message instead of reaching the network.
+                //
+                // It does NOT re-resolve after the first-run setup page has stored a configuration mid
+                // session, although it could: the subdomain is bound into ZendeskHttpClient at construction
+                // (src/client/http-client.ts:32), so healing the token boundary alone would send every request
+                // to https://.zendesk.com. Making the client take a late subdomain is a wider change than #68
+                // asked for, so the setup flow ends by saying that the plugin has to be reloaded — which is
+                // what the degraded message has always said, and what the host does on its own next start.
                 { getAccessToken: () => Promise.reject(new Error(auth.reason)) });
     const rateLimiter = deps.rateLimiter ?? new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
     const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
@@ -164,10 +200,7 @@ export function createServer(rawEnv = process.env, deps = {}) {
     // rawEnv, not the stripped copy: the question it answers is whether the HOST substituted the two
     // variables, and stripPlaceholders has already deleted the evidence from `env`.
     if (login) {
-        registerDiagnosticsTool(server, {
-            rawEnv,
-            callbackPort: auth.ok ? auth.config.callbackPort : DEFAULT_CALLBACK_PORT,
-        });
+        registerDiagnosticsTool(server, { rawEnv, callbackPort });
     }
     registerCoreTools(server, ctx);
     registerTicketTools(server, ctx);

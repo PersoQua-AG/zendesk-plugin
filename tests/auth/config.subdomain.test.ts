@@ -7,6 +7,7 @@ import {
 } from '../../src/auth/config.js';
 import { buildAuthorizationUrl } from '../../src/auth/oauth-flow.js';
 import { buildRemoteApp } from '../../src/remote/remote-server.js';
+import { noStoredConfig } from './store-key-stub.js';
 
 const withSubdomain = (value: string): NodeJS.ProcessEnv => ({
   ZENDESK_SUBDOMAIN: value,
@@ -92,7 +93,9 @@ describe('subdomain validation — values that must keep working', () => {
   ])('still reports %s as missing, not as invalid', (_label, value) => {
     const env = withSubdomain(value);
     expect(stripPlaceholders(env).ZENDESK_SUBDOMAIN ?? '').not.toBe('${user_config.zendesk_subdomain}');
-    expect(() => resolveAuthConfig(env)).toThrow(
+    // noStoredConfig: a blank subdomain is what makes resolveAuthConfig look in the Keychain, and this
+    // case is about the MESSAGE for a machine where nothing is stored.
+    expect(() => resolveAuthConfig(env, undefined, noStoredConfig)).toThrow(
       'Missing required environment variable: ZENDESK_SUBDOMAIN (extension configuration field "zendesk_subdomain" is empty).',
     );
   });

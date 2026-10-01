@@ -7,6 +7,7 @@ incremental exports. Includes a Microsoft 365 bridge (Outlook/Teams/Calendar/
 SharePoint).
 
 66 MCP tools (64 Zendesk tools + `zendesk_login` + `zendesk_diagnostics`) ·
+first-run setup on a local page ·
 5 skills · 5 slash commands ·
 a support subagent. Ships two ways: a Claude Code plugin and a Claude Desktop
 Extension (`.mcpb`).
@@ -38,7 +39,7 @@ No terminal required.
    |---|---|---|
    | Zendesk Subdomain | **yes** | — |
    | OAuth Client ID | **yes** | — |
-   | OAuth Client Secret | no — see below | — |
+   | OAuth Client Secret | **yes** | — |
    | OAuth Callback Port | no | `8976` |
    | Injection-Screening Level | no | `standard` |
    | Markdown to HTML Conversion | no | on |
@@ -46,9 +47,10 @@ No terminal required.
    | Business Work Hours | no | 09:00–17:00 |
    | Business Workdays | no | Mon–Fri |
 
-   The client secret is optional: a **public** OAuth client has none, and PKCE
-   (S256, always on) is what authenticates the token exchange. Give it only if
-   your Zendesk client is a confidential one.
+   Each organization registers its **own confidential** OAuth client in its own
+   Zendesk; the plugin ships no subdomain, no client id and no secret, and a
+   public (secret-less) client is deliberately not the shipped path — it belongs
+   to exactly one instance. PKCE (S256) is on unconditionally either way.
 
    The **redirect URI you register in Zendesk must match the callback port**:
    `http://localhost:<OAuth Callback Port>/callback` — with the default port,
@@ -117,8 +119,8 @@ The plugin asks for **no configuration of its own**: the Claude Code host bridge
 does not support plugin user configuration and drops the whole MCP server when a
 manifest references any (`user_config is not supported on the desktop host
 bridge; dropping server`). Settings therefore reach the server as ordinary
-environment variables, and a plugin that has none starts anyway and says what is
-missing in the answer to every tool call. `zendesk_diagnostics` reports what the
+environment variables — and when there are none, the **first-run setup page**
+takes over (see below), so nothing has to be configured by hand at all. `zendesk_diagnostics` reports what the
 host actually did with the plugin — platform, whether `${CLAUDE_PLUGIN_ROOT}` and
 `${CLAUDE_PLUGIN_DATA}` were substituted, the client capabilities announced in
 `initialize`, and whether the callback port binds on each address family. It
@@ -140,6 +142,40 @@ npm install   # `prepare` runs the build automatically
 
 ## Setup
 
+### 0. First run: let the plugin walk you through it
+
+Ask Claude for anything from Zendesk on a machine that is not configured yet. The
+answer is a single local URL — `http://127.0.0.1:8976/setup?t=…` — and nothing
+else. Open it and the page (in German) does both halves of the job:
+
+1. it names the exact place in **your** Zendesk — Admin Center → Apps und
+   Integrationen → APIs → OAuth-Clients → „OAuth-Client hinzufügen" — and the
+   exact values to enter there: the redirect URL
+   `http://localhost:8976/callback`, client type *vertraulich* (confidential),
+   and *Zugriffsart* left empty (empty means all scopes are allowed; the plugin
+   asks for `read write`);
+2. it collects subdomain, client id and client secret, stores all three in the
+   **macOS Keychain**, and continues straight into the Zendesk authorization in
+   the same browser tab. The callback lands on the same local listener, the
+   tokens are encrypted to disk, and the plugin is ready after one reload.
+
+Why a page and not a question in the chat: the client secret must never pass
+through the model or end up in a transcript. The MCP specification says so
+outright — *"Servers MUST NOT use form mode elicitation to request sensitive
+information such as passwords, API keys, access tokens, or payment
+credentials."* The page runs on loopback only, is reachable solely with a
+single-use token, accepts the form by `POST` from its own origin, and echoes no
+value back. The listener exists only while a setup or a login is pending.
+
+`zendesk_login` with `force: true` reaches the page again — a subdomain typed
+wrong, a replaced client, a different account.
+
+Environment variables always win over the Keychain, so **Claude Code with
+`ZENDESK_SUBDOMAIN` etc. set behaves exactly as it did before** and never touches
+the Keychain for its configuration at all. On Windows and Linux there is no key
+source yet ([#69](https://github.com/PersoQua-AG/zendesk-plugin/issues/69)): the
+setup page is not offered there, and the plugin says what is missing instead.
+
 ### 1. Register an OAuth client in Zendesk
 In **Zendesk Admin Center → Apps and integrations → APIs → Zendesk API →
 OAuth Clients**, create a client and set the redirect URI **exactly** to:
@@ -160,7 +196,7 @@ Claude Code plugin they are environment variables (`ZENDESK_SUBDOMAIN`,
 |---|---|---|---|
 | `zendesk_subdomain` | string | yes | `{subdomain}.zendesk.com` |
 | `oauth_client_id` | string | yes | From step 1 |
-| `oauth_client_secret` | string (sensitive) | no | From step 1 — a public client has none, and PKCE authenticates the exchange |
+| `oauth_client_secret` | string (sensitive) | yes | From step 1 — stored in the macOS Keychain when the setup page collects it, never on disk in the clear |
 | `oauth_callback_port` | number | no | Localhost redirect port (default `8976`) |
 | `security_level` | `strict`\|`standard`\|`off` | no | Prompt-injection screening (default `standard`) |
 | `markdown_conversion` | boolean | no | Markdown→HTML on writes (default `true`) |
@@ -261,10 +297,14 @@ inventory.
 - **Safe writes.** Ticket updates use optimistic concurrency (`safe_update`,
   409-on-conflict → re-fetch + confirm); tags append by default; macro apply is
   preview → confirm → persist; every write is confirmed in conversation.
-- **Secrets.** The OAuth client secret is **not** stored by this plugin at all:
-  it arrives as `ZENDESK_OAUTH_CLIENT_SECRET` (the MCPB manifest marks the field
-  `sensitive: true`, which is a request to the host, not a guarantee from here),
-  and it is optional — a public client has none. Tokens are encrypted at rest
+- **Secrets.** The OAuth client secret reaches the server either as
+  `ZENDESK_OAUTH_CLIENT_SECRET` (the MCPB manifest marks that field
+  `sensitive: true`, which is a request to the host, not a guarantee from here)
+  or from the **macOS Keychain**, where the first-run page puts it together with
+  the subdomain and the client id — three items under the service
+  `zendesk-plugin`, separate from the token-store key. It is never written to
+  disk in the clear, never logged, and never echoed back by the page that
+  collected it. Tokens are encrypted at rest
   (AES-256-GCM, file mode `0600`) with a **random 32-byte key of their own**, kept
   in the macOS Keychain and independent of the client secret: rotating the secret
   does not brick the token store, and the secret is not a decrypt-all key. On

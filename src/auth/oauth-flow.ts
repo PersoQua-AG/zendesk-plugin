@@ -102,6 +102,21 @@ function sanitizeErrorCode(raw: string): string {
 // Named in the timeout, never with the state value: a state bug must not look like a mere timeout.
 const STRAY_STATE_NOTE = '; a callback with an unexpected state was received and ignored';
 
+// The first-run setup page, as a second route on this one listener (#68). It is a route and not a
+// second server because there is one port the customer registered a redirect for, and because a page
+// that outlives the flow it belongs to is a port left open for nothing. What crosses this boundary is
+// a request and a response: this module owns the socket and the `state` check, ../tools/setup.ts owns
+// the page and what may be submitted to it.
+export interface SetupResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+}
+
+export interface SetupRoute {
+  handle: (req: IncomingMessage, url: URL) => Promise<SetupResponse>;
+}
+
 // A callback listener that is BOUND but not yet awaited. The two-step login tool needs those two
 // moments apart: it hands the user the authorization URL on the first tool call and collects the
 // callback on a later one, with the listener — and the `state` it validates — living across both.
@@ -121,6 +136,7 @@ export function startCallbackListener(
   port: number,
   expectedState: string,
   timeoutMs: number = DEFAULT_CALLBACK_TIMEOUT_MS,
+  setup?: SetupRoute,
 ): Promise<CallbackListener> {
   return new Promise<CallbackListener>((bound, bindFailed) => {
     let close!: () => void;
@@ -160,6 +176,27 @@ export function startCallbackListener(
             url = new URL(rawUrl, `http://localhost:${port}`);
           } catch {
             res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Bad request target');
+            return;
+          }
+          // The setup route, before the callback's `state` check: a first-run visit has no state yet
+          // — the configuration it is about to collect is what the authorization will be built from.
+          // It never settles the flow; what settles it is the /callback the page redirects into.
+          if (setup && url.pathname === '/setup') {
+            // Written exactly the way every other answer in this handler is written, with no guard of
+            // its own: the socket may be gone — an over-long body is dropped by destroying it, and a
+            // person can close the tab — and node drops a write to a dead response rather than
+            // throwing. A guard here would be an unreachable branch pretending to be a safety net.
+            const write = (answer: SetupResponse): void =>
+              void res.writeHead(answer.status, answer.headers).end(answer.body);
+            // A throw out of the page must take neither the pending authorization nor the server with
+            // it, and must not describe itself: this request carries the client secret.
+            void setup.handle(req, url).then(write, () =>
+              write({
+                status: 500,
+                headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                body: 'Setup failed. Call the Zendesk tool again to start over.',
+              }),
+            );
             return;
           }
           if (url.pathname !== '/callback') {

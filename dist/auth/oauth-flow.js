@@ -70,7 +70,7 @@ const STRAY_STATE_NOTE = '; a callback with an unexpected state was received and
 // Resolves only once the port is actually bound, and REJECTS on a bind failure (e.g. EADDRINUSE) —
 // so a caller never receives a listener whose callback could never land, and never has to inspect
 // an error returned as a value.
-export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
+export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS, setup) {
     return new Promise((bound, bindFailed) => {
         let close;
         // Assigned synchronously by the executor below, so that listen() can be called from THIS
@@ -109,6 +109,24 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                     }
                     catch {
                         res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Bad request target');
+                        return;
+                    }
+                    // The setup route, before the callback's `state` check: a first-run visit has no state yet
+                    // — the configuration it is about to collect is what the authorization will be built from.
+                    // It never settles the flow; what settles it is the /callback the page redirects into.
+                    if (setup && url.pathname === '/setup') {
+                        // Written exactly the way every other answer in this handler is written, with no guard of
+                        // its own: the socket may be gone — an over-long body is dropped by destroying it, and a
+                        // person can close the tab — and node drops a write to a dead response rather than
+                        // throwing. A guard here would be an unreachable branch pretending to be a safety net.
+                        const write = (answer) => void res.writeHead(answer.status, answer.headers).end(answer.body);
+                        // A throw out of the page must take neither the pending authorization nor the server with
+                        // it, and must not describe itself: this request carries the client secret.
+                        void setup.handle(req, url).then(write, () => write({
+                            status: 500,
+                            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                            body: 'Setup failed. Call the Zendesk tool again to start over.',
+                        }));
                         return;
                     }
                     if (url.pathname !== '/callback') {
