@@ -7,6 +7,7 @@ import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, st
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { createServer as createHttpServer } from 'node:http';
 import { connect, type Socket } from 'node:net';
 import { abortLoginFlow, type LoginDeps } from '../../src/tools/login.js';
@@ -44,9 +45,9 @@ export let tokensPath: string;
 // sockets cannot hold one port, and the production listener binds the number itself
 // (src/auth/oauth-flow.ts, `server.listen(port)`), which no test may change.
 //
-// What this does NOT prevent: a foreign process that deliberately binds a port inside the band.
-// Such a port makes the production listener fail its bind with a named EADDRINUSE — loud, and
-// nothing like the silent wrong-listener answers this issue is about.
+// A foreign process inside the band is the one case the claim directory cannot see (#48: an
+// unrelated `next-server` on *:20127 reddened a run). That one is settled by portIsFree() below,
+// AFTER the claim is held.
 export const PORT_BAND_FIRST = 20_000;
 export const PORT_BAND_LAST = 29_999;
 const PORT_BAND_SIZE = PORT_BAND_LAST - PORT_BAND_FIRST + 1;
@@ -179,15 +180,43 @@ function claimPort(port: number): boolean {
   }
 }
 
+// Is the port free of a listener this suite knows nothing about? (#48.)
+//
+// This runs ONLY on a band port and ONLY once its claim is held, so the #13 window stays shut: the
+// number is one no listen(0) anywhere can be given, and no other run of this user can draw it while
+// the probe's own socket is closing. Before the claim, nothing binds.
+//
+// It binds exactly as production does — src/auth/oauth-flow.ts:244 calls `server.listen(port)` with
+// no host, i.e. every interface. That is not cosmetic: measured on macOS, a probe narrowed to
+// '127.0.0.1' binds SUCCESSFULLY next to a listener already holding the same port on the wildcard
+// address, and so reports free a port the production bind then fails on.
+//
+// Node has no synchronous bind and freePort() has ~50 synchronous call sites, so the probe is a
+// short-lived node that exits non-zero on EADDRINUSE (and on any other bind error: unusable is
+// unusable). ponytail: one child process per probe, ~40 ms; make freePort() async if that ever
+// shows up in the suite time.
+function portIsFree(port: number): boolean {
+  const probe = `const s=require('node:net').createServer();s.on('error',()=>process.exit(1));s.listen(${port},()=>s.close());`;
+  return spawnSync(process.execPath, ['-e', probe]).status === 0;
+}
+
 // Where this process starts scanning. Only an optimization — the claims, not the offset, are what
 // make two acquirers disagree — so that concurrent runs do not walk the same prefix every time.
 let nextCandidate = process.pid % PORT_BAND_SIZE;
+
+// Point the scan at a chosen band port. The one way a test can put a known port in front of
+// freePort(); nothing in the suite's normal path calls it.
+export function startScanAt(port: number): void {
+  nextCandidate = port - PORT_BAND_FIRST;
+}
 
 export function freePort(): number {
   for (let tried = 0; tried < PORT_BAND_SIZE; tried += 1) {
     const port = PORT_BAND_FIRST + (nextCandidate % PORT_BAND_SIZE);
     nextCandidate += 1;
-    if (claimPort(port)) return port;
+    // The claim is kept on a port a foreign listener holds: it is unusable for every run of this
+    // user, and releasing it would only make the next acquirer pay for the same probe.
+    if (claimPort(port) && portIsFree(port)) return port;
   }
   throw new Error(
     `no unclaimed port left in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}; stale claims under ${CLAIM_DIR}?`,
