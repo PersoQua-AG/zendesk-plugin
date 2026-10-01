@@ -7,6 +7,7 @@ import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, st
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import { connect, type Socket } from 'node:net';
 import { abortLoginFlow, type LoginDeps } from '../../src/tools/login.js';
@@ -44,9 +45,10 @@ export let tokensPath: string;
 // sockets cannot hold one port, and the production listener binds the number itself
 // (src/auth/oauth-flow.ts, `server.listen(port)`), which no test may change.
 //
-// What this does NOT prevent: a foreign process that deliberately binds a port inside the band.
-// Such a port makes the production listener fail its bind with a named EADDRINUSE — loud, and
-// nothing like the silent wrong-listener answers this issue is about.
+// What a claim cannot see: a foreign process holding a band port (#48 — an unrelated `next-server`
+// on *:20127 reddened a run). portHeldOn() below narrows that AFTER the claim is held. What it does
+// not narrow is the moment between its probe and the production bind; that remnant stays what line
+// 41 describes — a named EADDRINUSE, loud.
 export const PORT_BAND_FIRST = 20_000;
 export const PORT_BAND_LAST = 29_999;
 const PORT_BAND_SIZE = PORT_BAND_LAST - PORT_BAND_FIRST + 1;
@@ -179,18 +181,151 @@ function claimPort(port: number): boolean {
   }
 }
 
+// Which address a listener outside this suite holds this port on, '' when nobody does. (#48.)
+//
+// Runs ONLY on a band port and ONLY once the claim is held, so the #13 window stays shut: nothing
+// binds before the claim, and no listen(0) anywhere can be given a band number.
+//
+// Binding is the only way to ask, and one bind is not enough. Measured, holder down the side:
+//
+//                      macOS probe        macOS prod. bind   Linux probe        Linux prod. bind
+//   holder ::          EADDRINUSE 0.0.0.0 EADDRINUSE         EADDRINUSE 0.0.0.0 EADDRINUSE
+//   holder 0.0.0.0     EADDRINUSE 0.0.0.0 succeeds           EADDRINUSE 0.0.0.0 EADDRINUSE
+//   holder 127.0.0.1   EADDRINUSE 127.0.0.1 succeeds         EADDRINUSE 0.0.0.0 EADDRINUSE
+//   holder ::1         EADDRINUSE ::1     succeeds           EADDRINUSE ::1     EADDRINUSE
+//   nobody             free               succeeds           free               succeeds
+//
+// "prod. bind" is src/auth/oauth-flow.ts:244, `server.listen(port)` with no host. On Linux it is
+// loud by itself. On macOS it is the column that MISSES three of the four, because libuv binds TCP
+// with SO_REUSEADDR and a wildcard bind therefore succeeds next to a more specific one — which then
+// takes the traffic. End to end on macOS: foreign HTTP server on 0.0.0.0:P, ours on the wildcard,
+// `GET http://127.0.0.1:P/callback` answered `FOREIGN`, with no EADDRINUSE anywhere. Silent, and
+// worse than the case #48 names. That is what the three addresses buy, and none of them is idle.
+//
+// The addresses are probed ONE AT A TIME, each socket closed before the next opens. Overlapping
+// them is what reddened CI on b940a9d: the same SO_REUSEADDR that lets a stranger hide on macOS
+// lets the probe's own sockets overlap there, and Linux refuses that — the probe's 127.0.0.1 bind
+// took EADDRINUSE from the probe's OWN 0.0.0.0 socket and called a free port held. Measured on the
+// same free port, same probe body:
+//
+//   macOS parallel   -> status 0 ""              Linux parallel   -> status 1 "127.0.0.1"
+//   macOS sequential -> status 0 ""              Linux sequential -> status 0 ""
+//
+// CI run 36845405954 printed 44 724 skips, every one of them 127.0.0.1, and then declared the band
+// exhausted.
+//
+// A child process, because Node cannot bind a NAMED address synchronously: `listen(port, host)`
+// goes through lookupAndListen -> dns.lookup, and `server.listening` is still false when listen()
+// returns, even for a free port and a numeric literal host (measured). An async freePort() is not
+// available either — it is called from synchronous describe bodies
+// (tests/auth/oauth-flow.callback-edges.test.ts:9, tests/auth/oauth-flow.stray-callback.test.ts:35).
+//
+// Exit 0 = free; 1 = EADDRINUSE, the one error that means a stranger is there; 2 = some other bind
+// error. Everything that is not 0 or 1 is "I could not look", and that is NOT an answer: read as
+// taken it burns the band one claim at a time (measured with 192.0.2.1, EADDRNOTAVAIL on both
+// platforms, which the first shape of this probe reported as a holder), read as free it hands out a
+// port a stranger holds. So it throws, and names the probe rather than the claims. Throwing beats
+// skipping without a claim: a bind error that is not EADDRINUSE is a property of the HOST, not of
+// the port, so every candidate would fail the same way and the band would be walked to the end
+// before saying anything.
+const PROBE_ADDRESSES = ['0.0.0.0', '127.0.0.1', '::1'] as const;
+const PROBE_TIMEOUT_MS = 2_000;
+
+// How many candidates may be PROBED in one pass of freePort() before it moves on. Not how many may
+// be examined: a port another run has claimed costs a link() and no probe at all, and the claims
+// are what make concurrent runs disagree, so that walk stays uncapped — a fully claimed band is
+// 2 774 ms on macOS and 187 ms on Linux of blocked event loop (measured: claimPort() against a
+// pre-filled band), which is a cost, not a hazard.
+//
+// 64 because a probe costs 23.8 ms on macOS and 16.2 ms on Linux (measured, 25 probes each), so one
+// pass is at most 1.5 s / 1.0 s and both passes 3.0 s / 2.0 s — the same order as the 5.2 s the
+// slowest single file already holds a claim for. Without a ceiling the worst case is
+// PORT_BAND_SIZE probes, and with PROBE_TIMEOUT_MS each that is 5.5 hours of blocked event loop
+// that no vitest timeout can interrupt. Sixty-four probed band ports all held by strangers is not
+// a port problem anyway; #48 was one.
+export const MAX_PROBES_PER_ACQUISITION = 64;
+
+export function portHeldOn(port: number, addresses: readonly string[] = PROBE_ADDRESSES): string {
+  const probe =
+    `const n=require('node:net'),{writeSync}=require('node:fs'),{once}=require('node:events');` +
+    `(async()=>{for(const h of ${JSON.stringify(addresses)}){const s=n.createServer();s.listen(${port},h);` +
+    `try{await once(s,'listening')}catch(e){writeSync(1,e.code+' '+h);process.exit(e.code==='EADDRINUSE'?1:2)}` +
+    `s.close();await once(s,'close')}process.exit(0)})()`;
+  const run = spawnSync(process.execPath, ['-e', probe], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8' });
+  if (run.status === 0) return '';
+  if (run.status === 1) return (run.stdout ?? '').split(' ')[1] || 'an address it did not name';
+  throw new Error(
+    `the port probe for ${port} could not run (status ${run.status}, signal ${run.signal}` +
+      `${run.stdout ? `, ${run.stdout}` : ''}${run.error ? `, ${run.error.message}` : ''}) — ` +
+      `this is the probe failing, not a stale claim`,
+  );
+}
+
 // Where this process starts scanning. Only an optimization — the claims, not the offset, are what
 // make two acquirers disagree — so that concurrent runs do not walk the same prefix every time.
 let nextCandidate = process.pid % PORT_BAND_SIZE;
 
 export function freePort(): number {
-  for (let tried = 0; tried < PORT_BAND_SIZE; tried += 1) {
-    const port = PORT_BAND_FIRST + (nextCandidate % PORT_BAND_SIZE);
-    nextCandidate += 1;
-    if (claimPort(port)) return port;
+  const heldPorts: string[] = [];
+  // TWO passes. The first spends the probe budget; every port it rejects KEEPS its claim, so the
+  // second walks past all of them for a link() each and spends a fresh budget on ports nobody has
+  // probed yet. Without it the refusal landed while the next candidate was free — measured with 64
+  // strangers in front: `freePort()` threw, `portHeldOn()` on the very next candidate returned '',
+  // and the immediately following `freePort()` succeeded (macOS 26028/26029, Linux 20800/20801).
+  // A failure the next call undoes is a flake, and which worker draws it is decided by
+  // `nextCandidate = process.pid % PORT_BAND_SIZE` — the same pid positioning #48 is about. This PR
+  // may not add one of those.
+  let bandExhausted = false;
+  for (let pass = 0; pass < 2 && !bandExhausted; pass += 1) {
+    let probed = 0;
+    let budgetSpent = false;
+    for (let tried = 0; tried < PORT_BAND_SIZE; tried += 1) {
+      if (probed >= MAX_PROBES_PER_ACQUISITION) {
+        budgetSpent = true;
+        break;
+      }
+      const port = PORT_BAND_FIRST + (nextCandidate % PORT_BAND_SIZE);
+      nextCandidate += 1;
+      // A port another run claimed — or one THIS pass already rejected — costs a link() and
+      // nothing else, so it does not count against the probe budget.
+      if (!claimPort(port)) continue;
+      probed += 1;
+      const refusedAt = portHeldOn(port);
+      if (refusedAt === '') return port;
+      heldPorts.push(`${port} (${refusedAt})`);
+      // The claim is KEPT: it names this pid, so it holds the port against every concurrent run for
+      // as long as this process lives, and the sweep takes it back once the pid is gone. Releasing
+      // it would only make the next acquirer — and the second pass above — pay for the same probe.
+      //
+      // And it is said out loud, because the staleness assumption at line 69 had exactly one
+      // observation that could contradict it — the named EADDRINUSE from src/tools/login.ts:113 —
+      // and skipping the port here is what takes that observation away.
+      //
+      // The address is the FIRST one that refused the bind, which is not always the one the
+      // stranger sits on: on Linux any IPv4 holder — wildcard, 0.0.0.0 or 127.0.0.1 — is refused at
+      // 0.0.0.0, the first address probed (measured, both platforms; the matrix is above
+      // portHeldOn). The wording says that rather than naming an address the holder may not be on.
+      process.stderr.write(
+        `[test-ports] skipping band port ${port}: a listener outside this suite holds it; first ` +
+          `probe address refused: ${refusedAt}\n`,
+      );
+    }
+    bandExhausted = !budgetSpent;
+  }
+  if (bandExhausted) {
+    throw new Error(
+      `no unclaimed port left in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}; stale claims under ${CLAIM_DIR}?`,
+    );
   }
   throw new Error(
-    `no unclaimed port left in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}; stale claims under ${CLAIM_DIR}?`,
+    `gave up after probing ${heldPorts.length} band ports in two passes, from ${heldPorts[0]}, and ` +
+      `finding every one of them held: ${heldPorts.slice(0, 5).join(', ')}` +
+      `${heldPorts.length > 5 ? ', …' : ''}. That is ${heldPorts.length} of the ${PORT_BAND_SIZE} ` +
+      `ports in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}, so it says nothing about the rest of the ` +
+      `band. Either this host really has that many foreign listeners, or the probe is answering ` +
+      `wrongly — see portHeldOn above; a probe that collides with its own sockets looks exactly ` +
+      `like this. The claims this path leaves behind under ${CLAIM_DIR} are live, not stale, while ` +
+      `this process runs, and become sweepable wreckage the moment it exits.`,
   );
 }
 
