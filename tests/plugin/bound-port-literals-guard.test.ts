@@ -64,7 +64,11 @@ describe('the bound-port guard as a script', () => {
     const missing = runGuard(join(fixture({}), 'gone'));
     expect(missing.status).toBe(1);
     expect(missing.stderr).toContain('ENOENT');
-    expect(missing.stderr).not.toContain('at Object.readdirSync');
+    // Positive, not negative. `not.toContain('at Object.readdirSync')` was asserted here and was
+    // empty: that frame is the CommonJS spelling, and this guard is ESM with a named import, so
+    // the string cannot occur whether or not readdirSync is guarded. Measured: with the try/catch
+    // ablated the whole file still passed. This line is red against that ablation.
+    expect(missing.stderr).toContain('Cannot scan');
   });
 
   it('names the file and the line of a literal port, and exits non-zero', () => {

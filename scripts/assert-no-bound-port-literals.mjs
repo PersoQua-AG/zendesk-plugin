@@ -32,10 +32,23 @@ const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|li
 // four, so the most plausible misedit of all — naming the parent of the guarded directory — would
 // scan four files, miss all 42, and report success. A minimum file count cannot separate them
 // either: tests/tools has 76 .ts files, tests/auth has 42. What does separate them is the thing
-// the guarded tree is guarded FOR. Measured over all 26 directories in this repo that hold .ts
-// files: exactly one calls freePort(), and that is tests/auth (18 of its 42 files). All 25 other
-// roots are refused. The cost is that this hangs on a name — renaming freePort() makes the guard
-// refuse its own tree. That is loud, not silent, which is the whole reason it is acceptable.
+// the guarded tree is guarded FOR. Measured over all 27 directories in this repo that hold a
+// tracked .ts file: two carry the mark. tests/auth, the guarded tree, is one (18 of its 42
+// files). The other is tests/plugin, which carries it for a reason this file created: the guard's
+// own test writes `const port = freePort();` into its fixtures as a string constant, so the word
+// is in that directory although nothing there acquires a port. So the honest claim is 25 of 27
+// roots refused, and the one false pass is the one this PR produced. It stays, for two measured
+// reasons: a tree that slips through is still SCANNED, and tests/plugin is not clean — it holds
+// literal ports in both guard tests — so pointing the guard there is loud at the other end,
+// exit 1 with findings. A marker tightened to ignore string literals would need the parser this
+// guard deliberately does not have (#74).
+// Two further costs, named rather than discovered later:
+//   - this hangs on a name. Renaming freePort() makes the guard refuse its own tree. Loud, not
+//     silent, which is the whole reason it is acceptable;
+//   - a directory that holds a literal port but acquires nothing is refused for the wrong-tree
+//     reason BEFORE its literals are reported. #73 scenario 3 asks a fixture with deps(18000) to
+//     be named by file and line; a fixture now has to carry the mark as well to get that far.
+//     Both outcomes are non-zero, so nothing passes quietly, but the message differs.
 // Together with "only files directly in the root", a tree is either scanned whole or refused.
 const ACQUIRES_PORTS = /\bfreePort\(/;
 
@@ -59,14 +72,15 @@ function isBindablePort(literal) {
 
 // Repo-relative in every case, so the output is deterministic wherever the caller's directory or
 // TMPDIR happens to sit: `tests/auth/login-harness.ts:12` in a CI log is what has to be clickable.
-const show = (file) => relative(root, file);
+const show = (file) => relative(root, file) || '.';
 
 let entries;
 try {
   entries = readdirSync(target);
 } catch (err) {
-  // A message, not a stack trace: the sibling guard is held to the same bar
-  // (tests/plugin/executor-safety-guard.test.ts, "Nothing to inspect").
+  // A message, not a stack trace. Ablated, this prints 17 lines: a node:fs source excerpt, the
+  // Error, five stack frames, the errno object and the node banner. The sibling guard is held to
+  // the same bar (tests/plugin/executor-safety-guard.test.ts, "Nothing to inspect").
   console.error(`Cannot scan ${target}: ${err.code ?? err.message}.`);
   process.exit(1);
 }
