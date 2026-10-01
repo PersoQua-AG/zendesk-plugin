@@ -4,12 +4,12 @@
 // THE CALLER NAMES THE TREE (#73). The scan root is argv[2] and there is no default. Measured on
 // PR #72, mutation M3: while the guard chose its own directory, bending that choice to another
 // directory still reported success — "scanned the wrong tree" and "found nothing" produced the
-// same green. Here there is no directory constant to bend: the tree comes from package.json and
-// from CI, and a root with no .ts file in it is refused instead of reported clean.
+// same green. Here there is no directory constant to bend, and a root that is not the guarded
+// tree is refused instead of reported clean.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, relative, resolve as resolvePath, sep } from 'node:path';
+import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 
 // This reads source text, so it is evadable by construction. Blind spots, all deliberate:
 //   - only the call names listed below are matched;
@@ -22,17 +22,29 @@ import { dirname, join, relative, resolve as resolvePath, sep } from 'node:path'
 //     misses on a cast such as `18000 as Port`, so the call site keeps winning over the number;
 //   - a mention in a comment or a string counts. That no longer forces anyone to write a sample
 //     split as `'deps' + '(18000)'`: the guard's own test lives in tests/plugin and its samples
-//     live in temp directories, both outside any tree this guard is pointed at;
+//     live in temp directories, neither of which is tests/auth. Point this script AT tests/plugin
+//     and it does report the literals in that test file — correctly, they are written there;
 //   - only files directly in the given root are scanned, not its subfolders.
 // Catching the rest needs a parser or a runtime check, not a wider regex (out of scope, #74).
 const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|listen|rebind|config|deps)\(\s*(\d[\d_]*)\b/g;
 
+// THE MARK OF THE GUARDED TREE. "Holds .ts files" does not identify a tree: `tests` itself holds
+// four, so the most plausible misedit of all — naming the parent of the guarded directory — would
+// scan four files, miss all 42, and report success. A minimum file count cannot separate them
+// either: tests/tools has 76 .ts files, tests/auth has 42. What does separate them is the thing
+// the guarded tree is guarded FOR. Measured over all 26 directories in this repo that hold .ts
+// files: exactly one calls freePort(), and that is tests/auth (18 of its 42 files). All 25 other
+// roots are refused. The cost is that this hangs on a name — renaming freePort() makes the guard
+// refuse its own tree. That is loud, not silent, which is the whole reason it is acceptable.
+// Together with "only files directly in the root", a tree is either scanned whole or refused.
+const ACQUIRES_PORTS = /\bfreePort\(/;
+
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-if (!process.argv[2]) {
-  console.error('Expected a scan root: node scripts/assert-no-bound-port-literals.mjs <dir>');
-  console.error('There is no default on purpose (#73): a guard that picks its own tree cannot');
-  console.error('tell a clean tree from the wrong one — both come out green.');
+// Exactly one, not "at least one": a second root used to be dropped without a word, so
+// `check:ports tests/auth tests/plugin` would have guarded half of what it named and said nothing.
+if (process.argv.length !== 3) {
+  console.error('Expected exactly one scan root: node scripts/assert-no-bound-port-literals.mjs <dir>');
   process.exit(1);
 }
 // Resolved against the repo root, so a relative argument is convenient and an absolute one (the
@@ -45,37 +57,49 @@ function isBindablePort(literal) {
   return port >= 1 && port <= 65_535;
 }
 
-// Findings are named relative to the repo root, which is what `tests/auth/login-harness.ts:12` in
-// a CI log has to be to be clickable. A temp fixture outside the repo keeps its absolute path.
-const show = (file) => (file.startsWith(root + sep) ? relative(root, file) : file);
+// Repo-relative in every case, so the output is deterministic wherever the caller's directory or
+// TMPDIR happens to sit: `tests/auth/login-harness.ts:12` in a CI log is what has to be clickable.
+const show = (file) => relative(root, file);
 
 let entries;
 try {
   entries = readdirSync(target);
 } catch (err) {
+  // A message, not a stack trace: the sibling guard is held to the same bar
+  // (tests/plugin/executor-safety-guard.test.ts, "Nothing to inspect").
   console.error(`Cannot scan ${target}: ${err.code ?? err.message}.`);
   process.exit(1);
 }
 
 const files = entries.filter((f) => f.endsWith('.ts')).sort();
-// An existing directory with nothing to scan is the M3 symptom, so it is an error, not a pass.
-// The cut is "no .ts file here": it catches an empty, a missing-after-move or a non-source root.
-// It does not catch a root that holds unrelated .ts files — pointing at one is a visible edit to
-// package.json or to ci.yml, and the line below prints the root and the count in every run.
-if (files.length === 0) {
-  console.error(`No .ts file directly in ${target}.`);
-  console.error('That is not a test tree, so a clean result here would mean nothing. Name the tree');
-  console.error('to scan, for example tests/auth.');
+const sources = [];
+for (const file of files) {
+  const path = join(target, file);
+  try {
+    sources.push([path, readFileSync(path, 'utf8')]);
+  } catch (err) {
+    // Exit 2, not 1. An unreadable entry — a mode-000 file, or a directory named `x.ts` — used to
+    // crash here with exit 1, the very code that means "a fixed port was found". "Could not look"
+    // must not be spelled like "looked and found"; tests/auth/login-harness.ts draws the same line
+    // in its probe child, 1 for the expected refusal and 2 for every other failure.
+    console.error(`Cannot read ${show(path)}: ${err.code ?? err.message}.`);
+    process.exit(2);
+  }
+}
+
+if (!sources.some(([, source]) => ACQUIRES_PORTS.test(source))) {
+  console.error(`Not the guarded tree: no file directly in ${show(target)} calls freePort().`);
+  console.error(`${files.length} .ts file(s) looked at. A tree that never acquires a port is not`);
+  console.error('the tree this guard is for, so a clean result here would mean nothing.');
+  console.error('Name the tree to scan, for example tests/auth.');
   process.exit(1);
 }
 
-const findings = files.flatMap((file) => {
-  const path = join(target, file);
-  const source = readFileSync(path, 'utf8');
-  return [...source.matchAll(BIND_CALL)]
+const findings = sources.flatMap(([path, source]) =>
+  [...source.matchAll(BIND_CALL)]
     .filter(([, , literal]) => isBindablePort(literal))
-    .map((m) => `${show(path)}:${source.slice(0, m.index).split('\n').length} ${m[1]}(${m[2]})`);
-});
+    .map((m) => `${show(path)}:${source.slice(0, m.index).split('\n').length} ${m[1]}(${m[2]})`),
+);
 
 // Printed in every outcome, pass or fail: a green line that names the tree and the count is the
 // only way a reader can tell "clean" from "looked at almost nothing".
@@ -86,7 +110,7 @@ if (findings.length > 0) {
   for (const finding of findings) console.error(`  - ${finding}`);
   console.error(
     '\nA fixed port collides with a concurrent `vitest run` (#23). Acquire one instead:' +
-      '\n  const port = await freePort();\n',
+      '\n  const port = freePort();\n',
   );
   process.exit(1);
 }
