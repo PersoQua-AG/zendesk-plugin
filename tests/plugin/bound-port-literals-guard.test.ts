@@ -18,7 +18,9 @@ afterEach(() => {
 });
 
 // Every fixture meant to BE a guarded tree carries its mark — one freePort() call — exactly as
-// tests/auth does. A tree that never acquires a port is refused; see the script header.
+// tests/auth does. An unmarked tree is still scanned and its findings are still named, but it can
+// never exit 0; keeping the mark here is what makes these cases exercise the guarded-tree path
+// rather than the wrong-tree one. See the script header.
 const ACQUIRES = 'const port = freePort();\n';
 
 function fixture(files: Record<string, string>): string {
@@ -53,6 +55,9 @@ describe('the bound-port guard as a script', () => {
 
   // Issue #73, scenario 2. "Holds .ts files" is not the cut: `tests` holds four of them and would
   // have reported success while missing all 42 files of tests/auth below it.
+  // These roots are scanned now, not skipped, so some of them (tests/plugin) are refused WITH
+  // findings rather than only for the missing mark. The claim here is unchanged and is the only
+  // one scenario 2 makes: none of them exits 0, by whichever of the two reasons.
   it('refuses every root that is not the tree it guards, instead of reporting it clean', () => {
     for (const wrong of ['tests', 'tests/util', 'tests/tools', 'tests/plugin', 'src/auth']) {
       const run = runGuard(wrong);
@@ -112,25 +117,34 @@ describe('the bound-port guard as a script', () => {
     expect(stdout).toContain('Every bound port is acquired');
   });
 
-  // The header refuses to narrow the marker on one measured property: a tree that fools the
-  // marker is still SCANNED, so a deception costs more inspection, not less. That property is
-  // what the decision rests on, so it is pinned here rather than asserted in prose. The two runs
-  // have to be told apart by their message — "both are non-zero" would also hold for a crash.
-  it('scans a tree that only pretends to acquire ports, and refuses the same tree without the word', () => {
+  // #73 scenario 3 to the letter: a fixture directory containing deps(18000), named by file and
+  // line, exit non-zero — and the mark is not a precondition for getting that far. This case used
+  // to assert the opposite (`not.toMatch(/p\.ts:3/)`), because the marker returned before the
+  // scan; the marker now gates success only, so the scan always happens.
+  //
+  // The property the marker's benignity rested on — "a tree that fools the marker is still
+  // SCANNED, so a deception costs more inspection, not less" — is no longer a property worth
+  // pinning: every tree is scanned now, deceived or not, so the old contrast is structural. What
+  // replaces it is the one thing that can still be lost: the unmarked tree must carry BOTH
+  // notices. Findings alone would make a run aimed at the wrong tree look like an ordinary hit.
+  it('names the literals of an unmarked tree, and says it is the wrong tree as well', () => {
     const literal = { 'p.ts': '\n\ndeps(18000)\n' };
-    // The mark sits in a comment, in a different file than the literal: nothing here acquires a
-    // port, and the guard cannot tell. The deception buys a full scan.
+
+    const bare = runGuard(fixture(literal));
+    expect(bare.status).toBe(1);
+    expect(bare.stderr).toMatch(/p\.ts:3 deps\(18000\)/);
+    expect(bare.stderr).toContain('Not the guarded tree');
+
+    // The contrast that remains: a marked tree reports the same finding WITHOUT the wrong-tree
+    // notice, so the two runs are still told apart by their message, not only by their exit code.
+    // The mark sits in a comment in a second file — nothing here acquires a port and the guard
+    // cannot tell, which is the false pass the header accounts for.
     const pretending = runGuard(
       fixture({ ...literal, 'helper.ts': '// freePort( — nothing in here acquires a port\n' }),
     );
     expect(pretending.status).toBe(1);
     expect(pretending.stderr).toMatch(/p\.ts:3 deps\(18000\)/);
     expect(pretending.stderr).not.toContain('Not the guarded tree');
-
-    const bare = runGuard(fixture(literal));
-    expect(bare.status).toBe(1);
-    expect(bare.stderr).toContain('Not the guarded tree');
-    expect(bare.stderr).not.toMatch(/p\.ts:3 deps\(18000\)/);
   });
 
   // The wiring IS the scan root now, so an unwitnessed edit there is the M3 mutation one level up.

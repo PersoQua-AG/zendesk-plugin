@@ -40,24 +40,21 @@ const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|li
 // files). The other is tests/plugin, which carries it for a reason this file created: the guard's
 // own test writes `const port = freePort();` into its fixtures as a string constant, so the word
 // is in that directory although nothing there acquires a port. So the honest claim is 25 of 27
-// roots refused, and the one false pass is the one this PR produced. It stays, for two measured
-// reasons: a tree that slips through is still SCANNED, and tests/plugin is not clean — it holds
-// literal ports in both guard tests — so pointing the guard there is loud at the other end,
-// exit 1 with findings. A marker tightened to ignore string literals would need the parser this
-// guard deliberately does not have (#74). That a deception costs a full scan rather than a
-// silent pass is the property this rests on, so it is pinned, not asserted
-// (tests/plugin/bound-port-literals-guard.test.ts, "only pretends to acquire ports").
+// roots refused, and the one false pass is the one this PR produced. It costs nothing: tests/plugin
+// is not clean — it holds literal ports in both guard tests — so pointing the guard there is loud
+// at the other end, exit 1 with findings. A marker tightened to ignore string literals would need
+// the parser this guard deliberately does not have (#74).
 // Note for anyone widening check:ports to several trees: tests/plugin can never be one of them.
 // The guard tests have to contain literal ports to test the guard, so that tree is dirty by
 // construction — it reports 10 findings today.
-// Two further costs, named rather than discovered later:
-//   - this hangs on a name. Renaming freePort() makes the guard refuse its own tree. Loud, not
-//     silent, which is the whole reason it is acceptable;
-//   - a directory that holds a literal port but acquires nothing is refused for the wrong-tree
-//     reason BEFORE its literals are reported. #73 scenario 3 asks a fixture with deps(18000) to
-//     be named by file and line; a fixture now has to carry the mark as well to get that far.
-//     Both outcomes are non-zero, so nothing passes quietly, but the message differs.
-// Together with "only files directly in the root", a tree is either scanned whole or refused.
+// The one cost, named rather than discovered later: this hangs on a name. Renaming freePort()
+// makes the guard refuse its own tree. Loud, not silent, which is the whole reason it is
+// acceptable.
+// What the marker does NOT cost any more: it no longer decides whether a tree is scanned, only
+// whether a clean scan may report success (see the gate below), so a tree that slips it is still
+// scanned whole, and an unmarked tree holding a literal is named by file and line AND told it is
+// the wrong tree. Both notices, pinned in
+// tests/plugin/bound-port-literals-guard.test.ts, "names the literals of an unmarked tree".
 const ACQUIRES_PORTS = /\bfreePort\(/;
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -109,13 +106,12 @@ for (const file of files) {
   }
 }
 
-if (!sources.some(([, source]) => ACQUIRES_PORTS.test(source))) {
-  console.error(`Not the guarded tree: no file directly in ${show(target)} calls freePort().`);
-  console.error(`${files.length} .ts file(s) looked at. A tree that never acquires a port is not`);
-  console.error('the tree this guard is for, so a clean result here would mean nothing.');
-  console.error('Name the tree to scan, for example tests/auth.');
-  process.exit(1);
-}
+// THE MARKER GATES SUCCESS, NOT THE SCAN. It used to return before the scan, which made an
+// unmarked tree holding deps(18000) report "wrong tree" and no file, no line — louder than
+// nothing, but not what #73 scenario 3 asks for. Every tree is scanned now and every finding is
+// named; the marker only decides whether a clean result is allowed to mean anything. Scenario 2
+// is untouched by that: an unmarked tree still never exits 0, with findings or without.
+const marked = sources.some(([, source]) => ACQUIRES_PORTS.test(source));
 
 const findings = sources.flatMap(([path, source]) =>
   [...source.matchAll(BIND_CALL)]
@@ -134,7 +130,17 @@ if (findings.length > 0) {
     '\nA fixed port collides with a concurrent `vitest run` (#23). Acquire one instead:' +
       '\n  const port = freePort();\n',
   );
-  process.exit(1);
 }
+
+// Both notices, never one: findings alone would make a run aimed at the wrong tree by accident
+// look like an ordinary hit, and the reader would fix the fixture instead of the argument.
+if (!marked) {
+  console.error(`Not the guarded tree: no file directly in ${show(target)} calls freePort().`);
+  console.error(`${files.length} .ts file(s) looked at. A tree that never acquires a port is not`);
+  console.error('the tree this guard is for, so a clean result here would mean nothing.');
+  console.error('Name the tree to scan, for example tests/auth.');
+}
+
+if (findings.length > 0 || !marked) process.exit(1);
 
 console.log('Every bound port is acquired, none is written as a literal.');
