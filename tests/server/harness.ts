@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../../src/server.js';
+import { readStoreKey } from '../auth/store-key-stub.js';
 
 const dirs: string[] = [];
 
@@ -31,7 +32,7 @@ export function unconfiguredEnv(): NodeJS.ProcessEnv {
 }
 
 export async function connect(env: NodeJS.ProcessEnv): Promise<Client> {
-  const { server } = createServer(env);
+  const { server } = createServer(env, { readStoreKey });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'prompts', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);

@@ -27,6 +27,9 @@ import { TokenStore, type StoredTokens } from '../auth/token-store.js';
 export interface LoginDeps {
   config: OAuthConfig;
   tokensPath: string;
+  // The token store's encryption key (a random Keychain value, not the client secret) — see
+  // ../auth/store-key.ts.
+  tokenStoreKey: string;
   // Set when the extension started with incomplete configuration: every login attempt reports what
   // to fill in rather than opening a doomed flow. Then `config` carries no usable values.
   configError?: string | null;
@@ -85,7 +88,7 @@ export function abortLoginFlow(): void {
 // so, because silently discarding stored credentials is exactly what a user wants explained.
 function readExistingTokens(deps: LoginDeps): { tokens: StoredTokens | null; unreadable: boolean } {
   try {
-    const tokens = new TokenStore(deps.tokensPath, deps.config.clientSecret).load();
+    const tokens = new TokenStore(deps.tokensPath, deps.tokenStoreKey).load();
     return { tokens: tokens?.refreshToken ? tokens : null, unreadable: false };
   } catch {
     return { tokens: null, unreadable: true };
@@ -179,7 +182,7 @@ async function collectFlow(
 
   try {
     const tokens = await exchange(deps.config, outcome.result.code, flow.verifier, outcome.result.redirectUri);
-    new TokenStore(deps.tokensPath, deps.config.clientSecret).save({
+    new TokenStore(deps.tokensPath, deps.tokenStoreKey).save({
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresAt: Date.now() + tokens.expiresIn * 1000,

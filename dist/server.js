@@ -2,12 +2,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { AuthManager } from './auth/auth-manager.js';
 import { TokenStore } from './auth/token-store.js';
-import { defaultDataDir, resolveAuthConfig, stripPlaceholders, USER_CONFIG_FIELD_BY_ENV, } from './auth/config.js';
+import { dataDirOf, DEFAULT_CALLBACK_PORT, resolveAuthConfig, stripPlaceholders, USER_CONFIG_FIELD_BY_ENV, } from './auth/config.js';
 import { warnConfig } from './util/warn-config.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
 import { ResponseCache } from './client/cache.js';
 import { registerAuthTools } from './register/auth.js';
+import { registerDiagnosticsTool } from './register/diagnostics.js';
+import { runLogin } from './tools/login.js';
 import { registerCoreTools } from './register/core.js';
 import { registerTicketTools } from './register/tickets.js';
 import { registerSearchTools } from './register/search.js';
@@ -67,15 +69,19 @@ function parseMarkdownDefault(raw) {
         `default, rather than reading it as a "no".`);
     return true;
 }
-function resolveOrDegrade(env) {
+function resolveOrDegrade(env, readStoreKey) {
     try {
-        return { ok: true, ...resolveAuthConfig(env) };
+        // The spread READS tokenStoreKey, which is where the Keychain is actually reached — deliberately
+        // inside this try, so a key source that cannot answer (another platform, a locked keychain)
+        // degrades with its message like any other incomplete configuration instead of killing the server.
+        return { ok: true, ...resolveAuthConfig(env, readStoreKey) };
     }
     catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         // Same precedence as resolveAuthConfig: an explicit CLAUDE_PLUGIN_DATA wins, so the cache and
-        // the token store stay in the configured directory even while the configuration is incomplete.
-        const dataDir = env.CLAUDE_PLUGIN_DATA || defaultDataDir(env);
+        // the token store stay in the configured directory even while the configuration is incomplete —
+        // but a relative one is dropped here rather than honoured, since it is why we may be degrading.
+        const dataDir = dataDirOf(env);
         return {
             ok: false,
             reason: `${reason} Open Settings \u2192 Extensions \u2192 Zendesk, complete the configuration, then reload the extension.`,
@@ -105,7 +111,7 @@ function openCacheOrDegrade(auth) {
 }
 // runLogin answers with configError before it reads anything else, so these values are never used;
 // they only satisfy the LoginDeps shape while the configuration is incomplete.
-const NO_OAUTH_CONFIG = { subdomain: '', clientId: '', clientSecret: '', callbackPort: 0, scopes: [] };
+const NO_OAUTH_CONFIG = { subdomain: '', clientId: '', callbackPort: 0, scopes: [] };
 // Build and fully wire the MCP server (auth, rate buckets, cache, ctx, all tool registration)
 // without connecting a transport — so the wiring is importable and testable. Reads env from the
 // argument (defaults to process.env) so a test can inject a fixture environment.
@@ -113,16 +119,29 @@ export function createServer(rawEnv = process.env, deps = {}) {
     // Drop unsubstituted ${user_config.*} placeholders once, up front, so every downstream default
     // (security level, markdown flag, report config) sees "absent" rather than a literal placeholder.
     const env = stripPlaceholders(rawEnv);
-    const resolved = resolveOrDegrade(env);
+    const resolved = resolveOrDegrade(env, deps.readStoreKey);
     const { auth, cache, cacheOk } = deps.cache
         ? { auth: resolved, cache: deps.cache, cacheOk: true }
         : openCacheOrDegrade(resolved);
     const { tokensPath } = auth;
     const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
     const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
+    // Only the local (stdio/extension) path can receive the localhost OAuth callback; an injected
+    // TokenProvider means the remote bridge already owns authorization. Kept out of ctx so the OAuth
+    // client secret inside LoginDeps stays out of reach of the other 64 registrars.
+    const login = deps.authManager
+        ? undefined
+        : auth.ok
+            ? { config: auth.config, tokensPath, tokenStoreKey: auth.tokenStoreKey }
+            : { config: NO_OAUTH_CONFIG, tokensPath, tokenStoreKey: '', configError: auth.reason };
     const authManager = (cacheOk ? deps.authManager : undefined) ??
         (auth.ok
-            ? new AuthManager(new TokenStore(tokensPath, auth.config.clientSecret), auth.config)
+            ? new AuthManager(new TokenStore(tokensPath, auth.tokenStoreKey), auth.config, undefined, 
+            // The first tool call without usable credentials starts the authorization itself and
+            // answers with the URL. Through runLogin, so it shares the ONE queue, the ONE flow and the
+            // ONE listener with zendesk_login — two concurrent tool calls cannot open two of either.
+            // Nothing opens a browser: the person clicks the URL on their own device (decision D3).
+            login && (() => runLogin(login)))
             : // Stands in for AuthManager while the configuration is incomplete: every Zendesk request
                 // fails at the token boundary with the actionable message instead of reaching the network.
                 { getAccessToken: () => Promise.reject(new Error(auth.reason)) });
@@ -130,7 +149,7 @@ export function createServer(rawEnv = process.env, deps = {}) {
     const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
     const subdomain = auth.ok ? auth.config.subdomain : '';
     const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
-    const server = new McpServer({ name: 'zendesk', version: '1.0.1' });
+    const server = new McpServer({ name: 'zendesk', version: '1.1.0' });
     const ctx = {
         httpClient,
         cache,
@@ -138,14 +157,18 @@ export function createServer(rawEnv = process.env, deps = {}) {
         markdownDefault,
         reportConfig: parseReportConfig(env),
     };
-    // Only the local (stdio/extension) path can receive the localhost OAuth callback; an injected
-    // TokenProvider means the remote bridge already owns authorization. Kept out of ctx so the OAuth
-    // client secret inside LoginDeps stays out of reach of the other 64 registrars.
-    registerAuthTools(server, deps.authManager
-        ? undefined
-        : auth.ok
-            ? { config: auth.config, tokensPath }
-            : { config: NO_OAUTH_CONFIG, tokensPath, configError: auth.reason });
+    registerAuthTools(server, login);
+    // Local path only, on the same condition as the login tool: on the remote bridge the hostname and
+    // the loopback bind belong to the operator's machine, not to the user who asked.
+    //
+    // rawEnv, not the stripped copy: the question it answers is whether the HOST substituted the two
+    // variables, and stripPlaceholders has already deleted the evidence from `env`.
+    if (login) {
+        registerDiagnosticsTool(server, {
+            rawEnv,
+            callbackPort: auth.ok ? auth.config.callbackPort : DEFAULT_CALLBACK_PORT,
+        });
+    }
     registerCoreTools(server, ctx);
     registerTicketTools(server, ctx);
     registerSearchTools(server, ctx);

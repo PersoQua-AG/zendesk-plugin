@@ -11,6 +11,7 @@ const NET = /^(node:)?(https?|http2|net|tls|dgram)$|^(undici|axios|node-fetch|ex
 const NET_ALLOWED = [
   'src/auth/oauth-flow.ts node:http', // OAuth loopback callback listener (createServer)
   'src/remote/remote-server.ts express', // remote MCP HTTP server
+  'src/tools/diagnostics.ts node:http', // zendesk_diagnostics probes the callback bind per family
 ];
 
 describe('o365-bridge: the plugin itself only reaches Zendesk (SKILL.md:8)', () => {

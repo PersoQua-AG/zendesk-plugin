@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { connect } from 'node:net';
 import { waitForAuthorizationCode } from '../../src/auth/oauth-flow.js';
-import { freePort } from './login-harness.js';
+import { freePort, occupyPort } from './login-harness.js';
 
 function listenOn(port: number): Promise<Server> {
   return new Promise((resolve) => {
@@ -35,11 +35,12 @@ async function pipelineTwoCallbacks(port: number): Promise<void> {
 describe('waitForAuthorizationCode robustness', () => {
   it('rejects (does not throw uncaught) when the callback port is already in use', async () => {
     const port = freePort();
-    const blocker = await listenOn(port);
+    // Both loopback families, since the listener binds both: one left free and it comes up.
+    const release = await occupyPort(port);
     try {
       await expect(waitForAuthorizationCode(port, 'state', 5_000)).rejects.toThrow(/server error/i);
     } finally {
-      await new Promise<void>((r) => blocker.close(() => r()));
+      await release();
     }
   });
 

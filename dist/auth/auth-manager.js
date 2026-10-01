@@ -1,39 +1,49 @@
 import { refreshAccessToken } from './oauth-flow.js';
 const EXPIRY_SKEW_MS = 60_000;
+// What the token boundary says when nothing can start a login from here (the CLI, the remote bridge).
+const NO_AUTHORIZATION = 'No Zendesk authorization found. Run the zendesk_login tool to authorize (from a terminal: `npm run authorize`).';
+const UNREADABLE_STORE = 'Stored Zendesk credentials could not be read (encryption secret changed or file corrupt). ' +
+    'Run the zendesk_login tool to re-authorize.';
 export class AuthManager {
     store;
     config;
     refresh;
+    startLogin;
     cached = null;
     inFlightRefresh = null;
-    constructor(store, config, refresh = refreshAccessToken) {
+    constructor(store, config, refresh = refreshAccessToken, 
+    // Starts the login itself when there is nothing usable in the store, and answers with the text
+    // the user needs — the authorization URL. Set on the stdio path only; the CLI and the remote
+    // bridge leave it unset and keep the "run the login tool" wording.
+    startLogin) {
         this.store = store;
         this.config = config;
         this.refresh = refresh;
+        this.startLogin = startLogin;
     }
     async getAccessToken() {
-        const tokens = this.cached ?? (this.cached = this.loadFromStore());
+        const tokens = this.cached ?? (this.cached = await this.loadFromStore());
         if (Date.now() < tokens.expiresAt - EXPIRY_SKEW_MS) {
             return tokens.accessToken;
         }
         const refreshed = await this.refreshOnce(tokens.refreshToken);
         return refreshed.accessToken;
     }
-    loadFromStore() {
-        let tokens;
+    async loadFromStore() {
+        let tokens = null;
+        // Decrypt/integrity failure (key rotated or file tampered) and an empty store are the same
+        // situation for the user — there is nothing to authorize with — and both are answered by
+        // starting the authorization rather than by naming a tool for them to find.
+        let withoutLogin = NO_AUTHORIZATION;
         try {
             tokens = this.store.load();
         }
         catch {
-            // Decrypt/integrity failure (secret rotated or file tampered) — surface an
-            // actionable re-auth message instead of a raw GCM crash.
-            throw new Error('Stored Zendesk credentials could not be read (encryption secret changed or file corrupt). ' +
-                'Run the zendesk_login tool to re-authorize.');
+            withoutLogin = UNREADABLE_STORE;
         }
-        if (!tokens) {
-            throw new Error('No Zendesk authorization found. Run the zendesk_login tool to authorize (from a terminal: `npm run authorize`).');
-        }
-        return tokens;
+        if (tokens)
+            return tokens;
+        throw new Error(this.startLogin ? await this.startLogin() : withoutLogin);
     }
     // Single-flight: concurrent callers near expiry share one refresh so the
     // rotating refresh token is spent exactly once.

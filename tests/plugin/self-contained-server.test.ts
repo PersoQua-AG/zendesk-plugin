@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../../src/server.js';
+import { readStoreKey } from '../auth/store-key-stub.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // Realpathed so the launch is not through a symlink (macOS tmpdir is /var -> /private/var).
@@ -36,7 +37,7 @@ function dummyEnv(dataDir: string): Record<string, string> {
 }
 
 async function inProcessToolNames(env: Record<string, string>): Promise<string[]> {
-  const { server } = createServer(env);
+  const { server } = createServer(env, { readStoreKey });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'expected', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);

@@ -1,6 +1,14 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { z } from 'zod';
 import { CALLBACK_PORT_RULE } from './config.js';
+import { warnConfig } from '../util/warn-config.js';
+
+// Both loopback families, one handler, because `localhost` is not one address. On macOS it resolves
+// to ::1 BEFORE 127.0.0.1, and the redirect_uri registered with Zendesk says `localhost` — so a
+// listener on 127.0.0.1 alone never sees the browser come back. The wildcard bind this replaced did
+// see it, but it also answered on every routable interface of the machine, which is not what a
+// five-minute window holding an authorization code should be reachable on.
+const LOOPBACK_ADDRESSES = ['127.0.0.1', '::1'] as const;
 
 // The human step this bounds: open the URL, sign in to Zendesk, clear SSO/2FA, approve. Exported
 // because the login tool bounds the very same step and must not drift from it.
@@ -17,7 +25,9 @@ const tokenResponseSchema = z.object({
 export interface OAuthConfig {
   subdomain: string;
   clientId: string;
-  clientSecret: string;
+  // Absent for a public OAuth client (#68). PKCE is unconditional either way, so the exchange is
+  // authenticated by the verifier; the field is sent only when an install actually has one.
+  clientSecret?: string;
   callbackPort: number;
   scopes: string[];
 }
@@ -114,9 +124,9 @@ export function startCallbackListener(
 ): Promise<CallbackListener> {
   return new Promise<CallbackListener>((bound, bindFailed) => {
     let close!: () => void;
-    // Assigned synchronously by the executor below, so that server.listen() can be called from THIS
+    // Assigned synchronously by the executor below, so that listen() can be called from THIS
     // executor rather than that one — see the comment at the call.
-    let server!: Server;
+    let bindings!: { address: string; server: Server }[];
 
     const promise = new Promise<AuthorizationResult>((resolve, reject) => {
       // Every call below is wrapped, not just the one that bit us in #9. This is the INNER
@@ -127,7 +137,7 @@ export function startCallbackListener(
       try {
         let settled = false;
         let ignoredStrayState = false;
-        server = createServer((req, res) => {
+        const handler = (req: IncomingMessage, res: ServerResponse): void => {
           // req.url is typed `string | undefined` but is always set on a request the parser accepted,
           // so the fallback exists for the type only and no test can reach it.
           /* v8 ignore next */
@@ -195,7 +205,11 @@ export function startCallbackListener(
           }
           res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Authorized. You can close this tab.');
           finish(() => resolve({ code, redirectUri: redirectUri(port) }));
-        });
+        };
+
+        // One server per family over that one handler, so which family the browser arrived on makes
+        // no difference to the flow: there is a single `settled` flag and a single `state` behind both.
+        bindings = LOOPBACK_ADDRESSES.map((address) => ({ address, server: createServer(handler) }));
 
         const timer = setTimeout(() => {
           const stray = ignoredStrayState ? STRAY_STATE_NOTE : '';
@@ -207,18 +221,47 @@ export function startCallbackListener(
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          server.close();
+          for (const binding of bindings) binding.server.close();
           settle();
         };
 
         close = () => finish(() => reject(new Error('OAuth callback listener closed')));
 
-        server.on('error', (err) => {
-          const bindError = new Error(`OAuth callback server error: ${err.message}`);
+        // The bind is decided once BOTH families have answered. One family failing is survivable —
+        // the other still receives the callback — and is only worth a warning. Nothing left to bind
+        // on is the failure, and then the reason carries both families' errors, because
+        // ../tools/login.ts translates EADDRINUSE into the remedy the user needs.
+        let pending = bindings.length;
+        let listening = 0;
+        let decided = false;
+        const bindErrors: string[] = [];
+        const decide = (): void => {
+          if (decided || pending > 0) return;
+          decided = true;
+          if (listening > 0) return bound({ promise, close });
+          const bindError = new Error(`OAuth callback server error: ${bindErrors.join('; ')}`);
           finish(() => reject(bindError));
           bindFailed(bindError);
-        });
-        server.on('listening', () => bound({ promise, close }));
+        };
+        for (const binding of bindings) {
+          binding.server.on('error', (err) => {
+            // After the bind was decided this is a live listener failing, which ends the flow the
+            // same way a timeout does — there is no second chance at the authorization code.
+            if (decided) return finish(() => reject(new Error(`OAuth callback server error: ${err.message}`)));
+            pending -= 1;
+            bindErrors.push(`${binding.address}: ${err.message}`);
+            warnConfig(
+              `the OAuth callback listener could not bind ${binding.address}:${port} ` +
+                `(${(err as NodeJS.ErrnoException).code ?? err.message}) — continuing on the other address family if it bound.`,
+            );
+            decide();
+          });
+          binding.server.on('listening', () => {
+            pending -= 1;
+            listening += 1;
+            decide();
+          });
+        }
       } catch (err) {
         // Not `err as Error`: a throw from any of these is not typed, and login.ts's failureText
         // reads `err instanceof Error` (src/tools/login.ts:95). The cast was a lie the type system
@@ -241,7 +284,7 @@ export function startCallbackListener(
     // this placement is the fix, and the inner executor's try/catch is the net under everything
     // ELSE in that body (createServer, the emitter registrations) that #9 never looked at.
     try {
-      server.listen(port);
+      for (const binding of bindings) binding.server.listen(port, binding.address);
     } catch {
       // Cleanup and wording only, NOT liveness. Honest about its own reach: if the INNER executor
       // threw, `server` and `close` were never assigned, so listen() throws a TypeError here,
@@ -338,6 +381,12 @@ async function postToken(
   }
 }
 
+// OMITTED, not sent empty: Zendesk rejects `client_secret: ""` on a public client, so an absent
+// secret must leave the field out of the body entirely rather than send a blank one.
+function clientSecretField(config: OAuthConfig): { client_secret?: string } {
+  return config.clientSecret ? { client_secret: config.clientSecret } : {};
+}
+
 export function exchangeCodeForTokens(
   config: OAuthConfig,
   code: string,
@@ -351,10 +400,10 @@ export function exchangeCodeForTokens(
       grant_type: 'authorization_code',
       code,
       client_id: config.clientId,
-      client_secret: config.clientSecret,
       redirect_uri: redirectUriValue,
       code_verifier: codeVerifier,
       scope: config.scopes.join(' '),
+      ...clientSecretField(config),
     },
     fetchImpl,
     'Token exchange failed',
@@ -372,7 +421,7 @@ export function refreshAccessToken(
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
       client_id: config.clientId,
-      client_secret: config.clientSecret,
+      ...clientSecretField(config),
     },
     fetchImpl,
     'Token refresh failed',

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from '../src/server.js';
+import { readStoreKey } from './auth/store-key-stub.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -29,7 +30,7 @@ function build(level?: string) {
   const info = vi.spyOn(console, 'info').mockImplementation(() => {});
   const debug = vi.spyOn(console, 'debug').mockImplementation(() => {});
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-  const { ctx } = createServer(envWithLevel(level));
+  const { ctx } = createServer(envWithLevel(level), { readStoreKey });
   return {
     securityLevel: ctx.securityLevel,
     warnings: warn.mock.calls.map((c) => String(c[0])),

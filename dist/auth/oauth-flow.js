@@ -1,6 +1,13 @@
 import { createServer } from 'node:http';
 import { z } from 'zod';
 import { CALLBACK_PORT_RULE } from './config.js';
+import { warnConfig } from '../util/warn-config.js';
+// Both loopback families, one handler, because `localhost` is not one address. On macOS it resolves
+// to ::1 BEFORE 127.0.0.1, and the redirect_uri registered with Zendesk says `localhost` — so a
+// listener on 127.0.0.1 alone never sees the browser come back. The wildcard bind this replaced did
+// see it, but it also answered on every routable interface of the machine, which is not what a
+// five-minute window holding an authorization code should be reachable on.
+const LOOPBACK_ADDRESSES = ['127.0.0.1', '::1'];
 // The human step this bounds: open the URL, sign in to Zendesk, clear SSO/2FA, approve. Exported
 // because the login tool bounds the very same step and must not drift from it.
 export const DEFAULT_CALLBACK_TIMEOUT_MS = 300_000;
@@ -66,9 +73,9 @@ const STRAY_STATE_NOTE = '; a callback with an unexpected state was received and
 export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
     return new Promise((bound, bindFailed) => {
         let close;
-        // Assigned synchronously by the executor below, so that server.listen() can be called from THIS
+        // Assigned synchronously by the executor below, so that listen() can be called from THIS
         // executor rather than that one — see the comment at the call.
-        let server;
+        let bindings;
         const promise = new Promise((resolve, reject) => {
             // Every call below is wrapped, not just the one that bit us in #9. This is the INNER
             // executor: a synchronous throw in here rejects `promise`, which the catch below this
@@ -78,7 +85,7 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
             try {
                 let settled = false;
                 let ignoredStrayState = false;
-                server = createServer((req, res) => {
+                const handler = (req, res) => {
                     // req.url is typed `string | undefined` but is always set on a request the parser accepted,
                     // so the fallback exists for the type only and no test can reach it.
                     /* v8 ignore next */
@@ -145,7 +152,10 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                     }
                     res.writeHead(200, { 'Content-Type': 'text/plain' }).end('Authorized. You can close this tab.');
                     finish(() => resolve({ code, redirectUri: redirectUri(port) }));
-                });
+                };
+                // One server per family over that one handler, so which family the browser arrived on makes
+                // no difference to the flow: there is a single `settled` flag and a single `state` behind both.
+                bindings = LOOPBACK_ADDRESSES.map((address) => ({ address, server: createServer(handler) }));
                 const timer = setTimeout(() => {
                     const stray = ignoredStrayState ? STRAY_STATE_NOTE : '';
                     finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms${stray}`)));
@@ -156,16 +166,47 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                         return;
                     settled = true;
                     clearTimeout(timer);
-                    server.close();
+                    for (const binding of bindings)
+                        binding.server.close();
                     settle();
                 };
                 close = () => finish(() => reject(new Error('OAuth callback listener closed')));
-                server.on('error', (err) => {
-                    const bindError = new Error(`OAuth callback server error: ${err.message}`);
+                // The bind is decided once BOTH families have answered. One family failing is survivable —
+                // the other still receives the callback — and is only worth a warning. Nothing left to bind
+                // on is the failure, and then the reason carries both families' errors, because
+                // ../tools/login.ts translates EADDRINUSE into the remedy the user needs.
+                let pending = bindings.length;
+                let listening = 0;
+                let decided = false;
+                const bindErrors = [];
+                const decide = () => {
+                    if (decided || pending > 0)
+                        return;
+                    decided = true;
+                    if (listening > 0)
+                        return bound({ promise, close });
+                    const bindError = new Error(`OAuth callback server error: ${bindErrors.join('; ')}`);
                     finish(() => reject(bindError));
                     bindFailed(bindError);
-                });
-                server.on('listening', () => bound({ promise, close }));
+                };
+                for (const binding of bindings) {
+                    binding.server.on('error', (err) => {
+                        // After the bind was decided this is a live listener failing, which ends the flow the
+                        // same way a timeout does — there is no second chance at the authorization code.
+                        if (decided)
+                            return finish(() => reject(new Error(`OAuth callback server error: ${err.message}`)));
+                        pending -= 1;
+                        bindErrors.push(`${binding.address}: ${err.message}`);
+                        warnConfig(`the OAuth callback listener could not bind ${binding.address}:${port} ` +
+                            `(${err.code ?? err.message}) — continuing on the other address family if it bound.`);
+                        decide();
+                    });
+                    binding.server.on('listening', () => {
+                        pending -= 1;
+                        listening += 1;
+                        decide();
+                    });
+                }
             }
             catch (err) {
                 // Not `err as Error`: a throw from any of these is not typed, and login.ts's failureText
@@ -187,7 +228,8 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
         // this placement is the fix, and the inner executor's try/catch is the net under everything
         // ELSE in that body (createServer, the emitter registrations) that #9 never looked at.
         try {
-            server.listen(port);
+            for (const binding of bindings)
+                binding.server.listen(port, binding.address);
         }
         catch {
             // Cleanup and wording only, NOT liveness. Honest about its own reach: if the INNER executor
@@ -270,15 +312,20 @@ async function postToken(subdomain, body, fetchImpl, errorLabel) {
         throw new Error(`${errorLabel}: no reply from the Zendesk token endpoint within ${TOKEN_REQUEST_TIMEOUT_MS / 1000} seconds — check the network connection, and any proxy or VPN between this machine and Zendesk.`);
     }
 }
+// OMITTED, not sent empty: Zendesk rejects `client_secret: ""` on a public client, so an absent
+// secret must leave the field out of the body entirely rather than send a blank one.
+function clientSecretField(config) {
+    return config.clientSecret ? { client_secret: config.clientSecret } : {};
+}
 export function exchangeCodeForTokens(config, code, codeVerifier, redirectUriValue, fetchImpl = fetch) {
     return postToken(config.subdomain, {
         grant_type: 'authorization_code',
         code,
         client_id: config.clientId,
-        client_secret: config.clientSecret,
         redirect_uri: redirectUriValue,
         code_verifier: codeVerifier,
         scope: config.scopes.join(' '),
+        ...clientSecretField(config),
     }, fetchImpl, 'Token exchange failed');
 }
 export function refreshAccessToken(config, refreshToken, fetchImpl = fetch) {
@@ -286,6 +333,6 @@ export function refreshAccessToken(config, refreshToken, fetchImpl = fetch) {
         grant_type: 'refresh_token',
         refresh_token: refreshToken,
         client_id: config.clientId,
-        client_secret: config.clientSecret,
+        ...clientSecretField(config),
     }, fetchImpl, 'Token refresh failed');
 }

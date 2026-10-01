@@ -11,6 +11,7 @@ import {
   deps,
   freePort,
   hitCallback,
+  occupyPort,
   setupLoginHarness,
   tokensPath,
 } from './login-harness.js';
@@ -176,8 +177,7 @@ describe('zendesk_login negative paths', () => {
 
   it('names the port and the oauth_callback_port field when the callback port is taken', async () => {
     const port = freePort();
-    const blocker = createHttpServer(() => {});
-    await new Promise<void>((r) => blocker.listen(port, r));
+    const release = await occupyPort(port);
     try {
       // Call 1 reports the bind failure itself, rather than handing out a URL whose callback could
       // never land — it waits for the bind result, which is immediate.
@@ -187,7 +187,7 @@ describe('zendesk_login negative paths', () => {
       expect(text).not.toMatch(/EADDRINUSE/);
       expect(text).not.toContain('https://');
     } finally {
-      await new Promise((r) => blocker.close(r));
+      await release();
     }
   });
 
@@ -195,12 +195,11 @@ describe('zendesk_login negative paths', () => {
   // EADDRINUSE then refused every later login for the lifetime of the process.
   it('reserves nothing when the bind fails, so the next login starts normally', async () => {
     const port = freePort();
-    const blocker = createHttpServer(() => {});
-    await new Promise<void>((r) => blocker.listen(port, r));
+    const release = await occupyPort(port);
     try {
       expect(await runLogin(deps(port))).toContain('oauth_callback_port');
     } finally {
-      await new Promise((r) => blocker.close(r));
+      await release();
     }
     const next = await runLogin(deps(port, { callbackTimeoutMs: 60_000 }));
     expect(next).toMatch(/authorization started/i);

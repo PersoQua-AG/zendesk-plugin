@@ -344,9 +344,11 @@ const artifactPath = version ? join(dirname(bundlePath), `${basename(bundlePath,
 const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 if (artifactPath) for (const stale of [artifactPath, checksumPath]) rmSync(stale, { force: true });
 
-if (pkg && manifest && pkg.version !== manifest.version) {
-  problems.push(`version mismatch: manifest.json says ${manifest.version}, package.json says ${pkg.version}`);
-}
+// TWO version families since #68, by owner decision: manifest.json is the MCPB extension, which that
+// issue does not change and which therefore stays at its own number, while package.json and the
+// Claude Code plugin manifests moved on. So the equality that used to stand here cannot: what the
+// bundle has to be right about is its OWN manifest, and that is asserted against manifest.json below
+// (`the bundled manifest.json says …`). package.json's number is not shipped inside the bundle.
 if (expectedVersion !== null && version !== expectedVersion) {
   problems.push(`version mismatch: the release was asked for ${expectedVersion || '(empty)'}, the tree declares ${version}`);
 }
@@ -480,7 +482,7 @@ for (const { path, rule } of accepted) if (rule !== 'runtime-dependencies') cons
 console.log(`\nBundle audit passed: ${basename(bundlePath)}`);
 const totalBytes = entries.reduce((sum, e) => sum + e.size, 0);
 const share = (part, whole) => (whole === 0 ? '0.0' : ((100 * part) / whole).toFixed(1));
-console.log(`  version   ${version} (manifest.json, package.json and the bundled manifest agree)`);
+console.log(`  version   ${version} (manifest.json and the bundled manifest agree; package.json carries the plugin version)`);
 console.log(`  entries   ${accepted.length} accepted, 0 refused`);
 console.log(
   `  scanned   ${scannedEntries} of ${entries.length} entries (${share(scannedEntries, entries.length)}%)` +

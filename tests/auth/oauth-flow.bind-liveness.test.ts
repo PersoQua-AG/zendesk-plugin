@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { startCallbackListener, waitForAuthorizationCode } from '../../src/auth/oauth-flow.js';
 import { resolveAuthConfig } from '../../src/auth/config.js';
 import { runLogin } from '../../src/tools/login.js';
-import { deps, freePort, settlesWithin, setupLoginHarness } from './login-harness.js';
+import { deps, freePort, occupyPort, settlesWithin, setupLoginHarness } from './login-harness.js';
 
 setupLoginHarness('login-bind-liveness-');
 
@@ -115,18 +115,17 @@ describe('finish() is not a second way to lose the outcome', () => {
 
   // An asynchronous bind failure (EADDRINUSE) runs finish() from the 'error' handler instead, and
   // there the server DID reach a handle. Both routes through finish() have to settle.
+  // BOTH loopback families have to be taken for the bind to fail at all: one family left free is a
+  // listener that comes up, which is the point of the dual bind (#68).
   it('settles when the OS refuses the bind asynchronously', async () => {
-    const taken: Server = await new Promise((resolve) => {
-      const s = createServer(() => {});
-      s.listen(0, () => resolve(s));
-    });
-    const port = (taken.address() as { port: number }).port;
+    const port = freePort();
+    const release = await occupyPort(port);
     try {
       await expect(
         settlesWithin(`startCallbackListener(${port})`, startCallbackListener(port, 'state', 5_000)),
       ).rejects.toThrow(/EADDRINUSE|address already in use/i);
     } finally {
-      await new Promise<void>((r) => taken.close(() => r()));
+      await release();
     }
   });
 });

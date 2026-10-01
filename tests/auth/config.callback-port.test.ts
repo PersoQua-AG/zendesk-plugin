@@ -54,18 +54,17 @@ describe('callback port validation', () => {
     expect(resolveAuthConfig(raw).config.callbackPort).toBe(8976);
   });
 
-  // The manifests declare the same range to their hosts, which is the layer that can refuse the
+  // The MCPB manifest declares the same range to its host, which is the layer that can refuse the
   // value in the settings dialog before the server ever runs. Driven off the code constants so a
   // range changed in one place fails here instead of drifting silently.
-  it('is the same range both manifests declare as min/max on oauth_callback_port', () => {
+  //
+  // .claude-plugin/plugin.json used to be checked beside it and no longer carries a user_config at
+  // all (#68): the Claude Code host bridge does not support one, so there is no dialog there to
+  // refuse a value, and the server's own validation is the only layer left on that path.
+  it('is the range the MCPB manifest declares as min/max on oauth_callback_port', () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-    const read = (rel: string) => JSON.parse(readFileSync(join(root, rel), 'utf8'));
-    for (const [rel, field] of [
-      ['manifest.json', read('manifest.json').user_config.oauth_callback_port],
-      ['.claude-plugin/plugin.json', read('.claude-plugin/plugin.json').userConfig.oauth_callback_port],
-    ] as const) {
-      expect(field.min, `${rel} min`).toBe(MIN_CALLBACK_PORT);
-      expect(field.max, `${rel} max`).toBe(MAX_CALLBACK_PORT);
-    }
+    const field = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')).user_config.oauth_callback_port;
+    expect(field.min).toBe(MIN_CALLBACK_PORT);
+    expect(field.max).toBe(MAX_CALLBACK_PORT);
   });
 });

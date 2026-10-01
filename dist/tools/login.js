@@ -37,7 +37,7 @@ export function abortLoginFlow() {
 // so, because silently discarding stored credentials is exactly what a user wants explained.
 function readExistingTokens(deps) {
     try {
-        const tokens = new TokenStore(deps.tokensPath, deps.config.clientSecret).load();
+        const tokens = new TokenStore(deps.tokensPath, deps.tokenStoreKey).load();
         return { tokens: tokens?.refreshToken ? tokens : null, unreadable: false };
     }
     catch {
@@ -114,7 +114,7 @@ async function collectFlow(flow, deps, exchange) {
         return `${outcome.text} ${RETRY_FRESH}`;
     try {
         const tokens = await exchange(deps.config, outcome.result.code, flow.verifier, outcome.result.redirectUri);
-        new TokenStore(deps.tokensPath, deps.config.clientSecret).save({
+        new TokenStore(deps.tokensPath, deps.tokenStoreKey).save({
             accessToken: tokens.accessToken,
             refreshToken: tokens.refreshToken,
             expiresAt: Date.now() + tokens.expiresIn * 1000,

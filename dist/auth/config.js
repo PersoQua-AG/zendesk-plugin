@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-const DEFAULT_CALLBACK_PORT = 8976;
+import { isAbsolute, join } from 'node:path';
+import { resolveTokenStoreKey } from './store-key.js';
+export const DEFAULT_CALLBACK_PORT = 8976;
 const DATA_DIR_NAME = 'zendesk-plugin';
 const DEFAULT_SCOPES = ['read', 'write'];
 // A Desktop Extension is unpacked into a versioned directory and its working directory is the
@@ -36,13 +37,28 @@ export const USER_CONFIG_FIELD_BY_ENV = USER_CONFIG_FIELDS;
 // (@anthropic-ai/mcpb@2.1.2 dist/shared/config.js:16-27). Dropping such values makes them "absent",
 // so the shipped defaults apply instead of Number('${…}')===NaN or a literal directory name.
 const PLACEHOLDER = /^\$\{[^}]*\}$/;
+// Exported because zendesk_diagnostics reports the substitution state of ${CLAUDE_PLUGIN_ROOT} and
+// ${CLAUDE_PLUGIN_DATA}, and that question has to be asked of the RAW env with this same rule.
+export function isPlaceholder(value) {
+    return typeof value === 'string' && PLACEHOLDER.test(value);
+}
 export function stripPlaceholders(env) {
     const out = { ...env };
     for (const [key, value] of Object.entries(out)) {
-        if (typeof value === 'string' && PLACEHOLDER.test(value))
+        if (isPlaceholder(value))
             delete out[key];
     }
     return out;
+}
+// A relative CLAUDE_PLUGIN_DATA is never used as given: the host's working directory is not the
+// extension's, so "data" would put tokens.enc and the cache wherever the server happened to be
+// started and lose both on the next launch. resolveAuthConfig REJECTS such a value (loudly, naming
+// the variable); this resolver is what the degraded startup path falls back to, where there is
+// nothing left to reject into.
+export function dataDirOf(env) {
+    // Falsy-coalesce, not ??: an empty-string value is "absent", not a value.
+    const raw = env.CLAUDE_PLUGIN_DATA;
+    return raw && isAbsolute(raw) ? raw : defaultDataDir(env);
 }
 // A port a non-root process can actually be handed: below 1024 is privileged, above 65535 does not
 // exist. The upper end matters most — server.listen() rejects it with a SYNCHRONOUS RangeError that
@@ -132,23 +148,39 @@ function required(env, name) {
     }
     return value;
 }
-// Single source of env resolution shared by server + authorize bin, so identical
-// env yields an identical clientSecret + dataDir → identical TokenStore key/path.
-export function resolveAuthConfig(rawEnv) {
+// Single source of env resolution shared by server + authorize bin, so identical env yields an
+// identical dataDir → an identical tokens.enc path, and one and the same Keychain key opens it. The
+// key is no longer derived from the client secret, so rotating the secret leaves the store readable.
+//
+// readStoreKey is a parameter for the same reason platform/env are parameters on defaultDataDir: the
+// resolution is testable without touching a real Keychain.
+export function resolveAuthConfig(rawEnv, readStoreKey = resolveTokenStoreKey) {
     const env = stripPlaceholders(rawEnv);
     // Falsy-coalesce (not ??): an empty-string env var is "absent", not a value.
     // Otherwise CLAUDE_PLUGIN_DATA='' → tokens.enc at the fs root, and
     // ZENDESK_OAUTH_CALLBACK_PORT='' → Number('')===0 → bind to port 0.
-    const dataDir = env.CLAUDE_PLUGIN_DATA || defaultDataDir(env);
+    const raw = env.CLAUDE_PLUGIN_DATA;
+    if (raw && !isAbsolute(raw)) {
+        throw new Error(`Invalid environment variable: CLAUDE_PLUGIN_DATA="${raw}" (must be an absolute path \u2014 a ` +
+            'relative one places tokens.enc under whatever working directory the host started the server in).');
+    }
+    const dataDir = raw || defaultDataDir(env);
+    let storeKey;
     return {
         config: {
             subdomain: subdomain(env),
             clientId: required(env, 'ZENDESK_OAUTH_CLIENT_ID'),
-            clientSecret: required(env, 'ZENDESK_OAUTH_CLIENT_SECRET'),
+            // Optional since #68: a public OAuth client has no secret, and PKCE is what authenticates the
+            // exchange. Sent when configured (every existing install and the CLI), omitted when not.
+            clientSecret: env.ZENDESK_OAUTH_CLIENT_SECRET || undefined,
             callbackPort: callbackPort(env),
             scopes: DEFAULT_SCOPES,
         },
         dataDir,
+        // Memoized: one `security` invocation per process, however many readers there are.
+        get tokenStoreKey() {
+            return (storeKey ??= readStoreKey());
+        },
         // Single source of the token file location so server + authorize bin never drift. join(), not
         // a template literal: the manifest declares win32, where '/' would mix separators.
         tokensPath: join(dataDir, 'tokens.enc'),

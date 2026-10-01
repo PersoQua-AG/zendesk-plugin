@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { runLogin, type LoginDeps } from '../../src/tools/login.js';
 import type { CallbackListener } from '../../src/auth/oauth-flow.js';
-import { authorizationUrl, config, deps, freePort, hitCallback, setupLoginHarness, tokensPath } from './login-harness.js';
+import { authorizationUrl, config, deps, freePort, hitCallback, occupyPort, setupLoginHarness, tokensPath } from './login-harness.js';
 
 // README / US-1: a user can only open a URL they have been given. The URL is the RESULT of call 1,
 // returned before any waiting, and it is repeated by every later call still waiting for the
@@ -54,14 +54,13 @@ describe('a reply that has no usable URL promises none', () => {
 
   it('a blocked callback port names the remedy and promises no URL', async () => {
     const port = freePort();
-    const blocker = createHttpServer(() => {});
-    await new Promise<void>((r) => blocker.listen(port, r));
+    const release = await occupyPort(port);
     try {
       const text = await runLogin(deps(port));
       expect(text).toContain('oauth_callback_port');
       expect(text).not.toContain('https://');
     } finally {
-      await new Promise((r) => blocker.close(r));
+      await release();
     }
   });
 
