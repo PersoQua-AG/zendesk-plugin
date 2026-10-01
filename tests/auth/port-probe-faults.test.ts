@@ -1,5 +1,5 @@
-// #48 follow-up: namedAddressesAreFree() (login-harness.ts:226-238) asks about the three addresses
-// Node cannot bind synchronously, and spawnSync reports "the port is taken" and "I could not look"
+// #48 follow-up: portHeldOn() (login-harness.ts:234-250) asks about the three addresses Node
+// cannot bind synchronously, and spawnSync reports "the port is taken" and "I could not look"
 // through the SAME value — status is 1 on EADDRINUSE and null on a failed fork, on SIGKILL, on
 // SIGTERM and on a timeout. Collapsing those into "not free" is the defect these cases pin.
 // Measured:
@@ -16,8 +16,8 @@
 // band in one pass.
 //
 // The faults are injected through process.execPath, which Node leaves writable — the real probe
-// runs, unmodified. The first stage of the probe is in-process (wildcardIsFree) and is unaffected;
-// these cases reach the child stage behind it. TMPDIR is re-pointed before the harness is imported so the claim
+// runs, unmodified. A sibling case in foreign-listener-port.test.ts covers the other half of the
+// same rule, a bind error that is not EADDRINUSE. TMPDIR is re-pointed before the harness is imported so the claim
 // directory of this file is its own; vitest's default pool runs each test file in its own process
 // (vitest.config.ts names no pool), so that env write reaches nobody else.
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -100,7 +100,7 @@ describe('freePort() when the probe itself cannot run', () => {
     });
     const elapsed = Date.now() - started;
 
-    // spawnSync at login-harness.ts:233 blocks the event loop, so
+    // spawnSync at login-harness.ts:245 blocks the event loop, so
     // vitest's own test timeout cannot interrupt it. A child that never exits — a probe that
     // inherits NODE_OPTIONS=--inspect-brk does exactly that, measured — hangs the run forever.
     expect(elapsed, `one probe blocked freePort() for ${elapsed} ms`).toBeLessThan(SECONDS * 1000);

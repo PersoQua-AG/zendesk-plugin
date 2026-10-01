@@ -10,7 +10,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { freePort, portClaimPath } from './login-harness.js';
+import { freePort, portClaimPath, portHeldOn } from './login-harness.js';
 
 async function bind(port: number, host?: string): Promise<Server> {
   const server = host === undefined ? createServer().listen(port) : createServer().listen(port, host);
@@ -48,6 +48,23 @@ describe('freePort() and a foreign listener in the band', () => {
       opened.push(await bind(port));
     });
   }
+
+  // The probe must not collide with ITSELF. Overlapping the three binds is harmless under macOS's
+  // SO_REUSEADDR and is EADDRINUSE on Linux, where the overlapping shape called EVERY free port
+  // held on 127.0.0.1 and walked the band to its end — CI run 36845405954 on b940a9d printed
+  // 44 724 skips and then declared the band exhausted. This case is red on Linux against that
+  // shape and GREEN on macOS, where the defect does not exist: it holds the rule on ubuntu-latest,
+  // which is where CI runs, and the platform pair is in the comment above portHeldOn().
+  it('does not call a port nobody holds held', () => {
+    expect(portHeldOn(freePort())).toBe('');
+  });
+
+  // Only EADDRINUSE means a stranger. Any other bind error is "I could not look", and reading it
+  // as a holder burns one claim per candidate for the whole band. 192.0.2.1 is TEST-NET-1 and is
+  // bindable nowhere: EADDRNOTAVAIL on macOS and on Linux, measured.
+  it('does not read a bind error other than EADDRINUSE as a holder', () => {
+    expect(() => portHeldOn(freePort(), ['192.0.2.1'])).toThrow(/EADDRNOTAVAIL/);
+  });
 
   // #13: the probe may never run before the claim is held, or the gap between the probe's close and
   // the caller's bind becomes a port the next acquirer can be handed. Source, because the window it

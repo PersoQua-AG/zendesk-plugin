@@ -186,22 +186,33 @@ function claimPort(port: number): boolean {
 // Runs ONLY on a band port and ONLY once the claim is held, so the #13 window stays shut: nothing
 // binds before the claim, and no listen(0) anywhere can be given a band number.
 //
-// Binding is the only way to ask, and one bind is not enough. Measured on macOS, holder down the
-// side, probe address across:
+// Binding is the only way to ask, and one bind is not enough. Measured, holder down the side:
 //
-//                      0.0.0.0   127.0.0.1   ::1    production bind (wildcard)
-//   holder ::          busy      free        free   EADDRINUSE
-//   holder 0.0.0.0     busy      free        free   succeeds
-//   holder 127.0.0.1   free      busy        free   succeeds
-//   holder ::1         free      free        busy   succeeds
-//   nobody             free      free        free   succeeds
+//                      macOS probe        macOS prod. bind   Linux probe        Linux prod. bind
+//   holder ::          EADDRINUSE 0.0.0.0 EADDRINUSE         EADDRINUSE 0.0.0.0 EADDRINUSE
+//   holder 0.0.0.0     EADDRINUSE 0.0.0.0 succeeds           EADDRINUSE 0.0.0.0 EADDRINUSE
+//   holder 127.0.0.1   EADDRINUSE 127.0.0.1 succeeds         EADDRINUSE 0.0.0.0 EADDRINUSE
+//   holder ::1         EADDRINUSE ::1     succeeds           EADDRINUSE ::1     EADDRINUSE
+//   nobody             free               succeeds           free               succeeds
 //
-// Three addresses, none of them redundant, and together they see every holder. The production bind
-// itself (src/auth/oauth-flow.ts:244, `server.listen(port)`, no host) is NOT one of them: it is the
-// only row that MISSES three of the four, because libuv binds TCP with SO_REUSEADDR and a wildcard
-// bind therefore succeeds next to a more specific one — which then takes the traffic. End to end:
-// foreign HTTP server on 0.0.0.0:P, ours on the wildcard, `GET http://127.0.0.1:P/callback`
-// answered `FOREIGN`, with no EADDRINUSE anywhere. Silent, and worse than the case #48 names.
+// "prod. bind" is src/auth/oauth-flow.ts:244, `server.listen(port)` with no host. On Linux it is
+// loud by itself. On macOS it is the column that MISSES three of the four, because libuv binds TCP
+// with SO_REUSEADDR and a wildcard bind therefore succeeds next to a more specific one — which then
+// takes the traffic. End to end on macOS: foreign HTTP server on 0.0.0.0:P, ours on the wildcard,
+// `GET http://127.0.0.1:P/callback` answered `FOREIGN`, with no EADDRINUSE anywhere. Silent, and
+// worse than the case #48 names. That is what the three addresses buy, and none of them is idle.
+//
+// The addresses are probed ONE AT A TIME, each socket closed before the next opens. Overlapping
+// them is what reddened CI on b940a9d: the same SO_REUSEADDR that lets a stranger hide on macOS
+// lets the probe's own sockets overlap there, and Linux refuses that — the probe's 127.0.0.1 bind
+// took EADDRINUSE from the probe's OWN 0.0.0.0 socket and called a free port held. Measured on the
+// same free port, same probe body:
+//
+//   macOS parallel   -> status 0 ""              Linux parallel   -> status 1 "127.0.0.1"
+//   macOS sequential -> status 0 ""              Linux sequential -> status 0 ""
+//
+// CI run 36845405954 printed 44 724 skips, every one of them 127.0.0.1, and then declared the band
+// exhausted.
 //
 // A child process, because Node cannot bind a NAMED address synchronously: `listen(port, host)`
 // goes through lookupAndListen -> dns.lookup, and `server.listening` is still false when listen()
@@ -209,24 +220,30 @@ function claimPort(port: number): boolean {
 // available either — it is called from synchronous describe bodies
 // (tests/auth/oauth-flow.callback-edges.test.ts:9, tests/auth/oauth-flow.stray-callback.test.ts:35).
 //
-// Exit 0 = free; 1 = taken, with the address on stdout. Anything else is "I could not look", which
-// is neither answer: read as taken it burns the band on one transient fork failure, read as free it
-// hands out a port a stranger holds. So it throws, and names the probe rather than the claims.
-const PROBE_ADDRESSES = ['0.0.0.0', '127.0.0.1', '::1'];
+// Exit 0 = free; 1 = EADDRINUSE, the one error that means a stranger is there; 2 = some other bind
+// error. Everything that is not 0 or 1 is "I could not look", and that is NOT an answer: read as
+// taken it burns the band one claim at a time (measured with 192.0.2.1, EADDRNOTAVAIL on both
+// platforms, which the first shape of this probe reported as a holder), read as free it hands out a
+// port a stranger holds. So it throws, and names the probe rather than the claims. Throwing beats
+// skipping without a claim: a bind error that is not EADDRINUSE is a property of the HOST, not of
+// the port, so every candidate would fail the same way and the band would be walked to the end
+// before saying anything.
+const PROBE_ADDRESSES = ['0.0.0.0', '127.0.0.1', '::1'] as const;
 const PROBE_TIMEOUT_MS = 2_000;
 
-function portHeldOn(port: number): string {
+export function portHeldOn(port: number, addresses: readonly string[] = PROBE_ADDRESSES): string {
   const probe =
-    `const n=require('node:net'),{writeSync}=require('node:fs');let left=${PROBE_ADDRESSES.length};` +
-    `for(const h of ${JSON.stringify(PROBE_ADDRESSES)}){const s=n.createServer();` +
-    `s.on('error',()=>{writeSync(1,h);process.exit(1)});` +
-    `s.listen(${port},h,()=>{s.close();if(--left===0)process.exit(0)})}`;
+    `const n=require('node:net'),{writeSync}=require('node:fs'),{once}=require('node:events');` +
+    `(async()=>{for(const h of ${JSON.stringify(addresses)}){const s=n.createServer();s.listen(${port},h);` +
+    `try{await once(s,'listening')}catch(e){writeSync(1,e.code+' '+h);process.exit(e.code==='EADDRINUSE'?1:2)}` +
+    `s.close();await once(s,'close')}process.exit(0)})()`;
   const run = spawnSync(process.execPath, ['-e', probe], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8' });
   if (run.status === 0) return '';
-  if (run.status === 1) return run.stdout || 'an address it did not name';
+  if (run.status === 1) return (run.stdout ?? '').split(' ')[1] || 'an address it did not name';
   throw new Error(
     `the port probe for ${port} could not run (status ${run.status}, signal ${run.signal}` +
-      `${run.error ? `, ${run.error.message}` : ''}) — this is the probe failing, not a stale claim`,
+      `${run.stdout ? `, ${run.stdout}` : ''}${run.error ? `, ${run.error.message}` : ''}) — ` +
+      `this is the probe failing, not a stale claim`,
   );
 }
 
