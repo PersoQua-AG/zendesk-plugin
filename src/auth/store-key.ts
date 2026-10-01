@@ -64,7 +64,7 @@ export const UNSUPPORTED_PLATFORM =
 // testable without a real Keychain and without mutating the process.
 export function resolveTokenStoreKey(
   platform: NodeJS.Platform = process.platform,
-  run: RunSecurity = (args) => runSecurity(args),
+  run: RunSecurity = runSecurity,
 ): string {
   if (platform !== 'darwin') throw new Error(UNSUPPORTED_PLATFORM);
 

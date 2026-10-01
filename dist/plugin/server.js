@@ -21135,7 +21135,7 @@ function runSecurity(args, bin = SECURITY_BIN) {
   }
 }
 var UNSUPPORTED_PLATFORM = "The Zendesk token store needs a key from the macOS Keychain, and this is not macOS. A Windows or Linux key source is issue #69 (github.com/PersoQua-AG/zendesk-plugin/issues/69); there is deliberately no weaker fallback.";
-function resolveTokenStoreKey(platform = process.platform, run = (args) => runSecurity(args)) {
+function resolveTokenStoreKey(platform = process.platform, run = runSecurity) {
   if (platform !== "darwin") throw new Error(UNSUPPORTED_PLATFORM);
   const found = run(["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"]);
   if (found.status === 0) {

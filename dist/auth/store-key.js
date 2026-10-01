@@ -48,7 +48,7 @@ export const UNSUPPORTED_PLATFORM = 'The Zendesk token store needs a key from th
     'deliberately no weaker fallback.';
 // Reads the key, creating it on first use. Platform and runner are parameters so the resolution is
 // testable without a real Keychain and without mutating the process.
-export function resolveTokenStoreKey(platform = process.platform, run = (args) => runSecurity(args)) {
+export function resolveTokenStoreKey(platform = process.platform, run = runSecurity) {
     if (platform !== 'darwin')
         throw new Error(UNSUPPORTED_PLATFORM);
     const found = run(['find-generic-password', '-s', SERVICE, '-a', ACCOUNT, '-w']);
