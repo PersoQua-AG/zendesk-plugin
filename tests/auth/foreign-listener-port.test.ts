@@ -12,6 +12,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { freePort, portClaimPath, portHeldOn } from './login-harness.js';
 
+// The body of a named function in the harness source, for the two cases whose rule is not
+// observable from inside one process.
+function harnessFunction(name: string): string {
+  const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'login-harness.ts'), 'utf8');
+  const body = new RegExp(`export function ${name}\\([^]*?\\n\\}`).exec(source)?.[0] ?? '';
+  expect(body, `${name}() not found in login-harness.ts`).not.toBe('');
+  return body;
+}
+
 async function bind(port: number, host?: string): Promise<Server> {
   const server = host === undefined ? createServer().listen(port) : createServer().listen(port, host);
   await once(server, 'listening');
@@ -70,9 +79,23 @@ describe('freePort() and a foreign listener in the band', () => {
   // the caller's bind becomes a port the next acquirer can be handed. Source, because the window it
   // guards is not observable from inside one process.
   it('binds nothing before the claim is taken (#13)', () => {
-    const harness = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'login-harness.ts'), 'utf8');
-    const body = /export function freePort\(\): number \{[\s\S]*?\n\}/.exec(harness)?.[0] ?? '';
-    expect(body, 'freePort() not found').not.toBe('');
+    const body = harnessFunction('freePort');
     expect(body.indexOf('claimPort(')).toBeLessThan(body.indexOf('portHeldOn('));
+  });
+
+  // Also source, and for the same reason the case above is: the behaviour this pins — the probe's
+  // own sockets must not overlap — is invisible on macOS, where SO_REUSEADDR permits the overlap.
+  // The behavioural case ('does not call a port nobody holds held') only goes red on Linux, so
+  // rebuilding the overlap on a developer machine would otherwise look green, and it looked green
+  // for a whole round before CI run 36845405954 found it. Each address must be awaited up and
+  // closed down before the next one is opened.
+  it('probes its addresses one at a time, never overlapping them (CI 36845405954)', () => {
+    const body = harnessFunction('portHeldOn');
+    const loop = /for\(const h of[^]*?\}process\.exit\(0\)/.exec(body)?.[0] ?? '';
+    expect(loop, 'the probe loop is not in the shape this case can read').not.toBe('');
+    expect(loop, 'the bind must be awaited before the next address').toMatch(/await once\(s,'listening'\)/);
+    expect(loop, 'the socket must be closed and awaited before the next address').toMatch(
+      /s\.close\(\);await once\(s,'close'\)/,
+    );
   });
 });

@@ -1,4 +1,4 @@
-// #48 follow-up: portHeldOn() (login-harness.ts:234-250) asks about the three addresses Node
+// #48 follow-up: portHeldOn() (login-harness.ts:246-260) asks about the three addresses Node
 // cannot bind synchronously, and spawnSync reports "the port is taken" and "I could not look"
 // through the SAME value — status is 1 on EADDRINUSE and null on a failed fork, on SIGKILL, on
 // SIGTERM and on a timeout. Collapsing those into "not free" is the defect these cases pin.
@@ -12,8 +12,8 @@
 //
 // A failed fork is not rare on a loaded CI box: EAGAIN under the per-user process limit, ENOMEM,
 // or an execPath removed under a running suite (fnm/nvm switching the version). freePort() keeps
-// the claim on every rejected port (login-harness.ts:219), so "I could not look" costs the whole
-// band in one pass.
+// the claim on every rejected port (login-harness.ts:289-291), so "I could not look" would cost the
+// whole probe budget in one pass and end on the wrong message.
 //
 // The faults are injected through process.execPath, which Node leaves writable — the real probe
 // runs, unmodified. A sibling case in foreign-listener-port.test.ts covers the other half of the
@@ -100,9 +100,41 @@ describe('freePort() when the probe itself cannot run', () => {
     });
     const elapsed = Date.now() - started;
 
-    // spawnSync at login-harness.ts:245 blocks the event loop, so
+    // spawnSync at login-harness.ts:252 blocks the event loop, so
     // vitest's own test timeout cannot interrupt it. A child that never exits — a probe that
     // inherits NODE_OPTIONS=--inspect-brk does exactly that, measured — hangs the run forever.
     expect(elapsed, `one probe blocked freePort() for ${elapsed} ms`).toBeLessThan(SECONDS * 1000);
   }, 120_000);
+});
+
+describe('freePort() when every candidate answers "held"', () => {
+  it('gives up after the probe budget instead of walking the band', () => {
+    // A probe binary that always exits 1 is "this port is taken" for every candidate. Without a
+    // ceiling freePort() answers that by probing all 10 000 band ports; at the measured 16-24 ms a
+    // probe that is 3-4 minutes, and at PROBE_TIMEOUT_MS it is 5.5 hours of blocked event loop
+    // that no vitest timeout can reach. The exit is instant here, so this case costs milliseconds
+    // and still fails if the ceiling is gone.
+    const always = join(ISOLATED_TMP, 'probe-that-says-taken.sh');
+    writeFileSync(always, '#!/bin/sh\nexit 1\n');
+    chmodSync(always, 0o755);
+
+    const before = claimCount();
+    let thrown: Error | undefined;
+    withProbeBinary(always, () => {
+      try {
+        harness.freePort();
+      } catch (err) {
+        thrown = err as Error;
+      }
+    });
+    const burned = claimCount() - before;
+
+    expect(burned, `claims consumed before giving up: ${burned}`).toBeLessThanOrEqual(
+      harness.MAX_PROBES_PER_ACQUISITION,
+    );
+    expect(
+      thrown?.message ?? '(returned a port)',
+      'the refusal must point at the probe, not at stale claims',
+    ).toMatch(/probing|probe/i);
+  }, 600_000);
 });
