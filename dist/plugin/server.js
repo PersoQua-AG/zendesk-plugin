@@ -22074,6 +22074,7 @@ var answer = (status, body, headers = HTML) => ({
 var notFound = () => answer(404, "Not found", { "Content-Type": "text/plain; charset=utf-8" });
 function createSetupRoute(deps) {
   let spent = false;
+  let submitting = false;
   return async (req, url) => {
     if (spent || !tokenMatches(url.searchParams.get("t"), deps.token)) return notFound();
     if (req.method === "GET") return answer(200, setupPage(deps.port, deps.token));
@@ -22086,14 +22087,20 @@ function createSetupRoute(deps) {
     if (!originAllowed(req, deps.port)) {
       return answer(403, "Diese Anfrage kam nicht von der Einrichtungsseite.");
     }
-    const parsed = parseSetupForm(await readBody(req));
-    if ("problem" in parsed) return answer(400, setupPage(deps.port, deps.token, parsed.problem));
-    const authorizationUrl = deps.submit(parsed.values);
-    spent = true;
-    return answer(303, "Weiter zur Zendesk-Anmeldung \u2026", {
-      "Content-Type": "text/plain; charset=utf-8",
-      Location: authorizationUrl
-    });
+    if (submitting) return notFound();
+    submitting = true;
+    try {
+      const parsed = parseSetupForm(await readBody(req));
+      if ("problem" in parsed) return answer(400, setupPage(deps.port, deps.token, parsed.problem));
+      const authorizationUrl = deps.submit(parsed.values);
+      spent = true;
+      return answer(303, "Weiter zur Zendesk-Anmeldung \u2026", {
+        "Content-Type": "text/plain; charset=utf-8",
+        Location: authorizationUrl
+      });
+    } finally {
+      submitting = false;
+    }
   };
 }
 

@@ -180,6 +180,13 @@ export function createSetupRoute(deps) {
     // and a GET does not either, so the page survives a reload. Neither discloses anything: the page is
     // instructions plus an empty form.
     let spent = false;
+    // `spent` is checked BEFORE the body is read, and a body arrives in pieces: a client that has sent half
+    // of it holds that await open, so a second POST starting meanwhile passed the same check and both
+    // submitted. Measured, with nothing malicious in it — two 303s and two stored configurations from one
+    // single-use token, leaving the flow pointed at whichever arrived last. So a POST that is already being
+    // processed makes a second one a non-event. Released on a failure, which is what keeps a typo from
+    // ending the setup.
+    let submitting = false;
     return async (req, url) => {
         if (spent || !tokenMatches(url.searchParams.get('t'), deps.token))
             return notFound();
@@ -196,16 +203,24 @@ export function createSetupRoute(deps) {
         if (!originAllowed(req, deps.port)) {
             return answer(403, 'Diese Anfrage kam nicht von der Einrichtungsseite.');
         }
-        const parsed = parseSetupForm(await readBody(req));
-        if ('problem' in parsed)
-            return answer(400, setupPage(deps.port, deps.token, parsed.problem));
-        // Stored first, redirected second: a redirect into an authorization whose client was not saved
-        // would authorize a configuration the next start cannot reproduce.
-        const authorizationUrl = deps.submit(parsed.values);
-        spent = true;
-        return answer(303, 'Weiter zur Zendesk-Anmeldung …', {
-            'Content-Type': 'text/plain; charset=utf-8',
-            Location: authorizationUrl,
-        });
+        if (submitting)
+            return notFound();
+        submitting = true;
+        try {
+            const parsed = parseSetupForm(await readBody(req));
+            if ('problem' in parsed)
+                return answer(400, setupPage(deps.port, deps.token, parsed.problem));
+            // Stored first, redirected second: a redirect into an authorization whose client was not saved
+            // would authorize a configuration the next start cannot reproduce.
+            const authorizationUrl = deps.submit(parsed.values);
+            spent = true;
+            return answer(303, 'Weiter zur Zendesk-Anmeldung …', {
+                'Content-Type': 'text/plain; charset=utf-8',
+                Location: authorizationUrl,
+            });
+        }
+        finally {
+            submitting = false;
+        }
     };
 }

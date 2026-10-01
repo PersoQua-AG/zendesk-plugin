@@ -87,8 +87,13 @@ describe('the callback listener', () => {
     if (!(await ipv6LoopbackAvailable())) return;
     const port = freePort();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    // Only 127.0.0.1 is taken. A listener that gave up here would be a login nobody can complete,
-    // and one that said nothing would hide a half-reachable callback.
+    // Only 127.0.0.1 is taken. A listener that gave up here would be a login nobody can complete, and
+    // one that said nothing would hide a half-reachable callback.
+    //
+    // What this case does NOT ask is whether the URL the user is handed is reachable in this state —
+    // that is the other half of #68 B2, and it is pinned in tests/auth/setup-flow.test.ts ("names a
+    // family it actually bound, not one a stranger holds"): it fetches the URL out of the tool's own
+    // answer and asserts the page that comes back is ours.
     const blocker = createServer(() => {});
     await new Promise<void>((bound) => blocker.listen(port, '127.0.0.1', () => bound()));
     try {

@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { startCallbackListener, type CallbackListener } from '../../src/auth/oauth-flow.js';
 import { createSetupRoute, newSetupToken, setupUrl, type SetupValues } from '../../src/tools/setup.js';
+import { connect, type Socket } from 'node:net';
 import { freePort } from '../auth/login-harness.js';
 
 // The first-run page is served from the callback listener itself, so these cases drive a REAL listener
@@ -61,6 +62,39 @@ async function serve(submit?: (values: SetupValues) => string): Promise<Served> 
       }),
   };
 }
+
+// A socket, not fetch(): the three cases below are about what arrives on the wire — a body that is still
+// being sent, a chunked one, and a second request that overlaps the first. fetch() cannot express any of
+// them, and undici's connection reuse would hide the overlap.
+const sockets: Socket[] = [];
+afterEach(() => {
+  for (const socket of sockets.splice(0)) socket.destroy();
+});
+
+function raw(port: number): { send: (chunk: string) => void; response: Promise<string> } {
+  const socket = connect(port, '127.0.0.1');
+  sockets.push(socket);
+  let answer = '';
+  const response = new Promise<string>((done) => {
+    socket.on('data', (chunk) => {
+      answer += String(chunk);
+      // The status line is all these cases read, and every answer here is short.
+      if (answer.includes('\r\n\r\n')) done(answer);
+    });
+    socket.on('close', () => done(answer));
+  });
+  const ready = new Promise<void>((connected) => socket.once('connect', () => connected()));
+  return {
+    send: (chunk) => void ready.then(() => socket.write(chunk)),
+    response,
+  };
+}
+
+const status = (answer: string): number => Number(answer.split(' ')[1]);
+
+const postHead = (port: number, token: string, length: number, extra = ''): string =>
+  `POST /setup?t=${token} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nOrigin: http://127.0.0.1:${port}\r\n` +
+  `Content-Type: application/x-www-form-urlencoded\r\nContent-Length: ${length}\r\n${extra}\r\n`;
 
 const form = (values: Partial<Record<string, string>>): string =>
   new URLSearchParams(values as Record<string, string>).toString();
@@ -219,5 +253,59 @@ describe('the first-run setup page', () => {
     expect(TOKEN).toMatch(/^[\w-]{43}$/);
     // And on the other family when that is the one that bound (#68 B2).
     expect(new URL(setupUrl('[::1]', 8976, TOKEN)).hostname).toBe('[::1]');
+  });
+
+  // GATE-GAP 10, the content type. The page posts a form; anything else is a caller that has
+  // misunderstood it, and the honest answer is the same 400 a bad field gets — not a stored value.
+  it('refuses a body that is not a form, and stores nothing', async () => {
+    const served = await serve();
+    const answer = await fetch(`http://127.0.0.1:${served.port}/setup?t=${TOKEN}`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${served.port}` },
+      body: JSON.stringify(VALUES),
+    });
+    expect(answer.status).toBe(400);
+    expect(served.submitted).toEqual([]);
+  });
+
+  // A chunked body has no Content-Length, and the reader was rewritten to an async iteration over the
+  // request: this is the case that says the rewrite reads a dechunked body and not the frames.
+  it('reads a chunked body, which carries no Content-Length', async () => {
+    const served = await serve();
+    const body = goodForm;
+    const half = Math.ceil(body.length / 2);
+    const socket = raw(served.port);
+    socket.send(postHead(served.port, TOKEN, 0, 'Transfer-Encoding: chunked\r\n').replace(/Content-Length: 0\r\n/, ''));
+    socket.send(`${half.toString(16)}\r\n${body.slice(0, half)}\r\n`);
+    socket.send(`${(body.length - half).toString(16)}\r\n${body.slice(half)}\r\n0\r\n\r\n`);
+
+    expect(status(await socket.response)).toBe(303);
+    expect(served.submitted).toEqual([VALUES]);
+  });
+
+  // GATE-GAP 10, the check-then-act window. The token is checked, then the body is awaited, and a body
+  // that arrives in pieces holds that await open — so a second POST that starts in the meantime passed
+  // the same check. It IS reachable: a client that sends half its body is enough, and nothing about it
+  // needs to be malicious. Both submissions would then store a configuration and both would be
+  // redirected into an authorization, with the flow left pointing at whichever arrived last.
+  it('lets only the first of two overlapping submissions through', async () => {
+    const served = await serve();
+    const body = goodForm;
+    const slow = raw(served.port);
+    slow.send(postHead(served.port, TOKEN, body.length));
+    slow.send(body.slice(0, 10));
+    // The slow request is now inside the handler, waiting for the rest of its body.
+    await new Promise((settle) => setTimeout(settle, 50));
+
+    const second = await served.post(body);
+
+    slow.send(body.slice(10));
+    const first = status(await slow.response);
+
+    // The first one through is the one that submits; the other is refused, and the token is spent either
+    // way — one submission, one stored configuration, one redirect.
+    expect([first, second.status].sort()).toEqual([303, 404]);
+    expect(served.submitted).toEqual([VALUES]);
   });
 });

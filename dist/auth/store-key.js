@@ -126,6 +126,11 @@ export function readKeychainConfig(run = runSecurity) {
             throw unreadable(found.status);
         // `security -w` ends its output with a newline; an item holding only whitespace is as absent as a
         // missing one and must not pass the required() check downstream as a value.
+        //
+        // What it does NOT do is return the value verbatim in every case: measured on macOS, a password that
+        // is not plain ASCII comes back as HEX. Nothing is decoded here on purpose — the place to refuse such
+        // a value is where a person types it (../tools/setup.ts, PRINTABLE_ASCII), because a value stored
+        // today and read back mangled tomorrow authorizes nothing and points at nothing.
         const value = found.output.trim();
         if (value)
             stored[name] = value;
