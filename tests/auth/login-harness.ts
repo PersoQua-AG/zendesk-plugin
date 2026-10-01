@@ -45,9 +45,10 @@ export let tokensPath: string;
 // sockets cannot hold one port, and the production listener binds the number itself
 // (src/auth/oauth-flow.ts, `server.listen(port)`), which no test may change.
 //
-// A foreign process inside the band is the one case the claim directory cannot see (#48: an
-// unrelated `next-server` on *:20127 reddened a run). That one is settled by portIsFree() below,
-// AFTER the claim is held.
+// What a claim cannot see: a foreign process holding a band port (#48 — an unrelated `next-server`
+// on *:20127 reddened a run). portHeldOn() below narrows that AFTER the claim is held. What it does
+// not narrow is the moment between its probe and the production bind; that remnant stays what line
+// 41 describes — a named EADDRINUSE, loud.
 export const PORT_BAND_FIRST = 20_000;
 export const PORT_BAND_LAST = 29_999;
 const PORT_BAND_SIZE = PORT_BAND_LAST - PORT_BAND_FIRST + 1;
@@ -180,43 +181,76 @@ function claimPort(port: number): boolean {
   }
 }
 
-// Is the port free of a listener this suite knows nothing about? (#48.)
+// Which address a listener outside this suite holds this port on, '' when nobody does. (#48.)
 //
-// This runs ONLY on a band port and ONLY once its claim is held, so the #13 window stays shut: the
-// number is one no listen(0) anywhere can be given, and no other run of this user can draw it while
-// the probe's own socket is closing. Before the claim, nothing binds.
+// Runs ONLY on a band port and ONLY once the claim is held, so the #13 window stays shut: nothing
+// binds before the claim, and no listen(0) anywhere can be given a band number.
 //
-// It binds exactly as production does — src/auth/oauth-flow.ts:244 calls `server.listen(port)` with
-// no host, i.e. every interface. That is not cosmetic: measured on macOS, a probe narrowed to
-// '127.0.0.1' binds SUCCESSFULLY next to a listener already holding the same port on the wildcard
-// address, and so reports free a port the production bind then fails on.
+// Binding is the only way to ask, and one bind is not enough. Measured on macOS, holder down the
+// side, probe address across:
 //
-// Node has no synchronous bind and freePort() has ~50 synchronous call sites, so the probe is a
-// short-lived node that exits non-zero on EADDRINUSE (and on any other bind error: unusable is
-// unusable). ponytail: one child process per probe, ~40 ms; make freePort() async if that ever
-// shows up in the suite time.
-function portIsFree(port: number): boolean {
-  const probe = `const s=require('node:net').createServer();s.on('error',()=>process.exit(1));s.listen(${port},()=>s.close());`;
-  return spawnSync(process.execPath, ['-e', probe]).status === 0;
+//                      0.0.0.0   127.0.0.1   ::1    production bind (wildcard)
+//   holder ::          busy      free        free   EADDRINUSE
+//   holder 0.0.0.0     busy      free        free   succeeds
+//   holder 127.0.0.1   free      busy        free   succeeds
+//   holder ::1         free      free        busy   succeeds
+//   nobody             free      free        free   succeeds
+//
+// Three addresses, none of them redundant, and together they see every holder. The production bind
+// itself (src/auth/oauth-flow.ts:244, `server.listen(port)`, no host) is NOT one of them: it is the
+// only row that MISSES three of the four, because libuv binds TCP with SO_REUSEADDR and a wildcard
+// bind therefore succeeds next to a more specific one — which then takes the traffic. End to end:
+// foreign HTTP server on 0.0.0.0:P, ours on the wildcard, `GET http://127.0.0.1:P/callback`
+// answered `FOREIGN`, with no EADDRINUSE anywhere. Silent, and worse than the case #48 names.
+//
+// A child process, because Node cannot bind a NAMED address synchronously: `listen(port, host)`
+// goes through lookupAndListen -> dns.lookup, and `server.listening` is still false when listen()
+// returns, even for a free port and a numeric literal host (measured). An async freePort() is not
+// available either — it is called from synchronous describe bodies
+// (tests/auth/oauth-flow.callback-edges.test.ts:9, tests/auth/oauth-flow.stray-callback.test.ts:35).
+//
+// Exit 0 = free; 1 = taken, with the address on stdout. Anything else is "I could not look", which
+// is neither answer: read as taken it burns the band on one transient fork failure, read as free it
+// hands out a port a stranger holds. So it throws, and names the probe rather than the claims.
+const PROBE_ADDRESSES = ['0.0.0.0', '127.0.0.1', '::1'];
+const PROBE_TIMEOUT_MS = 2_000;
+
+function portHeldOn(port: number): string {
+  const probe =
+    `const n=require('node:net'),{writeSync}=require('node:fs');let left=${PROBE_ADDRESSES.length};` +
+    `for(const h of ${JSON.stringify(PROBE_ADDRESSES)}){const s=n.createServer();` +
+    `s.on('error',()=>{writeSync(1,h);process.exit(1)});` +
+    `s.listen(${port},h,()=>{s.close();if(--left===0)process.exit(0)})}`;
+  const run = spawnSync(process.execPath, ['-e', probe], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8' });
+  if (run.status === 0) return '';
+  if (run.status === 1) return run.stdout || 'an address it did not name';
+  throw new Error(
+    `the port probe for ${port} could not run (status ${run.status}, signal ${run.signal}` +
+      `${run.error ? `, ${run.error.message}` : ''}) — this is the probe failing, not a stale claim`,
+  );
 }
 
 // Where this process starts scanning. Only an optimization — the claims, not the offset, are what
 // make two acquirers disagree — so that concurrent runs do not walk the same prefix every time.
 let nextCandidate = process.pid % PORT_BAND_SIZE;
 
-// Point the scan at a chosen band port. The one way a test can put a known port in front of
-// freePort(); nothing in the suite's normal path calls it.
-export function startScanAt(port: number): void {
-  nextCandidate = port - PORT_BAND_FIRST;
-}
-
 export function freePort(): number {
   for (let tried = 0; tried < PORT_BAND_SIZE; tried += 1) {
     const port = PORT_BAND_FIRST + (nextCandidate % PORT_BAND_SIZE);
     nextCandidate += 1;
-    // The claim is kept on a port a foreign listener holds: it is unusable for every run of this
-    // user, and releasing it would only make the next acquirer pay for the same probe.
-    if (claimPort(port) && portIsFree(port)) return port;
+    if (!claimPort(port)) continue;
+    const heldOn = portHeldOn(port);
+    if (heldOn === '') return port;
+    // The claim is KEPT: it names this pid, so it holds the port against every concurrent run for
+    // as long as this process lives, and the sweep takes it back once the pid is gone. Releasing it
+    // would only make the next acquirer pay for the same probe.
+    //
+    // And it is said out loud, because the staleness assumption at line 69 had exactly one
+    // observation that could contradict it — the named EADDRINUSE from src/tools/login.ts:113 — and
+    // skipping the port here is what takes that observation away.
+    process.stderr.write(
+      `[test-ports] skipping band port ${port}: held on ${heldOn} by a listener outside this suite\n`,
+    );
   }
   throw new Error(
     `no unclaimed port left in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}; stale claims under ${CLAIM_DIR}?`,
