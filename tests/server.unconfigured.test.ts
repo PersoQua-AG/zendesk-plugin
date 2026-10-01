@@ -100,11 +100,19 @@ describe('createServer with incomplete extension configuration', () => {
   // And where it CAN be stored, the answer is the setup page and nothing else. Not the subdomain, not
   // the data directory, not a stack: the page is local, and what the user types there stays local.
   it('answers zendesk_login with the first-run setup URL, and nothing else, when the Keychain works', async () => {
-    const client = await connect(halfConfiguredEnv(), keychain());
+    const env = halfConfiguredEnv();
+    const client = await connect(env, keychain());
     const text = textOf(await client.callTool({ name: 'zendesk_login', arguments: {} }));
     const url = new URL(text.split(/\s+/).find((word) => word.startsWith('http://')) as string);
     expect(url.hostname).toBe('127.0.0.1');
     expect(url.pathname).toBe('/setup');
+    // The PORT this install was configured with, not the shipped default. resolveAuthConfig validates the
+    // subdomain before the port and throws there, so a degraded start used to serve on 8976 — and the one
+    // person who sets a different port does so because 8976 is taken, which is both the port the page
+    // would have told them to register and the one it could not bind.
+    expect(url.port).toBe(env.ZENDESK_OAUTH_CALLBACK_PORT);
+    const page = await fetch(url, { redirect: 'manual' });
+    expect(await page.text()).toContain(`http://localhost:${env.ZENDESK_OAUTH_CALLBACK_PORT}/callback`);
     expect(url.searchParams.get('t')).toMatch(/^[\w-]{43}$/);
     expect(text).not.toContain('zendesk_subdomain');
     expect(text).not.toContain('client-abc');

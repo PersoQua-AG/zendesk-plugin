@@ -10,36 +10,36 @@ const fullEnv = (): NodeJS.ProcessEnv => ({
 
 describe('resolveAuthConfig', () => {
   it('reads subdomain/clientId/clientSecret from env', () => {
-    const { config } = resolveAuthConfig(fullEnv());
+    const { config } = resolveAuthConfig(fullEnv(), keychain());
     expect(config.subdomain).toBe('acme');
     expect(config.clientId).toBe('client-abc');
     expect(config.clientSecret).toBe('secret-xyz');
   });
 
   it('defaults callbackPort to 8976 and honors override', () => {
-    expect(resolveAuthConfig(fullEnv()).config.callbackPort).toBe(8976);
-    const overridden = resolveAuthConfig({ ...fullEnv(), ZENDESK_OAUTH_CALLBACK_PORT: '9000' });
+    expect(resolveAuthConfig(fullEnv(), keychain()).config.callbackPort).toBe(8976);
+    const overridden = resolveAuthConfig({ ...fullEnv(), ZENDESK_OAUTH_CALLBACK_PORT: '9000' }, keychain());
     expect(overridden.config.callbackPort).toBe(9000);
   });
 
   it('treats an empty-string callback port as absent (Number("")===0 would bind port 0)', () => {
-    const { config } = resolveAuthConfig({ ...fullEnv(), ZENDESK_OAUTH_CALLBACK_PORT: '' });
+    const { config } = resolveAuthConfig({ ...fullEnv(), ZENDESK_OAUTH_CALLBACK_PORT: '' }, keychain());
     expect(config.callbackPort).toBe(8976);
   });
 
   it('treats an empty-string CLAUDE_PLUGIN_DATA as absent (""→tokens.enc at fs root)', () => {
-    const resolved = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '' });
+    const resolved = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '' }, keychain());
     expect(resolved.dataDir).toBe(defaultDataDir(fullEnv()));
     expect(resolved.tokensPath).toBe(`${defaultDataDir(fullEnv())}/tokens.enc`);
   });
 
   it('uses read/write scopes (server source of truth)', () => {
-    expect(resolveAuthConfig(fullEnv()).config.scopes).toEqual(['read', 'write']);
+    expect(resolveAuthConfig(fullEnv(), keychain()).config.scopes).toEqual(['read', 'write']);
   });
 
   it('defaults dataDir and honors CLAUDE_PLUGIN_DATA', () => {
-    expect(resolveAuthConfig(fullEnv()).dataDir).toBe(defaultDataDir(fullEnv()));
-    const overridden = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '/var/data' });
+    expect(resolveAuthConfig(fullEnv(), keychain()).dataDir).toBe(defaultDataDir(fullEnv()));
+    const overridden = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '/var/data' }, keychain());
     expect(overridden.dataDir).toBe('/var/data');
   });
 
@@ -130,10 +130,10 @@ describe('the Keychain as the second source of the three OAuth values', () => {
   // dropping it also makes the configuration incomplete again, which is what gets the setup page offered
   // instead of a start that fails on a value nobody can see or correct.
   it('drops an unusable stored subdomain instead of echoing it into the error', () => {
-    const stored = configuredKeychain({ ZENDESK_SUBDOMAIN: 'secret-instance.zendesk.com' });
+    const security = configuredKeychain({ ZENDESK_SUBDOMAIN: 'secret-instance.zendesk.com' });
     let thrown = '';
     try {
-      resolveAuthConfig({}, stored);
+      resolveAuthConfig({}, security);
     } catch (err) {
       thrown = err instanceof Error ? err.message : String(err);
     }

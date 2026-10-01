@@ -12,18 +12,52 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 
 const TESTS = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Both doors into the Keychain path: createServer reads the token-store key through the spread in
-// resolveOrDegrade, resolveAuthConfig reads it and the three values directly. Matched on the IMPORT, not
-// on the call, because `createServer` is also node:http's and half the suite binds a port with it.
-const RESOLVES_CONFIG = /import \{[^}]*\b(createServer|resolveAuthConfig)\b[^}]*\} from '[^']*src\/(server|auth\/config)\.js'/s;
-const HAS_SEAM = /from '[^']*keychain\.js'|\bnoKeychain\b/;
+// resolveOrDegrade, resolveAuthConfig reads it and the three values directly.
+const DOORS = ['createServer', 'resolveAuthConfig'];
+// What counts as handing the fake runner in. `security:` covers createServer's deps object; the named
+// helpers and `.run` (what fakeKeychain exposes its runner as) cover resolveAuthConfig's positional
+// argument; noKeychain is the production opt-out the remote bridge passes.
+const SEAM =
+  /\bsecurity\s*:|\b(keychain|configuredKeychain|deniedKeychain|fakeKeychain)\s*\(|\bnoKeychain\b|\bsecurity\b|\.run\b/;
 
-// The two files that legitimately name those calls without resolving anything: this guard itself, and
-// the executor-safety fixtures, which contain a local function of the same name as a string.
-const EXEMPT = new Set(['plugin/no-real-keychain.test.ts', 'plugin/executor-safety-guard.test.ts']);
+// This guard itself names the doors in strings and in a regex.
+const EXEMPT = new Set(['plugin/no-real-keychain.test.ts']);
+
+// Per CALL, not per file. The first version of this matched IMPORTS, and the original offender satisfied
+// it: tests/auth/config.placeholder.test.ts imported the fake once and then called createServer eleven
+// times without it, which still read the developer's own login keychain — measured, a 44-character value
+// with the prefix of the real item. A regex cannot read an argument list that spans lines, so the calls
+// are found with the TypeScript parser (already a devDependency; scripts/assert-executor-safety.mjs is
+// the precedent) and each one's own argument text is what gets checked.
+function unseamedCalls(rel: string, source: string): string[] {
+  const imported = new Set(
+    [...source.matchAll(/import \{([^}]*)\} from '[^']*src\/(?:server|auth\/config)\.js'/gs)].flatMap((m) =>
+      m[1].split(',').map((name) => name.trim().split(/\s+as\s+/).pop() as string),
+    ),
+  );
+  const doors = DOORS.filter((door) => imported.has(door));
+  if (doors.length === 0) return [];
+
+  const file = ts.createSourceFile(rel, source, ts.ScriptTarget.Latest, true);
+  const offenders: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && doors.includes(node.expression.text)) {
+      const args = node.arguments.map((argument) => argument.getText(file)).join(', ');
+      if (!SEAM.test(args)) {
+        const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
+        offenders.push(`${rel}:${line + 1}  ${node.expression.text}(${args.slice(0, 60)})`);
+      }
+    }
+    node.forEachChild(visit);
+  };
+  file.forEachChild(visit);
+  return offenders;
+}
 
 function testFiles(): string[] {
   return readdirSync(TESTS, { recursive: true })
@@ -32,15 +66,12 @@ function testFiles(): string[] {
 }
 
 describe('no test reaches the real macOS Keychain', () => {
-  it('every file that resolves a configuration takes the fake `security` runner', () => {
-    const offenders = testFiles().filter((rel) => {
-      const source = readFileSync(join(TESTS, rel), 'utf8');
-      return RESOLVES_CONFIG.test(source) && !HAS_SEAM.test(source);
-    });
+  it('every call that resolves a configuration is given the fake `security` runner', () => {
+    const offenders = testFiles().flatMap((rel) => unseamedCalls(rel, readFileSync(join(TESTS, rel), 'utf8')));
     expect(
       offenders,
-      `these files resolve a Zendesk configuration without the fake Keychain, so they would reach the ` +
-        `real one on macOS and nothing at all on Linux:\n${offenders.join('\n')}`,
+      `these CALLS resolve a Zendesk configuration without the fake Keychain, so they reach the real one ` +
+        `on macOS and nothing at all on Linux:\n${offenders.join('\n')}`,
     ).toEqual([]);
   });
 

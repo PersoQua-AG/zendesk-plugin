@@ -148,7 +148,7 @@ describe('subdomain guard — the property, over a generated input space', () =>
   // subdomain decodes, and a customer may hold one. "xn--bcher-kva" is "bücher". Rejecting the
   // prefix would have locked them out; forming the URL states the property instead.
   it('keeps a valid punycode subdomain working', () => {
-    const { config } = resolveAuthConfig(env('xn--bcher-kva'));
+    const { config } = resolveAuthConfig(env('xn--bcher-kva'), keychain());
     expect(config.subdomain).toBe('xn--bcher-kva');
     expect(new URL(buildAuthorizationUrl(config, 'challenge', 'state')).hostname).toBe(
       'xn--bcher-kva.zendesk.com',

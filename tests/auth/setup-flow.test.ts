@@ -211,16 +211,27 @@ describe('the first run, end to end', () => {
     expect(new URL(submitted.headers.get('location') as string).origin).toBe('https://acme.zendesk.com');
   });
 
-  it('says so, rather than offering a page, when setup=true cannot be honoured', async () => {
+  // The case that replaced a fixture src/server.ts cannot build. There used to be a third message here —
+  // "there is nowhere to store a Zendesk configuration" — pinned on a LoginDeps with neither `setup` nor
+  // `configError`, a pair the server never produces: a configuration that resolves proves the Keychain
+  // answered, and one that does not always carries a reason. Both the message and that test are gone.
+  // What a configured install reaching setup=true CAN run into is a port it cannot bind, and then the
+  // bind failure speaks for itself — there is nothing missing to name.
+  it('reports the bind failure itself when a configured install cannot open the page', async () => {
     const port = freePort();
     const configured: LoginDeps = {
       config: { subdomain: 'acmee', clientId: 'client-abc', clientSecret: 'secret-xyz', callbackPort: port, scopes: DEFAULT_SCOPES },
       tokensPath,
       tokenStoreKey: SECRET,
+      setup: { writeConfig: () => expect.fail('nothing may be stored when no page was served') },
+      listen: () => Promise.reject(new Error('listen EADDRINUSE: address already in use')),
     };
+
     const answer = await runLogin(configured, { setup: true });
-    expect(answer).toMatch(/nowhere to store a Zendesk configuration/i);
-    expect(answer).toContain('ZENDESK_SUBDOMAIN');
+
+    expect(answer).toContain(String(port));
+    expect(answer).toContain('oauth_callback_port');
+    expect(answer).not.toContain('/setup');
   });
 
   // B2. One family is allowed to fail, and QA measured what a hardcoded 127.0.0.1 then did: a foreign

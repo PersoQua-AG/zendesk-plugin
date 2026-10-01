@@ -77,14 +77,6 @@ const RETRY_FRESH =
   'Run zendesk_login again to start a new authorization. If the stored subdomain, client id or client ' +
   'secret is the problem, run zendesk_login with setup=true to enter them again.';
 
-// What setup=true answers where no configuration can be stored: another platform (#69), a locked or
-// denied Keychain, or a data directory that cannot be used. The server leaves `setup` unset in all three
-// and its own reason, when it has one, is the better message.
-const SETUP_UNAVAILABLE =
-  'There is nowhere to store a Zendesk configuration on this machine: the macOS Keychain is the only ' +
-  'place the plugin writes one, and it could not be used. Pass ZENDESK_SUBDOMAIN, ' +
-  'ZENDESK_OAUTH_CLIENT_ID and ZENDESK_OAUTH_CLIENT_SECRET in the environment instead.';
-
 const UNREADABLE_STORE =
   'Stored credentials could not be read (encryption secret changed or file corrupt) — starting a new authorization.';
 
@@ -211,8 +203,9 @@ async function beginSetup(
   setup: SetupDeps,
   listen: NonNullable<LoginDeps['listen']>,
   // What to say when nothing could be bound: the degraded wording the server already produced, which
-  // names what is missing. Passed in rather than read off deps so there is no second reading of it.
-  fallback: string,
+  // names what is missing. Absent on a CONFIGURED install reaching setup=true — there is nothing missing
+  // there — and then the bind failure speaks for itself, port and field included.
+  fallback?: string,
 ): Promise<string> {
   const verifier = generateCodeVerifier();
   const state = randomBytes(16).toString('base64url');
@@ -248,10 +241,9 @@ async function beginSetup(
   let listener: CallbackListener;
   try {
     listener = await listen(port, state, timeoutMs, route);
-  } catch {
-    // Nothing was bound, so there is no page to send anyone to. The degraded wording is the better
-    // answer here: it names what is missing and where to put it.
-    return fallback;
+  } catch (err) {
+    // Nothing was bound, so there is no page to send anyone to.
+    return fallback ?? `${failureText(err, deps)} ${RETRY_RESOLVED}`;
   }
   // The URL names an address the listener REPORTED binding. 127.0.0.1 when it is there, because that is
   // the one a browser reaches without a DNS answer; [::1] when only that family came up. Never a family
@@ -358,11 +350,17 @@ async function runQueuedLogin(deps: LoginDeps, options: LoginOptions): Promise<s
   if (activeFlow) return collectFlow(activeFlow, deps, exchange);
 
   // No usable configuration — or one the user says is the wrong one. The first-run page is the answer,
-  // not an error, but only where one can actually be stored: otherwise the degraded wording stands.
-  if (deps.configError || options.setup) {
-    if (!deps.setup) return deps.configError ?? SETUP_UNAVAILABLE;
-    return beginSetup(deps, deps.setup, listen, deps.configError ?? SETUP_UNAVAILABLE);
+  // not an error, but only where one can actually be stored: otherwise the degraded wording stands,
+  // because it is the one that says WHY (a locked Keychain, another platform, an unusable data directory).
+  //
+  // There is deliberately no third message for "setup=true and nowhere to store one and nothing to
+  // report": the server cannot build that pair — a configuration that resolves proves the Keychain
+  // answered, and one that does not always carries a reason — and a message for an unreachable state is a
+  // message no test can earn.
+  if (deps.setup && (deps.configError || options.setup)) {
+    return beginSetup(deps, deps.setup, listen, deps.configError ?? undefined);
   }
+  if (deps.configError) return deps.configError;
 
   const existing = readExistingTokens(deps);
   if (!options.force && existing.tokens) {

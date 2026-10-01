@@ -3,8 +3,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { AuthManager } from './auth/auth-manager.js';
 import { TokenStore } from './auth/token-store.js';
 import {
+  callbackPortOrDefault,
   dataDirOf,
-  DEFAULT_CALLBACK_PORT,
   DEFAULT_SCOPES,
   resolveAuthConfig,
   stripPlaceholders,
@@ -28,7 +28,7 @@ import type { TokenProvider } from './client/token-provider.js';
 import type { ToolContext } from './register/context.js';
 import { registerAuthTools } from './register/auth.js';
 import { registerDiagnosticsTool } from './register/diagnostics.js';
-import { runLogin, type LoginDeps } from './tools/login.js';
+import { runLogin, type LoginDeps, type SetupDeps } from './tools/login.js';
 import { registerCoreTools } from './register/core.js';
 import { registerTicketTools } from './register/tickets.js';
 import { registerSearchTools } from './register/search.js';
@@ -201,14 +201,24 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
   const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
   const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
 
-  const callbackPort = auth.ok ? auth.config.callbackPort : DEFAULT_CALLBACK_PORT;
+  // The port is resolved on its OWN, because it is independent of everything else and the setup page has
+  // to NAME it: resolveAuthConfig validates the subdomain first and throws there, so a degraded start
+  // used to fall back to 8976 — and the only person who sets a different port does so because 8976 is
+  // taken, which is both the port the page would have told them to register and the one it could not bind.
+  const callbackPort = auth.ok ? auth.config.callbackPort : callbackPortOrDefault(env);
 
-  // Can a first-run setup be offered? Only where what it produces can be stored, and macOS ACLs are
-  // PER ITEM — so both halves are asked, the three values and the key. A locked keychain, a denied
-  // prompt, or no keychain at all (#69) leaves `setupKey` unset, and then the degraded wording stands
-  // instead of a page that could not save what it collected.
+  // Can a first-run setup be offered? Only where what it produces can be stored.
+  //
+  // Asked for a CONFIGURED install too, and that is the point: a stored configuration can be complete
+  // and WRONG — a subdomain typed `acmee` resolves, so the plugin never degrades — and setup=true is then
+  // the only way back to the page. Where the configuration resolved, the Keychain has already answered
+  // with the token-store key (the spread in resolveOrDegrade read it), so the question is settled and
+  // nothing is read again. Where it did not, both halves are asked, because macOS ACLs are per item: a
+  // page offered over values we cannot even read would collect three and `-U` over what is there.
   let setupKey: string | undefined;
-  if (!auth.ok && cacheOk) {
+  if (auth.ok) {
+    setupKey = auth.tokenStoreKey;
+  } else if (cacheOk) {
     try {
       readKeychainConfig(security);
       setupKey = resolveTokenStoreKey(security);
@@ -216,6 +226,11 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
       // Nowhere to store an answer. `auth.reason` already says why.
     }
   }
+  // The writer takes the SAME runner the reads took: one seam for everything that reaches the Keychain,
+  // or an injected one is not an injected one.
+  const setup: SetupDeps | undefined = setupKey
+    ? { writeConfig: (values) => writeKeychainConfig(values, security) }
+    : undefined;
 
   // Only the local (stdio/extension) path can receive the localhost OAuth callback; an injected
   // TokenProvider means the remote bridge already owns authorization. Kept out of ctx so the OAuth
@@ -223,15 +238,13 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
   const login: LoginDeps | undefined = deps.authManager
     ? undefined
     : auth.ok
-      ? { config: auth.config, tokensPath, tokenStoreKey: auth.tokenStoreKey }
+      ? { config: auth.config, tokensPath, tokenStoreKey: auth.tokenStoreKey, setup }
       : {
           config: noOAuthConfig(callbackPort),
           tokensPath,
           tokenStoreKey: setupKey ?? '',
           configError: auth.reason,
-          // The writer takes the SAME runner the reads took: one seam for everything that reaches the
-          // Keychain, or an injected one is not an injected one.
-          setup: setupKey ? { writeConfig: (values) => writeKeychainConfig(values, security) } : undefined,
+          setup,
         };
 
   // The first tool call without usable credentials starts the authorization itself and answers with the
@@ -246,11 +259,18 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
   // the second one a healed token boundary would send every request to https://.zendesk.com.
   let healed: AuthManager | undefined;
   let healedSubdomain = '';
-  const configured = (config: OAuthConfig): void => {
-    healedSubdomain = config.subdomain;
-    healed = new AuthManager(new TokenStore(tokensPath, setupKey as string), config, undefined, startLogin);
-  };
-  if (login?.setup) login.setup.onConfigured = configured;
+  if (login && setup && setupKey) {
+    setup.onConfigured = (config) => {
+      healedSubdomain = config.subdomain;
+      healed = new AuthManager(new TokenStore(tokensPath, setupKey), config, undefined, startLogin);
+      // The login tool holds the same object, and it answered "not set up" from these two FIELDS even
+      // after a healed session had served a Zendesk request: the degraded reason outlived the reason for
+      // it. Cleared together, so a later login authorizes against the tenant that was just configured
+      // rather than against the empty one this process started with.
+      login.config = config;
+      login.configError = null;
+    };
+  }
 
   const authManager: TokenProvider =
     (cacheOk ? deps.authManager : undefined) ??

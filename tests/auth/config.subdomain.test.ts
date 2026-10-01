@@ -30,7 +30,7 @@ describe('subdomain validation — values that move the origin', () => {
   ])('rejects %s: %s', (_label, value, movedOrigin) => {
     // The escape is real, not hypothetical: this is what the unguarded template produces.
     expect(new URL(`https://${value}.zendesk.com/oauth/tokens`).origin).toBe(movedOrigin);
-    expect(() => resolveAuthConfig(withSubdomain(value))).toThrow(rejection(value));
+    expect(() => resolveAuthConfig(withSubdomain(value), keychain())).toThrow(rejection(value));
   });
 
   it.each([
@@ -44,12 +44,12 @@ describe('subdomain validation — values that move the origin', () => {
     ['an inner space', 'ac me'],
     ['only whitespace — trimmed to nothing', '   '],
   ])('rejects %s: %s', (_label, value) => {
-    expect(() => resolveAuthConfig(withSubdomain(value))).toThrow(rejection(value.trim()));
+    expect(() => resolveAuthConfig(withSubdomain(value), keychain())).toThrow(rejection(value.trim()));
   });
 
   it(`rejects a value one character past the ${MAX_SUBDOMAIN_LENGTH}-character DNS label limit`, () => {
     const tooLong = 'a'.repeat(MAX_SUBDOMAIN_LENGTH + 1);
-    expect(() => resolveAuthConfig(withSubdomain(tooLong))).toThrow(rejection(tooLong));
+    expect(() => resolveAuthConfig(withSubdomain(tooLong), keychain())).toThrow(rejection(tooLong));
   });
 
   it('names the user_config field, not the env var alone, and gives the worked example', () => {
@@ -76,12 +76,12 @@ describe('subdomain validation — values that must keep working', () => {
     ['a trailing dash — likewise', 'acme-'],
     ['exactly the DNS label limit', 'a'.repeat(MAX_SUBDOMAIN_LENGTH)],
   ])('accepts %s: %s', (_label, value) => {
-    expect(resolveAuthConfig(withSubdomain(value)).config.subdomain).toBe(value);
+    expect(resolveAuthConfig(withSubdomain(value), keychain()).config.subdomain).toBe(value);
   });
 
   it('trims surrounding whitespace rather than rejecting it — a copy-paste artifact, not an opinion', () => {
-    expect(resolveAuthConfig(withSubdomain('  acme  ')).config.subdomain).toBe('acme');
-    expect(resolveAuthConfig(withSubdomain('acme\n')).config.subdomain).toBe('acme');
+    expect(resolveAuthConfig(withSubdomain('  acme  '), keychain()).config.subdomain).toBe('acme');
+    expect(resolveAuthConfig(withSubdomain('acme\n'), keychain()).config.subdomain).toBe('acme');
   });
 
   // An absent/blank required field must still fail as MISSING, naming the empty field — not as

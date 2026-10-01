@@ -33,7 +33,7 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
     const { config } = resolveAuthConfig({
       ...fullEnv(),
       ZENDESK_OAUTH_CALLBACK_PORT: '${user_config.oauth_callback_port}',
-    });
+    }, keychain());
     expect(config.callbackPort).toBe(8976);
     expect(Number.isNaN(config.callbackPort)).toBe(false);
   });
@@ -42,7 +42,7 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
     const { dataDir } = resolveAuthConfig({
       ...fullEnv(),
       CLAUDE_PLUGIN_DATA: '${user_config.data_dir}',
-    });
+    }, keychain());
     expect(dataDir).not.toContain('${');
   });
 
@@ -70,13 +70,13 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
       ...serverEnv(),
       ZENDESK_SECURITY_LEVEL: '${user_config.security_level}',
       ZENDESK_MARKDOWN_CONVERSION: '${user_config.markdown_conversion}',
-    });
+    }, { security: keychain() });
     expect(ctx.securityLevel).toBe('standard');
     expect(ctx.markdownDefault).toBe(true);
   });
 
   it('a stringified boolean "false" still disables markdown conversion', () => {
-    const { ctx } = createServer({ ...serverEnv(), ZENDESK_MARKDOWN_CONVERSION: 'false' });
+    const { ctx } = createServer({ ...serverEnv(), ZENDESK_MARKDOWN_CONVERSION: 'false' }, { security: keychain() });
     expect(ctx.markdownDefault).toBe(false);
   });
 });
@@ -91,7 +91,7 @@ describe('markdown conversion — an unreadable value is never read as a silent 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const env = serverEnv();
     if (value !== undefined) env.ZENDESK_MARKDOWN_CONVERSION = value;
-    const { ctx } = createServer(env);
+    const { ctx } = createServer(env, { security: keychain() });
     const warnings = warn.mock.calls.map((c) => String(c[0]));
     warn.mockRestore();
     return { markdownDefault: ctx.markdownDefault, warnings };

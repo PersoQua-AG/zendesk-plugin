@@ -40,6 +40,10 @@ export interface FakeKeychainOptions {
   failRead?: Record<string, number>;
   failWrite?: Record<string, number>;
   failDelete?: string[];
+  // What the item ends up holding, whatever the write carried: the real `security` stores an EMPTY
+  // password and exits 0 when its retype prompt sees EOF, and nothing above the runner can see that
+  // except by reading the item back.
+  storeAs?: Record<string, string>;
   // No `security` binary at all: what every non-macOS platform looks like.
   unavailable?: boolean;
 }
@@ -71,7 +75,7 @@ export function fakeKeychain(options: FakeKeychainOptions = {}): FakeKeychain {
       // here and every round-trip assertion would fail.
       const [value, retyped] = (input ?? '').split('\n');
       if (value === undefined || value !== retyped) return exits(1);
-      items.set(account, value);
+      items.set(account, options.storeAs?.[account] ?? value);
       return ok();
     }
     if (verb === 'delete-generic-password') {

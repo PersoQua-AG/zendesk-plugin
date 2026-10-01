@@ -18,9 +18,10 @@ import { MAX_SUBDOMAIN_LENGTH, validateSubdomain } from '../auth/config.js';
 // bound "open a URL and approve"; 15 bounds "set up an integration".
 export const SETUP_TIMEOUT_MS = 900_000;
 
-// A form submission is a few hundred bytes. The cap is what stops an unauthenticated local process
-// from making the server read until it runs out of memory — the body is read before the token is even
-// checked, because the token for a POST arrives in the query string, not in the body.
+// A form submission is a few hundred bytes. The cap is what stops a caller that HAS the one-time token —
+// or is probing for it — from making the server read until it runs out of memory. (An earlier version of
+// this comment claimed the body is read before the token is checked. It is not: the token is checked
+// first, on the query string, and only then is a body read at all.)
 const MAX_BODY_BYTES = 4096;
 
 const HTML = { 'Content-Type': 'text/html; charset=utf-8' } as const;
@@ -207,13 +208,6 @@ export function createSetupRoute(deps: SetupRouteDeps): SetupRoute {
   // and a GET does not either, so the page survives a reload. Neither discloses anything: the page is
   // instructions plus an empty form.
   let spent = false;
-  // `spent` is checked BEFORE the body is read, and a body arrives in pieces: a client that has sent half
-  // of it holds that await open, so a second POST starting meanwhile passed the same check and both
-  // submitted. Measured, with nothing malicious in it — two 303s and two stored configurations from one
-  // single-use token, leaving the flow pointed at whichever arrived last. So a POST that is already being
-  // processed makes a second one a non-event. Released on a failure, which is what keeps a typo from
-  // ending the setup.
-  let submitting = false;
 
   return async (req, url): Promise<SetupResponse> => {
     if (spent || !tokenMatches(url.searchParams.get('t'), deps.token)) return notFound();
@@ -230,23 +224,29 @@ export function createSetupRoute(deps: SetupRouteDeps): SetupRoute {
       return answer(403, 'Diese Anfrage kam nicht von der Einrichtungsseite.');
     }
 
-    if (submitting) return notFound();
+    // The body is read BEFORE the single use is claimed, and the claim is then checked and taken with no
+    // await between the two — so the submission that WINS is the one that finishes, not the one that
+    // started first. A marker taken before the read had the opposite effect and it was worse than the
+    // bug it replaced: a caller that sent eight bytes of a declared sixty-one and waited took the slot,
+    // the person's real submission was refused, and the stall then stored the values the slow caller
+    // finally sent. A stalled browser also held the slot for the whole of node's request timeout.
+    //
+    // Nothing is held open while the body arrives, so a slow caller costs nobody anything: it either
+    // finishes first, or it finds the use spent and is a non-event.
+    const body = await readBody(req);
+    if (spent) return notFound();
 
-    submitting = true;
-    try {
-      const parsed = parseSetupForm(await readBody(req));
-      if ('problem' in parsed) return answer(400, setupPage(deps.port, deps.token, parsed.problem));
+    const parsed = parseSetupForm(body);
+    if ('problem' in parsed) return answer(400, setupPage(deps.port, deps.token, parsed.problem));
 
-      // Stored first, redirected second: a redirect into an authorization whose client was not saved
-      // would authorize a configuration the next start cannot reproduce.
-      const authorizationUrl = deps.submit(parsed.values);
-      spent = true;
-      return answer(303, 'Weiter zur Zendesk-Anmeldung …', {
-        'Content-Type': 'text/plain; charset=utf-8',
-        Location: authorizationUrl,
-      });
-    } finally {
-      submitting = false;
-    }
+    // Stored first, redirected second: a redirect into an authorization whose client was not saved would
+    // authorize a configuration the next start cannot reproduce. `spent` is set between two synchronous
+    // statements, which is what makes the check above a claim rather than a guess.
+    const authorizationUrl = deps.submit(parsed.values);
+    spent = true;
+    return answer(303, 'Weiter zur Zendesk-Anmeldung \u2026', {
+      'Content-Type': 'text/plain; charset=utf-8',
+      Location: authorizationUrl,
+    });
   };
 }

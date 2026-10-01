@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  callbackPortOrDefault,
   MAX_CALLBACK_PORT,
   MIN_CALLBACK_PORT,
   resolveAuthConfig,
@@ -67,5 +68,26 @@ describe('callback port validation', () => {
     const field = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')).user_config.oauth_callback_port;
     expect(field.min).toBe(MIN_CALLBACK_PORT);
     expect(field.max).toBe(MAX_CALLBACK_PORT);
+  });
+});
+
+// The port a start that could not resolve the REST serves its setup page on. It used to be the shipped
+// default whatever the environment said, because resolveAuthConfig validates the subdomain first and
+// throws there — and the one person who sets a different port does so because 8976 is taken, which is
+// both the port the page would have told them to register and the one it could not bind.
+describe('the callback port when nothing else resolves', () => {
+  it('is the configured one', () => {
+    expect(callbackPortOrDefault({ ZENDESK_OAUTH_CALLBACK_PORT: '21224' })).toBe(21224);
+  });
+
+  it('is the shipped default when there is none', () => {
+    expect(callbackPortOrDefault({})).toBe(8976);
+  });
+
+  // Not clamped here either: resolveAuthConfig has already thrown on this value and the reason it threw
+  // with names the field, so the default is the only honest answer left rather than a second opinion.
+  it('is the shipped default when the configured one is unusable', () => {
+    expect(callbackPortOrDefault({ ZENDESK_OAUTH_CALLBACK_PORT: '70000' })).toBe(8976);
+    expect(callbackPortOrDefault({ ZENDESK_OAUTH_CALLBACK_PORT: 'eighty' })).toBe(8976);
   });
 });

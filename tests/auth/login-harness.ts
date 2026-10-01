@@ -337,7 +337,23 @@ export function deps(port: number, overrides: Partial<LoginDeps> = {}): LoginDep
   // SECRET doubles as the store key here: the suites verify the file with
   // `new TokenStore(tokensPath, SECRET)`, and one value keeps writer and reader in step. In
   // production the two are unrelated — the key comes from the Keychain (src/auth/store-key.ts).
-  return { config: config(port), tokensPath, tokenStoreKey: SECRET, ...overrides };
+  //
+  // `setup` is here because src/server.ts always carries it for an install whose configuration resolves —
+  // a configured one can still be the WRONG one, which is what setup=true is for — so a fixture without it
+  // would be a shape the product no longer produces. That lesson cost a round: a defect was "fixed"
+  // against a LoginDeps the server could not build, while the server went on answering the old way. The
+  // writer throws rather than stores, because none of the flows these suites drive may configure anything.
+  return {
+    config: config(port),
+    tokensPath,
+    tokenStoreKey: SECRET,
+    setup: {
+      writeConfig: () => {
+        throw new Error('an ordinary login must never store a configuration');
+      },
+    },
+    ...overrides,
+  };
 }
 
 // A port made genuinely unavailable to the production listener, which binds 127.0.0.1 AND ::1 since

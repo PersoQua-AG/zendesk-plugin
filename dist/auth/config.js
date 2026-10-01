@@ -87,6 +87,17 @@ function callbackPort(env) {
     }
     return port;
 }
+// The port for a start that could not resolve the rest. A value this function cannot use is not clamped
+// here either — resolveAuthConfig has already thrown on it, and the reason it threw with names the field —
+// so the shipped default is the only honest answer left.
+export function callbackPortOrDefault(env) {
+    try {
+        return callbackPort(env);
+    }
+    catch {
+        return DEFAULT_CALLBACK_PORT;
+    }
+}
 // The subdomain is interpolated into every Zendesk URL this plugin builds (oauth-flow.ts:48/:210,
 // http-client.ts:32, remote/zendesk-identity.ts:15). Unvalidated it does not merely produce a broken
 // URL, it RELOCATES one: new URL(`https://${s}.zendesk.com/oauth/tokens`) has origin

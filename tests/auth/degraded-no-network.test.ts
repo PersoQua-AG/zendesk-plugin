@@ -55,7 +55,7 @@ describe('an incompletely configured server never reaches the network', () => {
   // configured data dir is silently abandoned for the per-user default the moment a field is empty.
   it('still honors CLAUDE_PLUGIN_DATA for the response cache', () => {
     const env = degradedEnv();
-    const { ctx } = createServer(env, { fetchImpl: spyFetch() });
+    const { ctx } = createServer(env, { fetchImpl: spyFetch(), security: keychain() });
     const entry = ctx.cache.save('zendesk_get_me', { id: 1 });
     expect(existsSync(join(env.CLAUDE_PLUGIN_DATA as string, 'cache'))).toBe(true);
     expect(ctx.cache.load(entry.handle)).toMatchObject({ id: 1 });

@@ -21206,6 +21206,13 @@ function writeKeychainConfig(values, run = runSecurity) {
       `"${account}" could not be written to the macOS Keychain (security exited ${added.status}).${rollback(run, written)}${platform}`
     );
   }
+  const stored = readKeychainConfig(run);
+  const wrong = configEntries.filter(([name]) => stored[name] !== values[name]).map(([, account]) => account);
+  if (wrong.length > 0) {
+    throw new Error(
+      `the macOS Keychain did not keep ${wrong.map((account) => `"${account}"`).join(", ")} as written.` + rollback(run, written)
+    );
+  }
 }
 function rollback(run, written) {
   const left = written.filter(
@@ -21266,6 +21273,13 @@ function callbackPort(env) {
     throw new Error(`Invalid environment variable: ZENDESK_OAUTH_CALLBACK_PORT="${raw}" (${CALLBACK_PORT_RULE}).`);
   }
   return port;
+}
+function callbackPortOrDefault(env) {
+  try {
+    return callbackPort(env);
+  } catch {
+    return DEFAULT_CALLBACK_PORT;
+  }
 }
 var MAX_SUBDOMAIN_LENGTH = 63;
 var SUBDOMAIN_PATTERN = /^[a-z0-9-]+$/i;
@@ -21807,10 +21821,11 @@ var ZendeskHttpClient = class {
   // paginators and bulk tools don't each reimplement it.
   async request(path, init = {}, opts = {}) {
     const limiter = this.limiterFor(opts);
+    const url = `${this.baseUrl}${path}`;
     for (let attempt = 0; ; attempt++) {
       await limiter.acquire();
       const token = await this.options.authManager.getAccessToken();
-      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      const response = await this.fetchImpl(url, {
         ...init,
         headers: {
           ...init.headers,
@@ -22074,7 +22089,6 @@ var answer = (status, body, headers = HTML) => ({
 var notFound = () => answer(404, "Not found", { "Content-Type": "text/plain; charset=utf-8" });
 function createSetupRoute(deps) {
   let spent = false;
-  let submitting = false;
   return async (req, url) => {
     if (spent || !tokenMatches(url.searchParams.get("t"), deps.token)) return notFound();
     if (req.method === "GET") return answer(200, setupPage(deps.port, deps.token));
@@ -22087,27 +22101,22 @@ function createSetupRoute(deps) {
     if (!originAllowed(req, deps.port)) {
       return answer(403, "Diese Anfrage kam nicht von der Einrichtungsseite.");
     }
-    if (submitting) return notFound();
-    submitting = true;
-    try {
-      const parsed = parseSetupForm(await readBody(req));
-      if ("problem" in parsed) return answer(400, setupPage(deps.port, deps.token, parsed.problem));
-      const authorizationUrl = deps.submit(parsed.values);
-      spent = true;
-      return answer(303, "Weiter zur Zendesk-Anmeldung \u2026", {
-        "Content-Type": "text/plain; charset=utf-8",
-        Location: authorizationUrl
-      });
-    } finally {
-      submitting = false;
-    }
+    const body = await readBody(req);
+    if (spent) return notFound();
+    const parsed = parseSetupForm(body);
+    if ("problem" in parsed) return answer(400, setupPage(deps.port, deps.token, parsed.problem));
+    const authorizationUrl = deps.submit(parsed.values);
+    spent = true;
+    return answer(303, "Weiter zur Zendesk-Anmeldung \u2026", {
+      "Content-Type": "text/plain; charset=utf-8",
+      Location: authorizationUrl
+    });
   };
 }
 
 // src/tools/login.ts
 var RETRY_RESOLVED = "Run zendesk_login again once that is resolved.";
 var RETRY_FRESH = "Run zendesk_login again to start a new authorization. If the stored subdomain, client id or client secret is the problem, run zendesk_login with setup=true to enter them again.";
-var SETUP_UNAVAILABLE = "There is nowhere to store a Zendesk configuration on this machine: the macOS Keychain is the only place the plugin writes one, and it could not be used. Pass ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID and ZENDESK_OAUTH_CLIENT_SECRET in the environment instead.";
 var UNREADABLE_STORE2 = "Stored credentials could not be read (encryption secret changed or file corrupt) \u2014 starting a new authorization.";
 var activeFlow = null;
 function abortLoginFlow() {
@@ -22184,8 +22193,8 @@ async function beginSetup(deps, setup, listen, fallback) {
   let listener;
   try {
     listener = await listen(port, state, timeoutMs, route);
-  } catch {
-    return fallback;
+  } catch (err) {
+    return fallback ?? `${failureText(err, deps)} ${RETRY_RESOLVED}`;
   }
   const bound = listener.addresses;
   const page = setupUrl(bound.includes("127.0.0.1") ? "127.0.0.1" : `[${bound[0]}]`, port, token);
@@ -22250,10 +22259,10 @@ async function runQueuedLogin(deps, options) {
   const exchange = deps.exchange ?? exchangeCodeForTokens;
   if (options.force || options.setup) abortLoginFlow();
   if (activeFlow) return collectFlow(activeFlow, deps, exchange);
-  if (deps.configError || options.setup) {
-    if (!deps.setup) return deps.configError ?? SETUP_UNAVAILABLE;
-    return beginSetup(deps, deps.setup, listen, deps.configError ?? SETUP_UNAVAILABLE);
+  if (deps.setup && (deps.configError || options.setup)) {
+    return beginSetup(deps, deps.setup, listen, deps.configError ?? void 0);
   }
+  if (deps.configError) return deps.configError;
   const existing = readExistingTokens(deps);
   if (!options.force && existing.tokens) {
     return "Already authorized with Zendesk \u2014 the stored credentials are usable and are refreshed automatically. Verify with zendesk_get_me, or call zendesk_login with force=true to authorize again.";
@@ -25119,32 +25128,36 @@ function createServer3(rawEnv = process.env, deps = {}) {
   const { tokensPath } = auth;
   const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
   const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
-  const callbackPort2 = auth.ok ? auth.config.callbackPort : DEFAULT_CALLBACK_PORT;
+  const callbackPort2 = auth.ok ? auth.config.callbackPort : callbackPortOrDefault(env);
   let setupKey;
-  if (!auth.ok && cacheOk) {
+  if (auth.ok) {
+    setupKey = auth.tokenStoreKey;
+  } else if (cacheOk) {
     try {
       readKeychainConfig(security);
       setupKey = resolveTokenStoreKey(security);
     } catch {
     }
   }
-  const login = deps.authManager ? void 0 : auth.ok ? { config: auth.config, tokensPath, tokenStoreKey: auth.tokenStoreKey } : {
+  const setup = setupKey ? { writeConfig: (values) => writeKeychainConfig(values, security) } : void 0;
+  const login = deps.authManager ? void 0 : auth.ok ? { config: auth.config, tokensPath, tokenStoreKey: auth.tokenStoreKey, setup } : {
     config: noOAuthConfig(callbackPort2),
     tokensPath,
     tokenStoreKey: setupKey ?? "",
     configError: auth.reason,
-    // The writer takes the SAME runner the reads took: one seam for everything that reaches the
-    // Keychain, or an injected one is not an injected one.
-    setup: setupKey ? { writeConfig: (values) => writeKeychainConfig(values, security) } : void 0
+    setup
   };
   const startLogin = login && (() => runLogin(login));
   let healed;
   let healedSubdomain = "";
-  const configured = (config2) => {
-    healedSubdomain = config2.subdomain;
-    healed = new AuthManager(new TokenStore(tokensPath, setupKey), config2, void 0, startLogin);
-  };
-  if (login?.setup) login.setup.onConfigured = configured;
+  if (login && setup && setupKey) {
+    setup.onConfigured = (config2) => {
+      healedSubdomain = config2.subdomain;
+      healed = new AuthManager(new TokenStore(tokensPath, setupKey), config2, void 0, startLogin);
+      login.config = config2;
+      login.configError = null;
+    };
+  }
   const authManager = (cacheOk ? deps.authManager : void 0) ?? (auth.ok ? new AuthManager(new TokenStore(tokensPath, auth.tokenStoreKey), auth.config, void 0, startLogin) : (
     // Stands in for AuthManager while the configuration is incomplete: every Zendesk request fails
     // at the token boundary with the actionable message instead of reaching the network — until the

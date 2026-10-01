@@ -29,10 +29,14 @@ export class ZendeskHttpClient {
     // paginators and bulk tools don't each reimplement it.
     async request(path, init = {}, opts = {}) {
         const limiter = this.limiterFor(opts);
+        // Read ONCE per request, not per attempt: the subdomain can change mid-session (the first-run setup
+        // page supplies it), and a retry that picked up the new one would send this request to a different
+        // tenant — where the token it carries is not valid anyway.
+        const url = `${this.baseUrl}${path}`;
         for (let attempt = 0;; attempt++) {
             await limiter.acquire();
             const token = await this.options.authManager.getAccessToken();
-            const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+            const response = await this.fetchImpl(url, {
                 ...init,
                 headers: {
                     ...init.headers,

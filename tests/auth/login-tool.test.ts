@@ -245,12 +245,17 @@ describe('zendesk_login with an unreadable token store', () => {
 });
 
 describe('zendesk_login with incomplete extension configuration', () => {
+  // `setup: undefined` is the install where nothing can be stored — a locked or denied Keychain, or a
+  // platform without one (#69) — which is the only state in which this message is the whole answer. Where
+  // a configuration CAN be stored the answer is the setup page instead, on both sides pinned in
+  // tests/server.unconfigured.test.ts.
   it('returns the actionable configuration message and touches nothing', async () => {
     const port = freePort();
     const listen = vi.fn();
     const text = await runLogin(
       deps(port, {
         configError: 'Missing required environment variable: ZENDESK_SUBDOMAIN (extension configuration field "zendesk_subdomain" is empty).',
+        setup: undefined,
         listen: listen as unknown as LoginDeps['listen'],
       }),
     );

@@ -284,28 +284,35 @@ describe('the first-run setup page', () => {
     expect(served.submitted).toEqual([VALUES]);
   });
 
-  // GATE-GAP 10, the check-then-act window. The token is checked, then the body is awaited, and a body
-  // that arrives in pieces holds that await open — so a second POST that starts in the meantime passed
-  // the same check. It IS reachable: a client that sends half its body is enough, and nothing about it
-  // needs to be malicious. Both submissions would then store a configuration and both would be
-  // redirected into an authorization, with the flow left pointing at whichever arrived last.
-  it('lets only the first of two overlapping submissions through', async () => {
+  // GATE-GAP 10 and the defect the first attempt at it introduced. Two POSTs overlap: one declares its
+  // length, sends eight bytes and waits; the other arrives complete. WHICH of them wins is the whole
+  // question, so this case gives them different values and names the winner — a sorted [303, 404] would
+  // have accepted the losing outcome as correct, and did.
+  //
+  // It must be the one that COMPLETES. A marker taken when a request arrives hands the single use to
+  // whoever starts first, which is a caller that stalls on purpose: the person's real submission is
+  // refused and the stall stores its own client.
+  it('gives the single use to the submission that completes, not the one that started first', async () => {
     const served = await serve();
-    const body = goodForm;
-    const slow = raw(served.port);
-    slow.send(postHead(served.port, TOKEN, body.length));
-    slow.send(body.slice(0, 10));
-    // The slow request is now inside the handler, waiting for the rest of its body.
+    const mine = goodForm;
+    const theirs = form({ subdomain: 'attacker', client_id: 'evil-id', client_secret: 'evil-secret' });
+
+    const stalled = raw(served.port);
+    stalled.send(postHead(served.port, TOKEN, theirs.length));
+    stalled.send(theirs.slice(0, 8));
+    // The stalled request is now inside the handler, waiting for the rest of its body.
     await new Promise((settle) => setTimeout(settle, 50));
 
-    const second = await served.post(body);
+    // The person's submission, complete, while the other one waits.
+    const completed = await served.post(mine);
+    expect(completed.status).toBe(303);
+    expect(completed.headers.get('location')).toBe(AUTHORIZED);
 
-    slow.send(body.slice(10));
-    const first = status(await slow.response);
+    stalled.send(theirs.slice(8));
 
-    // The first one through is the one that submits; the other is refused, and the token is spent either
-    // way — one submission, one stored configuration, one redirect.
-    expect([first, second.status].sort()).toEqual([303, 404]);
+    expect(status(await stalled.response)).toBe(404);
+    // One submission, and it is the right one: nothing from the stalled request was stored and nothing
+    // was redirected anywhere near it.
     expect(served.submitted).toEqual([VALUES]);
   });
 });

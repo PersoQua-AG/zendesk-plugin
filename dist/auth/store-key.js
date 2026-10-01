@@ -154,6 +154,15 @@ export function writeKeychainConfig(values, run = runSecurity) {
         throw new Error(`"${account}" could not be written to the macOS Keychain (security exited ${added.status}).` +
             `${rollback(run, written)}${platform}`);
     }
+    // Read back before returning, because exit 0 is not proof: `security` stores an EMPTY password and
+    // exits 0 when its retype prompt sees EOF — which is exactly what the value-on-stdin form risks, and it
+    // would leave a configuration that resolves, authorizes nothing, and points at no symptom.
+    const stored = readKeychainConfig(run);
+    const wrong = configEntries.filter(([name]) => stored[name] !== values[name]).map(([, account]) => account);
+    if (wrong.length > 0) {
+        throw new Error(`the macOS Keychain did not keep ${wrong.map((account) => `"${account}"`).join(', ')} as written.` +
+            rollback(run, written));
+    }
 }
 // Returns what to append to the failure: whether the half-written set is really gone. A delete that
 // itself fails is the one case the user has to act on by hand, so it is named rather than swallowed.

@@ -102,6 +102,15 @@ describe('a session that was started before the plugin was configured', () => {
       ]);
       // The defect this closes: a healed token boundary over a frozen base URL.
       for (const url of requested) expect(url).not.toContain('https://.zendesk.com');
+
+      // And the login tool must not contradict the tool call before it. It answered "Zendesk is not set
+      // up on this machine yet" immediately after a healed session had served a Zendesk request, because
+      // the degraded reason outlived the reason for it — which also re-published the setup page and held
+      // the callback port for another fifteen minutes.
+      const afterwards = textOf(await client.callTool({ name: 'zendesk_login', arguments: {} }));
+      expect(afterwards).toMatch(/already authorized/i);
+      expect(afterwards).not.toMatch(/not set up/i);
+      expect(afterwards).not.toContain('/setup');
     } finally {
       await client.close();
     }

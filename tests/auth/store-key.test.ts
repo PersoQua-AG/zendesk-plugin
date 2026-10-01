@@ -137,11 +137,23 @@ describe('the OAuth configuration in the Keychain', () => {
   it('is written as three items, replacing what an earlier attempt left behind', () => {
     const fake = fakeKeychain();
     writeKeychainConfig(CONFIG, fake.run);
-    expect(fake.calls.map((call) => call.args.slice(0, 5))).toEqual(
+    const writes = fake.calls.filter((call) => call.args[0] === 'add-generic-password');
+    expect(writes.map((call) => call.args.slice(0, 5))).toEqual(
       ACCOUNTS.map((account) => ['add-generic-password', '-s', 'zendesk-plugin', '-a', account]),
     );
-    for (const call of fake.calls) expect(call.args).toContain('-U');
+    for (const call of writes) expect(call.args).toContain('-U');
     expect([...fake.items.keys()]).toEqual(ACCOUNTS);
+  });
+
+  // Exit 0 is not proof. Measured on macOS: with the value on stdin only once, `security`'s retype prompt
+  // sees EOF, an EMPTY password is stored and it exits 0 — leaving a configuration that resolves,
+  // authorizes nothing, and points at no symptom. So the three are read back before the write returns.
+  it('refuses a write the Keychain reported as fine and did not keep', () => {
+    const fake = fakeKeychain({ storeAs: { 'oauth-client-secret': '' } });
+    expect(() => writeKeychainConfig(CONFIG, fake.run)).toThrow(
+      'the macOS Keychain did not keep "oauth-client-secret" as written. Nothing was left behind.',
+    );
+    expect([...fake.items.keys()]).toEqual([]);
   });
 
   // B1, the half-written set. A stored pair without the secret RESOLVES — the secret is optional on the
