@@ -234,8 +234,8 @@ const PROBE_TIMEOUT_MS = 2_000;
 // How many candidates may be PROBED in one pass of freePort() before it moves on. Not how many may
 // be examined: a port another run has claimed costs a link() and no probe at all, and the claims
 // are what make concurrent runs disagree, so that walk stays uncapped — a fully claimed band is
-// 2 774 ms on macOS and 187 ms on Linux of blocked event loop (measured here, claimPort() against a pre-filled band), which is a cost, not a
-// hazard.
+// 2 774 ms on macOS and 187 ms on Linux of blocked event loop (measured: claimPort() against a
+// pre-filled band), which is a cost, not a hazard.
 //
 // 64 because a probe costs 23.8 ms on macOS and 16.2 ms on Linux (measured, 25 probes each), so one
 // pass is at most 1.5 s / 1.0 s and both passes 3.0 s / 2.0 s — the same order as the 5.2 s the

@@ -38,12 +38,30 @@ describe('freePort() and a foreign listener in the band', () => {
 
   // The listener is put up while a claim of this process holds the port, so no concurrent run can
   // be handed it in between; the claim comes off afterwards, which is what makes it look foreign.
+  //
+  // The candidate freePort() will examine next is the one it just returned plus one — nextCandidate
+  // advances by exactly one per candidate. That port can already be claimed or already be listened
+  // on by another run of this user (measured: port-probe-budget.test.ts reserves 64 of them, and
+  // the collision reddened this file). Then it is not ours to make a stranger of, and freePort()
+  // would skip it for a link() anyway, so the next candidate is tried instead.
   async function foreignListenerOnNextCandidate(host?: string): Promise<number> {
-    const next = freePort() + 1;
-    writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' });
-    opened.push(await bind(next, host));
-    rmSync(portClaimPath(next), { force: true });
-    return next;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const next = freePort() + 1;
+      try {
+        writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' });
+      } catch {
+        continue;
+      }
+      try {
+        opened.push(await bind(next, host));
+      } catch {
+        rmSync(portClaimPath(next), { force: true });
+        continue;
+      }
+      rmSync(portClaimPath(next), { force: true });
+      return next;
+    }
+    return expect.fail('no band port free to put a stranger on in 20 attempts');
   }
 
   // Every address a stranger can hold the port on. Only the first collides with the production
