@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, vi } from 'vitest';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -27,13 +27,24 @@ function copyPluginPayload(dest: string): void {
   }
 }
 
-function dummyEnv(dataDir: string): Record<string, string> {
-  return {
-    ZENDESK_SUBDOMAIN: 'acme',
-    ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
-    ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
-    CLAUDE_PLUGIN_DATA: dataDir,
-  };
+// A CHILD cannot be given the fake Keychain runner — it is a separate process running the shipped bundle —
+// and for a while this test's child created the real `zendesk-plugin/token-store-key` on every run of the
+// suite, which no source-parsing guard can see (tests/setup/no-real-keychain.ts now does).
+//
+// So it is spawned in the one state that needs no key at all: no subdomain, so resolveAuthConfig throws
+// before the lazily-read key, and a CLAUDE_PLUGIN_DATA that is a FILE, so the cache cannot be opened and
+// the first-run setup gate is skipped too. The subject of this test is unaffected — whether the bundle the
+// manifest launches runs at all, and whether it registers the same tools as this process — because the tool
+// surface is registered whatever the configuration says. What the child can no longer prove, that the
+// bundler kept the Keychain path, is asserted on the artifact in the case below.
+function keylessEnv(dataDirAsFile: string): Record<string, string> {
+  return { CLAUDE_PLUGIN_DATA: dataDirAsFile };
+}
+
+function fileNotDirectory(path: string): string {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, '');
+  return path;
 }
 
 async function inProcessToolNames(env: Record<string, string>): Promise<string[]> {
@@ -56,7 +67,11 @@ describe('plugin server from a copy without node_modules', () => {
     const child = spawn(
       command === 'node' ? process.execPath : command,
       args.map((a) => a.replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot)),
-      { cwd: pluginRoot, env: dummyEnv(join(scratch, 'data')), stdio: ['pipe', 'pipe', 'inherit'] },
+      {
+        cwd: pluginRoot,
+        env: keylessEnv(fileNotDirectory(join(scratch, 'data-child'))),
+        stdio: ['pipe', 'pipe', 'inherit'],
+      },
     );
     const messages: { id?: number; result?: { tools: { name: string }[] } }[] = [];
     createInterface({ input: child.stdout }).on('line', (line) => messages.push(JSON.parse(line)));
@@ -77,8 +92,21 @@ describe('plugin server from a copy without node_modules', () => {
 
     expect(messages.filter((m) => m.id !== undefined).map((m) => m.id)).toEqual([1, 2]);
     const names = messages.find((m) => m.id === 2)!.result!.tools.map((t) => t.name).sort();
-    const expected = await inProcessToolNames(dummyEnv(join(scratch, 'data-expected')));
+    const expected = await inProcessToolNames(keylessEnv(fileNotDirectory(join(scratch, 'data-expected'))));
     expect(expected.length).toBeGreaterThan(0);
     expect(names).toEqual(expected);
   }, 60_000);
+
+  // What the child used to prove by doing it, and now must not: that the bundler kept the Keychain path.
+  // esbuild tree-shakes, node:child_process is reached from exactly one module, and a bundle that dropped
+  // it would fail at the first login on a real machine rather than here.
+  it('keeps the Keychain path in the bundle the manifest launches', () => {
+    const bundle = readFileSync(join(root, 'dist', 'plugin', 'server.js'), 'utf8');
+    expect(bundle).toContain('node:child_process');
+    expect(bundle).toContain('/usr/bin/security');
+    expect(bundle).toContain('find-generic-password');
+    expect(bundle).toContain('add-generic-password');
+    // And the stdin form, because an argv form would put the customer's client secret in `ps`.
+    expect(bundle).toMatch(/"-U",\s*"-w"/);
+  });
 });

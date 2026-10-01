@@ -141,8 +141,11 @@ fallback) {
         listener = await listen(port, state, timeoutMs, route);
     }
     catch (err) {
-        // Nothing was bound, so there is no page to send anyone to.
-        return fallback ?? `${failureText(err, deps)} ${RETRY_RESOLVED}`;
+        // Nothing was bound, so there is no page to send anyone to — and the bind failure is reported even
+        // when there is a degraded reason to report first. It used to lose to it, so a first-run install whose
+        // port was taken was told about its missing subdomain and nothing about the port it could not have.
+        const failure = `${failureText(err, deps)} ${RETRY_RESOLVED}`;
+        return fallback ? `${fallback} ${failure}` : failure;
     }
     // The URL names an address the listener REPORTED binding. 127.0.0.1 when it is there, because that is
     // the one a browser reaches without a DNS answer; [::1] when only that family came up. Never a family

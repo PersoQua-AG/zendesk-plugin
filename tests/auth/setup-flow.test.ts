@@ -130,14 +130,19 @@ describe('the first run, end to end', () => {
     expect((await page(again)).status).toBe(200);
   });
 
-  it('answers with the degraded wording, not a page, when the port cannot be bound', async () => {
+  // Both, not one: the degraded reason says what is missing, and the bind failure says what could not be
+  // opened. The bind failure used to lose to the reason, so a first-run install whose port was taken was
+  // told about its missing subdomain and nothing at all about the port it could not have.
+  it('answers with the degraded wording AND the bind failure, not a page, when the port cannot be bound', async () => {
     const port = freePort();
     const deps = unconfiguredDeps(port, () => {});
     const failing: LoginDeps['listen'] = () => Promise.reject(new Error('listen EADDRINUSE: address already in use'));
 
     const answer = await runLogin({ ...deps, listen: failing });
 
-    expect(answer).toBe(deps.configError);
+    expect(answer).toContain(deps.configError as string);
+    expect(answer).toContain(String(port));
+    expect(answer).toContain('oauth_callback_port');
     expect(answer).not.toContain('/setup');
   });
 

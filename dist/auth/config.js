@@ -87,15 +87,25 @@ function callbackPort(env) {
     }
     return port;
 }
-// The port for a start that could not resolve the rest. A value this function cannot use is not clamped
-// here either — resolveAuthConfig has already thrown on it, and the reason it threw with names the field —
-// so the shipped default is the only honest answer left.
+// The port for a start that could not resolve the rest, and the PROBLEM when the configured one is
+// unusable — because the reason resolveAuthConfig threw with is almost never about the port: the subdomain
+// is validated first, so a start with both a missing subdomain and a port of 70000 reported only the
+// subdomain. The person then registered http://localhost:8976/callback in Zendesk on the page's word,
+// finished setup, and the NEXT start threw on the port. So the problem travels with the fallback and the
+// caller puts it where the person will read it.
 export function callbackPortOrDefault(env) {
     try {
-        return callbackPort(env);
+        return { port: callbackPort(env) };
     }
-    catch {
-        return DEFAULT_CALLBACK_PORT;
+    catch (err) {
+        // `err as Error` is honest here and only here: the single thrower is callbackPort, two lines up, and it
+        // throws an Error carrying the field and the value. (oauth-flow.ts:226 refuses the same cast for the
+        // opposite reason — there the throw can come from anywhere.)
+        const problem = err.message.split('\n')[0];
+        return {
+            port: DEFAULT_CALLBACK_PORT,
+            problem: `${problem} Port ${DEFAULT_CALLBACK_PORT} is being used until that is corrected \u2014 register the redirect URL for the port you finally keep.`,
+        };
     }
 }
 // The subdomain is interpolated into every Zendesk URL this plugin builds (oauth-flow.ts:48/:210,

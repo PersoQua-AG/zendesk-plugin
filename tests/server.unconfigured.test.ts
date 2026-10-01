@@ -87,6 +87,23 @@ describe('createServer with incomplete extension configuration', () => {
     await client.close();
   });
 
+  // N2's edge: the port is validated AFTER the subdomain, so a start with BOTH problems reported only the
+  // subdomain — and the person then registered the redirect URL for 8976 on the page's word, finished
+  // setup, and the next start threw on the port. Driven with a Keychain that cannot store, so no page is
+  // offered and nothing binds the shipped default: what is asserted is the ANSWER naming both problems.
+  it('names an unusable callback port as well as the missing value', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'zd-badport-'));
+    dirs.push(dataDir);
+    const client = await connect({ ZENDESK_OAUTH_CALLBACK_PORT: '70000', CLAUDE_PLUGIN_DATA: dataDir });
+    const text = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
+
+    expect(text).toContain('ZENDESK_SUBDOMAIN');
+    expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT="70000"');
+    expect(text).toContain('oauth_callback_port');
+    expect(text).toContain('8976');
+    await client.close();
+  });
+
   // The per-item half of the same question (#68 B3). The key reads, so the OLD gate said "offer setup";
   // the three values do not, so nothing it collected could be stored.
   it('offers no setup page when the three values are denied but the key is readable', async () => {

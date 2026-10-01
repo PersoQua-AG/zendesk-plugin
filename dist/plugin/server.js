@@ -21276,9 +21276,13 @@ function callbackPort(env) {
 }
 function callbackPortOrDefault(env) {
   try {
-    return callbackPort(env);
-  } catch {
-    return DEFAULT_CALLBACK_PORT;
+    return { port: callbackPort(env) };
+  } catch (err) {
+    const problem = err.message.split("\n")[0];
+    return {
+      port: DEFAULT_CALLBACK_PORT,
+      problem: `${problem} Port ${DEFAULT_CALLBACK_PORT} is being used until that is corrected \u2014 register the redirect URL for the port you finally keep.`
+    };
   }
 }
 var MAX_SUBDOMAIN_LENGTH = 63;
@@ -22194,7 +22198,8 @@ async function beginSetup(deps, setup, listen, fallback) {
   try {
     listener = await listen(port, state, timeoutMs, route);
   } catch (err) {
-    return fallback ?? `${failureText(err, deps)} ${RETRY_RESOLVED}`;
+    const failure = `${failureText(err, deps)} ${RETRY_RESOLVED}`;
+    return fallback ? `${fallback} ${failure}` : failure;
   }
   const bound = listener.addresses;
   const page = setupUrl(bound.includes("127.0.0.1") ? "127.0.0.1" : `[${bound[0]}]`, port, token);
@@ -25091,6 +25096,7 @@ function resolveOrDegrade(env, security) {
     return { ok: true, ...resolveAuthConfig(env, security) };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
+    const { problem } = callbackPortOrDefault(env);
     const dataDir = dataDirOf(env);
     return {
       ok: false,
@@ -25098,7 +25104,7 @@ function resolveOrDegrade(env, security) {
       // dialog any more (#68 removed its user_config, the host bridge does not support one), and on a
       // platform without a Keychain the environment is the only way in (#69). The MCPB extension still
       // HAS the dialog, so it is named last rather than first.
-      reason: `${reason} Call the zendesk_login tool: on macOS it answers with a local setup page that collects the subdomain, client id and client secret. Otherwise pass them in the environment (ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET), or, in the Desktop Extension, fill the configuration dialog under Settings \u2192 Extensions \u2192 Zendesk.`,
+      reason: `${reason}${problem ? ` ${problem}` : ""} Call the zendesk_login tool: on macOS it answers with a local setup page that collects the subdomain, client id and client secret. Otherwise pass them in the environment (ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET), or, in the Desktop Extension, fill the configuration dialog under Settings \u2192 Extensions \u2192 Zendesk.`,
       dataDir,
       tokensPath: join3(dataDir, "tokens.enc")
     };
@@ -25128,7 +25134,7 @@ function createServer3(rawEnv = process.env, deps = {}) {
   const { tokensPath } = auth;
   const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
   const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
-  const callbackPort2 = auth.ok ? auth.config.callbackPort : callbackPortOrDefault(env);
+  const callbackPort2 = auth.ok ? auth.config.callbackPort : callbackPortOrDefault(env).port;
   let setupKey;
   if (auth.ok) {
     setupKey = auth.tokenStoreKey;

@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const TESTS = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SRC = join(TESTS, '..', 'src');
 
 // Both doors into the Keychain path: createServer reads the token-store key through the spread in
 // resolveOrDegrade, resolveAuthConfig reads it and the three values directly.
@@ -35,28 +36,43 @@ const EXEMPT = new Set(['plugin/no-real-keychain.test.ts']);
 // are found with the TypeScript parser (already a devDependency; scripts/assert-executor-safety.mjs is
 // the precedent) and each one's own argument text is what gets checked.
 function unseamedCalls(rel: string, source: string): string[] {
+  return doorCalls(TESTS, rel, source)
+    .filter((call) => !SEAM.test(call.args))
+    .map((call) => `${call.at}  ${call.name}(${call.args.slice(0, 60)})`);
+}
+
+// Every call in a tree, by the file it sits in, with the names actually imported from the two doors. The
+// import check is what keeps node:http's `createServer` — which half the suite binds a port with — out of
+// the result.
+function doorCalls(root: string, rel: string, source: string): { at: string; name: string; args: string }[] {
   const imported = new Set(
-    [...source.matchAll(/import \{([^}]*)\} from '[^']*src\/(?:server|auth\/config)\.js'/gs)].flatMap((m) =>
-      m[1].split(',').map((name) => name.trim().split(/\s+as\s+/).pop() as string),
+    [...source.matchAll(/import (?:type )?\{([^}]*)\} from '[^']*(?:src\/)?(?:server|auth\/config|\.\.\/server)\.js'/gs)].flatMap(
+      (m) => m[1].split(',').map((name) => name.trim().split(/\s+as\s+/).pop() as string),
     ),
   );
   const doors = DOORS.filter((door) => imported.has(door));
   if (doors.length === 0) return [];
-
   const file = ts.createSourceFile(rel, source, ts.ScriptTarget.Latest, true);
-  const offenders: string[] = [];
+  const found: { at: string; name: string; args: string }[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && doors.includes(node.expression.text)) {
-      const args = node.arguments.map((argument) => argument.getText(file)).join(', ');
-      if (!SEAM.test(args)) {
-        const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
-        offenders.push(`${rel}:${line + 1}  ${node.expression.text}(${args.slice(0, 60)})`);
-      }
+      const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
+      found.push({
+        at: `${rel}:${line + 1}`,
+        name: node.expression.text,
+        args: node.arguments.map((argument) => argument.getText(file)).join(', '),
+      });
     }
     node.forEachChild(visit);
   };
   file.forEachChild(visit);
-  return offenders;
+  return found;
+}
+
+function tsFiles(root: string): string[] {
+  return readdirSync(root, { recursive: true })
+    .map((entry) => String(entry).split('\\').join('/'))
+    .filter((rel) => rel.endsWith('.ts'));
 }
 
 function testFiles(): string[] {
@@ -100,5 +116,27 @@ describe('no test reaches the real macOS Keychain', () => {
       if (name === 'encKeyStrengthBytes' || name === 'runSecurity') continue;
       expect(params, `${name} must take the runner as a parameter`).toMatch(/RunSecurity = runSecurity/);
     }
+  });
+
+  // src/ as well, because a per-path fix that leaves the next path open is what produced a whole review
+  // round: buildRemoteApp opted its own resolution out of the Keychain while src/remote/session-manager.ts
+  // built EVERY SESSION on the default runner, so a macOS-hosted bridge would have served every remote
+  // user out of the operator's personal client secret. There is exactly ONE place the real runner belongs,
+  // and it is named here rather than left to be inferred.
+  // The two places the real runner belongs, each for its own reason: the stdio entrypoint IS the plugin on
+  // the user's machine, and the authorize CLI is a person running `npm run authorize` on theirs — it has to
+  // read the very key the server will decrypt with. Everything else in src/ either serves other people (the
+  // remote bridge) or is library code, and both must be handed a runner.
+  const MAY_DEFAULT = ['server.ts', 'bin/authorize.ts'];
+
+  it('leaves the real runner to those two alone, everywhere in src/', () => {
+    const calls = tsFiles(SRC).flatMap((rel) => doorCalls(SRC, rel, readFileSync(join(SRC, rel), 'utf8')));
+    // The doors are reached from src/ too — if this ever counts zero, the walk has stopped seeing them.
+    expect(calls.length).toBeGreaterThan(0);
+    const unseamed = calls.filter((call) => !SEAM.test(call.args)).map((call) => `${call.at}  ${call.name}()`);
+    expect(
+      unseamed,
+      `only ${MAY_DEFAULT.join(' and ')} may reach the real Keychain runner:\n${unseamed.join('\n')}`,
+    ).toEqual(unseamed.filter((at) => MAY_DEFAULT.some((allowed) => at.startsWith(allowed))));
   });
 });

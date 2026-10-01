@@ -115,7 +115,9 @@ export function buildRemoteApp(env: NodeJS.ProcessEnv = process.env, deps: Remot
   const rateLimiter = deps.rateLimiter ?? new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
   const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
 
-  const sessions = new SessionManager(env, { resolver, rateLimiter, incrementalRateLimiter, dataDir, audit, fetchImpl: deps.fetchImpl });
+  // noKeychain again, and this is the call that mattered: every SESSION is a createServer(), so opting
+  // only this function's own resolution out left the per-session one on the real runner.
+  const sessions = new SessionManager(env, { security: noKeychain, resolver, rateLimiter, incrementalRateLimiter, dataDir, audit, fetchImpl: deps.fetchImpl });
   const provider = new ZendeskBridgeOAuthProvider(config, resolver, issued, CONNECTOR.clientsStore(), deps.fetchImpl ?? fetch, CONNECTOR.callbackUrl, refreshGrant ? refreshTokens : undefined);
 
   const app = express();

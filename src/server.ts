@@ -113,6 +113,9 @@ function resolveOrDegrade(env: NodeJS.ProcessEnv, security: RunSecurity): AuthRe
     return { ok: true, ...resolveAuthConfig(env, security) };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
+    // The port is validated AFTER the subdomain, so `reason` is almost never about it — and a port nobody
+    // mentions is a redirect URL the person registers wrong. Named here, where every tool answer carries it.
+    const { problem } = callbackPortOrDefault(env);
     // Same precedence as resolveAuthConfig: an explicit CLAUDE_PLUGIN_DATA wins, so the cache and
     // the token store stay in the configured directory even while the configuration is incomplete —
     // but a relative one is dropped here rather than honoured, since it is why we may be degrading.
@@ -124,7 +127,7 @@ function resolveOrDegrade(env: NodeJS.ProcessEnv, security: RunSecurity): AuthRe
       // platform without a Keychain the environment is the only way in (#69). The MCPB extension still
       // HAS the dialog, so it is named last rather than first.
       reason:
-        `${reason} Call the zendesk_login tool: on macOS it answers with a local setup page that ` +
+        `${reason}${problem ? ` ${problem}` : ''} Call the zendesk_login tool: on macOS it answers with a local setup page that ` +
         'collects the subdomain, client id and client secret. Otherwise pass them in the environment ' +
         '(ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET), or, in the Desktop ' +
         'Extension, fill the configuration dialog under Settings \u2192 Extensions \u2192 Zendesk.',
@@ -205,7 +208,7 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
   // to NAME it: resolveAuthConfig validates the subdomain first and throws there, so a degraded start
   // used to fall back to 8976 — and the only person who sets a different port does so because 8976 is
   // taken, which is both the port the page would have told them to register and the one it could not bind.
-  const callbackPort = auth.ok ? auth.config.callbackPort : callbackPortOrDefault(env);
+  const callbackPort = auth.ok ? auth.config.callbackPort : callbackPortOrDefault(env).port;
 
   // Can a first-run setup be offered? Only where what it produces can be stored.
   //

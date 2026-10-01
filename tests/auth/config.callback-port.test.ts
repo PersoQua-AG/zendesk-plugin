@@ -76,18 +76,21 @@ describe('callback port validation', () => {
 // throws there — and the one person who sets a different port does so because 8976 is taken, which is
 // both the port the page would have told them to register and the one it could not bind.
 describe('the callback port when nothing else resolves', () => {
-  it('is the configured one', () => {
-    expect(callbackPortOrDefault({ ZENDESK_OAUTH_CALLBACK_PORT: '21224' })).toBe(21224);
+  it('is the configured one, with nothing to report', () => {
+    expect(callbackPortOrDefault({ ZENDESK_OAUTH_CALLBACK_PORT: '21224' })).toEqual({ port: 21224 });
+    expect(callbackPortOrDefault({})).toEqual({ port: 8976 });
   });
 
-  it('is the shipped default when there is none', () => {
-    expect(callbackPortOrDefault({})).toBe(8976);
-  });
-
-  // Not clamped here either: resolveAuthConfig has already thrown on this value and the reason it threw
-  // with names the field, so the default is the only honest answer left rather than a second opinion.
-  it('is the shipped default when the configured one is unusable', () => {
-    expect(callbackPortOrDefault({ ZENDESK_OAUTH_CALLBACK_PORT: '70000' })).toBe(8976);
-    expect(callbackPortOrDefault({ ZENDESK_OAUTH_CALLBACK_PORT: 'eighty' })).toBe(8976);
+  // The port is validated AFTER the subdomain, so the reason a degraded start reports is almost never about
+  // the port — and a port nobody mentions is a redirect URL the person registers wrong, finishes setup
+  // with, and whose next start fails. So the fallback carries the problem with it.
+  it('reports the problem when the configured one is unusable, naming value and field', () => {
+    for (const value of ['70000', 'eighty', '80']) {
+      const { port, problem } = callbackPortOrDefault({ ZENDESK_OAUTH_CALLBACK_PORT: value });
+      expect(port, value).toBe(8976);
+      expect(problem, value).toContain(`ZENDESK_OAUTH_CALLBACK_PORT="${value}"`);
+      expect(problem, value).toContain('oauth_callback_port');
+      expect(problem, value).toContain('8976');
+    }
   });
 });

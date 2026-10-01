@@ -124,6 +124,7 @@ export class SessionManager {
         const identity = identityOf(req);
         const cache = new ResponseCache(sessionCacheDir(this.deps.dataDir, identity));
         const { server } = createServer(this.env, {
+            security: this.deps.security,
             authManager: this.deps.resolver.forIdentity(identity),
             rateLimiter: this.deps.rateLimiter,
             incrementalRateLimiter: this.deps.incrementalRateLimiter,
