@@ -44,6 +44,19 @@ describe('no test reaches the real macOS Keychain', () => {
     ).toEqual([]);
   });
 
+  // The hole this guard did NOT catch, now closed on the production side: a test can inject a runner for
+  // every READ and still have the WRITE escape to the real keychain, because the writer had a default
+  // that took no runner. CI caught it; three items landed in a developer's login keychain. So every call
+  // into store-key.ts from the rest of src/ must pass the runner it was given.
+  it('passes the injected runner to every Keychain call, writes included', () => {
+    const source = readFileSync(join(TESTS, '..', 'src', 'server.ts'), 'utf8');
+    const calls = [...source.matchAll(/\b(readKeychainConfig|resolveTokenStoreKey|writeKeychainConfig)\(([^)]*)\)/g)];
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+    for (const [call, name, args] of calls) {
+      expect(args, `${name} in server.ts must be given the runner: ${call}`).toContain('security');
+    }
+  });
+
   // And the seam itself is the only way in: src/ reaches `security` from one file, which
   // tests/plugin/no-process-spawn.test.ts pins, and that file takes a RunSecurity everywhere.
   it('the production path has exactly one default runner, and it is injectable', () => {

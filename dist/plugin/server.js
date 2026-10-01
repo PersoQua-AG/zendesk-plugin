@@ -22156,13 +22156,12 @@ async function beginSetup(deps, setup, listen, fallback) {
   const token = newSetupToken();
   const timeoutMs = setup.timeoutMs ?? SETUP_TIMEOUT_MS;
   const port = deps.config.callbackPort;
-  const write = setup.writeConfig ?? writeKeychainConfig;
   let flow;
   const route = createSetupRoute({
     port,
     token,
     submit: (values) => {
-      write(values);
+      setup.writeConfig(values);
       const config2 = {
         ...deps.config,
         subdomain: values.ZENDESK_SUBDOMAIN,
@@ -25127,7 +25126,9 @@ function createServer3(rawEnv = process.env, deps = {}) {
     tokensPath,
     tokenStoreKey: setupKey ?? "",
     configError: auth.reason,
-    setup: setupKey ? {} : void 0
+    // The writer takes the SAME runner the reads took: one seam for everything that reaches the
+    // Keychain, or an injected one is not an injected one.
+    setup: setupKey ? { writeConfig: (values) => writeKeychainConfig(values, security) } : void 0
   };
   const startLogin = login && (() => runLogin(login));
   let healed;

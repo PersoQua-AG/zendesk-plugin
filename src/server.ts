@@ -11,7 +11,13 @@ import {
   USER_CONFIG_FIELD_BY_ENV,
   type ResolvedAuthConfig,
 } from './auth/config.js';
-import { readKeychainConfig, resolveTokenStoreKey, runSecurity, type RunSecurity } from './auth/store-key.js';
+import {
+  readKeychainConfig,
+  resolveTokenStoreKey,
+  runSecurity,
+  writeKeychainConfig,
+  type RunSecurity,
+} from './auth/store-key.js';
 import type { OAuthConfig } from './auth/oauth-flow.js';
 import { warnConfig } from './util/warn-config.js';
 import { RateLimiter } from './client/rate-limiter.js';
@@ -223,7 +229,9 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
           tokensPath,
           tokenStoreKey: setupKey ?? '',
           configError: auth.reason,
-          setup: setupKey ? {} : undefined,
+          // The writer takes the SAME runner the reads took: one seam for everything that reaches the
+          // Keychain, or an injected one is not an injected one.
+          setup: setupKey ? { writeConfig: (values) => writeKeychainConfig(values, security) } : undefined,
         };
 
   // The first tool call without usable credentials starts the authorization itself and answers with the

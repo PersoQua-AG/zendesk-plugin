@@ -15,7 +15,6 @@ import { dirname } from 'node:path';
 import { generateCodeChallenge, generateCodeVerifier } from '../auth/pkce.js';
 import { buildAuthorizationUrl, exchangeCodeForTokens, startCallbackListener, DEFAULT_CALLBACK_TIMEOUT_MS, } from '../auth/oauth-flow.js';
 import { TokenStore } from '../auth/token-store.js';
-import { writeKeychainConfig } from '../auth/store-key.js';
 import { createSetupRoute, newSetupToken, setupUrl, SETUP_TIMEOUT_MS } from './setup.js';
 const RETRY_RESOLVED = 'Run zendesk_login again once that is resolved.';
 const RETRY_FRESH = 'Run zendesk_login again to start a new authorization. If the stored subdomain, client id or client ' +
@@ -118,7 +117,6 @@ fallback) {
     const token = newSetupToken();
     const timeoutMs = setup.timeoutMs ?? SETUP_TIMEOUT_MS;
     const port = deps.config.callbackPort;
-    const write = setup.writeConfig ?? writeKeychainConfig;
     // Assigned once the listener is up, the way oauth-flow.ts assigns its own forward references: there
     // is no such thing as a flow whose listener failed to bind, and a placeholder close() would be a
     // function nothing ever calls. The submit closure below reaches it lazily, which it may: the page's
@@ -128,7 +126,7 @@ fallback) {
         port,
         token,
         submit: (values) => {
-            write(values);
+            setup.writeConfig(values);
             const config = {
                 ...deps.config,
                 subdomain: values.ZENDESK_SUBDOMAIN,

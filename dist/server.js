@@ -3,7 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { AuthManager } from './auth/auth-manager.js';
 import { TokenStore } from './auth/token-store.js';
 import { dataDirOf, DEFAULT_CALLBACK_PORT, DEFAULT_SCOPES, resolveAuthConfig, stripPlaceholders, USER_CONFIG_FIELD_BY_ENV, } from './auth/config.js';
-import { readKeychainConfig, resolveTokenStoreKey, runSecurity } from './auth/store-key.js';
+import { readKeychainConfig, resolveTokenStoreKey, runSecurity, writeKeychainConfig, } from './auth/store-key.js';
 import { warnConfig } from './util/warn-config.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
@@ -164,7 +164,9 @@ export function createServer(rawEnv = process.env, deps = {}) {
                 tokensPath,
                 tokenStoreKey: setupKey ?? '',
                 configError: auth.reason,
-                setup: setupKey ? {} : undefined,
+                // The writer takes the SAME runner the reads took: one seam for everything that reaches the
+                // Keychain, or an injected one is not an injected one.
+                setup: setupKey ? { writeConfig: (values) => writeKeychainConfig(values, security) } : undefined,
             };
     // The first tool call without usable credentials starts the authorization itself and answers with the
     // URL. Through runLogin, so it shares the ONE queue, the ONE flow and the ONE listener with

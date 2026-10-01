@@ -24,7 +24,6 @@ import {
   type SetupRoute,
 } from '../auth/oauth-flow.js';
 import { TokenStore, type StoredTokens } from '../auth/token-store.js';
-import { writeKeychainConfig } from '../auth/store-key.js';
 import { createSetupRoute, newSetupToken, setupUrl, SETUP_TIMEOUT_MS, type SetupValues } from './setup.js';
 
 export interface LoginDeps {
@@ -49,7 +48,11 @@ export interface LoginDeps {
 }
 
 export interface SetupDeps {
-  writeConfig?: (values: SetupValues) => void;
+  // REQUIRED, and with no default behind it: a default `writeKeychainConfig` here took no runner, so it
+  // reached the real `security` however carefully a caller had injected one — which is how a test wrote
+  // three items into a developer's own login keychain. The only producer of these deps is src/server.ts,
+  // which holds the runner, so there is nothing for a default to serve.
+  writeConfig: (values: SetupValues) => void;
   // Called the moment a configuration has been stored, with the configuration itself. The server hands
   // this in so the session it already started can pick the values up — the token boundary AND the
   // Zendesk host were both frozen before any of them existed — instead of asking the user to reload.
@@ -216,7 +219,6 @@ async function beginSetup(
   const token = newSetupToken();
   const timeoutMs = setup.timeoutMs ?? SETUP_TIMEOUT_MS;
   const port = deps.config.callbackPort;
-  const write = setup.writeConfig ?? writeKeychainConfig;
 
   // Assigned once the listener is up, the way oauth-flow.ts assigns its own forward references: there
   // is no such thing as a flow whose listener failed to bind, and a placeholder close() would be a
@@ -227,7 +229,7 @@ async function beginSetup(
     port,
     token,
     submit: (values) => {
-      write(values);
+      setup.writeConfig(values);
       const config: OAuthConfig = {
         ...deps.config,
         subdomain: values.ZENDESK_SUBDOMAIN,
