@@ -112,6 +112,27 @@ describe('the bound-port guard as a script', () => {
     expect(stdout).toContain('Every bound port is acquired');
   });
 
+  // The header refuses to narrow the marker on one measured property: a tree that fools the
+  // marker is still SCANNED, so a deception costs more inspection, not less. That property is
+  // what the decision rests on, so it is pinned here rather than asserted in prose. The two runs
+  // have to be told apart by their message — "both are non-zero" would also hold for a crash.
+  it('scans a tree that only pretends to acquire ports, and refuses the same tree without the word', () => {
+    const literal = { 'p.ts': '\n\ndeps(18000)\n' };
+    // The mark sits in a comment, in a different file than the literal: nothing here acquires a
+    // port, and the guard cannot tell. The deception buys a full scan.
+    const pretending = runGuard(
+      fixture({ ...literal, 'helper.ts': '// freePort( — nothing in here acquires a port\n' }),
+    );
+    expect(pretending.status).toBe(1);
+    expect(pretending.stderr).toMatch(/p\.ts:3 deps\(18000\)/);
+    expect(pretending.stderr).not.toContain('Not the guarded tree');
+
+    const bare = runGuard(fixture(literal));
+    expect(bare.status).toBe(1);
+    expect(bare.stderr).toContain('Not the guarded tree');
+    expect(bare.stderr).not.toMatch(/p\.ts:3 deps\(18000\)/);
+  });
+
   // The wiring IS the scan root now, so an unwitnessed edit there is the M3 mutation one level up.
   // The sibling guard is pinned the same way in executor-safety-guard.test.ts.
   it('is wired to tests/auth in package.json and run from CI', () => {

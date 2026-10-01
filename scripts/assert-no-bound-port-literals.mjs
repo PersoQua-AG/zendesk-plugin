@@ -33,7 +33,10 @@ const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|li
 // scan four files, miss all 42, and report success. A minimum file count cannot separate them
 // either: tests/tools has 76 .ts files, tests/auth has 42. What does separate them is the thing
 // the guarded tree is guarded FOR. Measured over all 27 directories in this repo that hold a
-// tracked .ts file: two carry the mark. tests/auth, the guarded tree, is one (18 of its 42
+// tracked .ts file — recount it with
+//   git ls-files '*.ts' | xargs -n1 dirname | sort -u | while read d; do \
+//     grep -lE '\bfreePort\(' "$d"/*.ts >/dev/null 2>&1 && echo "$d"; done
+// — two carry the mark. tests/auth, the guarded tree, is one (18 of its 42
 // files). The other is tests/plugin, which carries it for a reason this file created: the guard's
 // own test writes `const port = freePort();` into its fixtures as a string constant, so the word
 // is in that directory although nothing there acquires a port. So the honest claim is 25 of 27
@@ -41,7 +44,12 @@ const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|li
 // reasons: a tree that slips through is still SCANNED, and tests/plugin is not clean — it holds
 // literal ports in both guard tests — so pointing the guard there is loud at the other end,
 // exit 1 with findings. A marker tightened to ignore string literals would need the parser this
-// guard deliberately does not have (#74).
+// guard deliberately does not have (#74). That a deception costs a full scan rather than a
+// silent pass is the property this rests on, so it is pinned, not asserted
+// (tests/plugin/bound-port-literals-guard.test.ts, "only pretends to acquire ports").
+// Note for anyone widening check:ports to several trees: tests/plugin can never be one of them.
+// The guard tests have to contain literal ports to test the guard, so that tree is dirty by
+// construction — it reports 10 findings today.
 // Two further costs, named rather than discovered later:
 //   - this hangs on a name. Renaming freePort() makes the guard refuse its own tree. Loud, not
 //     silent, which is the whole reason it is acceptable;
