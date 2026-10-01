@@ -32,6 +32,11 @@ jobs:
       # caller awaits never settles. Pure syntax walk over src/ with the TypeScript compiler API
       # (already a devDependency), so it needs no build and runs before one. See the script header.
       - run: npm run check:executors
+      # Bound-port guard (#73): no fixed port on a bind call in tests/auth, or a concurrent
+      # `vitest run` collides on it (#23). The tree to scan is named here and in
+      # package.json, never by the script — a guard that picks its own directory reports
+      # the wrong tree and a clean tree the same way. See the script header.
+      - run: npm run check:ports
       - run: npm run build
       # Dist-drift guard: the just-run build must leave committed dist/ byte-identical.
       # A source change without a matching dist rebuild would otherwise ship stale install
