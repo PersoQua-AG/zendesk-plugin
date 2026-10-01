@@ -83,6 +83,7 @@ describe('a reply that has no usable URL promises none', () => {
     const listen: NonNullable<LoginDeps['listen']> = async (): Promise<CallbackListener> => ({
       promise: Promise.resolve({ code: 'auth-code', redirectUri: `http://localhost:${port}/callback` }),
       close: () => {},
+      addresses: ['127.0.0.1', '::1'],
     });
     const d = deps(port, {
       listen,

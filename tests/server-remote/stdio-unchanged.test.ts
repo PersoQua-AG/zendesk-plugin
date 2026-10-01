@@ -7,7 +7,7 @@ import { createServer } from '../../src/server.js';
 import { RateLimiter } from '../../src/client/rate-limiter.js';
 import { ResponseCache } from '../../src/client/cache.js';
 import type { TokenProvider } from '../../src/client/token-provider.js';
-import { readStoreKey } from '../auth/store-key-stub.js';
+import { keychain } from '../auth/keychain.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -31,12 +31,12 @@ describe('createServer stdio path unchanged (regression)', () => {
   // 64 Zendesk tools + zendesk_login + zendesk_diagnostics, both registered only on this local path.
   it('still registers exactly 66 tools with no injected deps', () => {
     const spy = vi.spyOn(McpServer.prototype, 'registerTool');
-    createServer(fixtureEnv(), { readStoreKey });
+    createServer(fixtureEnv(), { security: keychain() });
     expect(spy).toHaveBeenCalledTimes(66);
   });
 
   it('defaults reproduce the 400/10 buckets and standard security', () => {
-    const { rateLimiter, incrementalRateLimiter, ctx } = createServer(fixtureEnv(), { readStoreKey });
+    const { rateLimiter, incrementalRateLimiter, ctx } = createServer(fixtureEnv(), { security: keychain() });
     expect(rateLimiter.requestsPerMinute).toBe(400);
     expect(incrementalRateLimiter.requestsPerMinute).toBe(10);
     expect(ctx.securityLevel).toBe('standard');
@@ -52,7 +52,7 @@ describe('createServer dependency injection (remote path)', () => {
     const cache = new ResponseCache(join(dataDir, 'custom-cache'));
     const authManager: TokenProvider = { getAccessToken: vi.fn().mockResolvedValue('tok') };
 
-    const created = createServer(fixtureEnv(), { authManager, rateLimiter, incrementalRateLimiter, cache, readStoreKey });
+    const created = createServer(fixtureEnv(), { authManager, rateLimiter, incrementalRateLimiter, cache, security: keychain() });
 
     expect(created.rateLimiter).toBe(rateLimiter);
     expect(created.incrementalRateLimiter).toBe(incrementalRateLimiter);
@@ -64,7 +64,7 @@ describe('createServer dependency injection (remote path)', () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchImpl);
 
-    const { ctx } = createServer(fixtureEnv(), { authManager, readStoreKey });
+    const { ctx } = createServer(fixtureEnv(), { authManager, security: keychain() });
     await ctx.httpClient.request('/users/me.json');
 
     expect(authManager.getAccessToken).toHaveBeenCalledTimes(1);

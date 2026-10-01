@@ -105,14 +105,16 @@ describe('the first-run setup page', () => {
     expect(served.submitted).toEqual([]);
   });
 
-  it('refuses a POST that did not come from the page itself', async () => {
+  // The posture, in one line: a request that SENDS an Origin must send ours, and one that sends none is
+  // let through — `Origin` is a control a browser applies to itself, so its absence means the caller is
+  // not a browser, and against a non-browser caller the control is the one-time token, not a header that
+  // caller writes itself.
+  it('refuses a POST from a foreign origin, and lets one with no Origin through', async () => {
     const served = await serve();
     expect((await served.post(goodForm, { origin: 'https://evil.example.com' })).status).toBe(403);
-    // No Origin at all is not a browser form submission either.
-    expect((await served.post(goodForm, { origin: null })).status).toBe(403);
     expect(served.submitted).toEqual([]);
-    // And the token is still good afterwards, so a refused forgery cannot end someone's setup.
-    expect((await served.post(goodForm)).status).toBe(303);
+    expect((await served.post(goodForm, { origin: null })).status).toBe(303);
+    expect(served.submitted).toHaveLength(1);
   });
 
   it('accepts the page’s own origin in every spelling the browser may use', async () => {
@@ -207,13 +209,15 @@ describe('the first-run setup page', () => {
     await expect(listener.promise).resolves.toMatchObject({ code: 'after-setup' });
   });
 
-  it('builds a loopback URL a browser can reach, with the token in it', () => {
-    const url = new URL(setupUrl(8976, TOKEN));
+  it('builds a URL on the address it is given, with the token in it', () => {
+    const url = new URL(setupUrl('127.0.0.1', 8976, TOKEN));
     expect(url.hostname).toBe('127.0.0.1');
     expect(url.port).toBe('8976');
     expect(url.pathname).toBe('/setup');
     expect(url.searchParams.get('t')).toBe(TOKEN);
     // 32 random bytes, base64url: not guessable by a local process in the window the page is open.
     expect(TOKEN).toMatch(/^[\w-]{43}$/);
+    // And on the other family when that is the one that bound (#68 B2).
+    expect(new URL(setupUrl('[::1]', 8976, TOKEN)).hostname).toBe('[::1]');
   });
 });

@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { diagnosticsReport, substitutionState } from '../../src/tools/diagnostics.js';
 import { createServer } from '../../src/server.js';
-import { readStoreKey } from '../auth/store-key-stub.js';
+import { keychain } from '../auth/keychain.js';
 import { freePort } from '../auth/login-harness.js';
 
 // Why this tool exists at all: Claude Desktop loads no local plugin — it serves plugins from the
@@ -25,8 +25,6 @@ function tempDir(): string {
   return dir;
 }
 
-const probe = async (port: number, address: string): Promise<string> => `${address}:${port} probed`;
-
 describe('substitution state', () => {
   it('separates substituted, left-as-a-placeholder and unset', () => {
     expect(substitutionState('/Users/x/plugin')).toBe('substituted');
@@ -43,9 +41,8 @@ describe('the diagnostics report', () => {
   it('names the host and the two variables STATES, never their values', async () => {
     const text = await diagnosticsReport({
       rawEnv: { CLAUDE_PLUGIN_ROOT: '/Users/secretname/plugins/zendesk', CLAUDE_PLUGIN_DATA: '${CLAUDE_PLUGIN_DATA}' },
-      callbackPort: 8976,
+      callbackPort: freePort(),
       clientCapabilities: { elicitation: {} },
-      probe,
     });
 
     expect(text).toContain(`hostname: ${hostname()}`);
@@ -61,19 +58,13 @@ describe('the diagnostics report', () => {
   // summary written before the answer is known would drop exactly the field nobody expected.
   it('renders the client capabilities from initialize verbatim', async () => {
     const capabilities = { elicitation: { modes: ['form', 'url'] }, roots: { listChanged: true } };
-    const text = await diagnosticsReport({ rawEnv: {}, callbackPort: 8976, clientCapabilities: capabilities, probe });
+    const text = await diagnosticsReport({ rawEnv: {}, callbackPort: freePort(), clientCapabilities: capabilities });
     expect(text).toContain(JSON.stringify(capabilities, null, 2));
   });
 
   it('says so plainly when the client announced no capabilities at all', async () => {
-    const text = await diagnosticsReport({ rawEnv: {}, callbackPort: 8976, clientCapabilities: undefined, probe });
+    const text = await diagnosticsReport({ rawEnv: {}, callbackPort: freePort(), clientCapabilities: undefined });
     expect(text).toContain('null');
-  });
-
-  it('reports the callback port per address family', async () => {
-    const text = await diagnosticsReport({ rawEnv: {}, callbackPort: 1234, clientCapabilities: {}, probe });
-    expect(text).toContain('127.0.0.1:1234 probed');
-    expect(text).toContain('::1:1234 probed');
   });
 
   it('probes the real port by binding it, and reports the code when it cannot', async () => {
@@ -96,7 +87,7 @@ describe('zendesk_diagnostics as a tool', () => {
         ZENDESK_OAUTH_CALLBACK_PORT: String(freePort()),
         CLAUDE_PLUGIN_DATA: tempDir(),
       },
-      { readStoreKey },
+      { security: keychain() },
     );
     const [clientT, serverT] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'diag', version: '0.0.0' }, { capabilities: { roots: {} } });
@@ -115,7 +106,7 @@ describe('zendesk_diagnostics as a tool', () => {
   });
 
   it('is offered even when the plugin started with no configuration at all', async () => {
-    const { server } = createServer({ CLAUDE_PLUGIN_DATA: tempDir() }, { readStoreKey });
+    const { server } = createServer({ CLAUDE_PLUGIN_DATA: tempDir() }, { security: keychain() });
     const [clientT, serverT] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'diag-unconfigured', version: '0.0.0' });
     await Promise.all([server.connect(serverT), client.connect(clientT)]);

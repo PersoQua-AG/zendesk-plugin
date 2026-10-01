@@ -122,7 +122,7 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                         const write = (answer) => void res.writeHead(answer.status, answer.headers).end(answer.body);
                         // A throw out of the page must take neither the pending authorization nor the server with
                         // it, and must not describe itself: this request carries the client secret.
-                        void setup.handle(req, url).then(write, () => write({
+                        void setup(req, url).then(write, () => write({
                             status: 500,
                             headers: { 'Content-Type': 'text/plain; charset=utf-8' },
                             body: 'Setup failed. Call the Zendesk tool again to start over.',
@@ -194,15 +194,15 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                 // on is the failure, and then the reason carries both families' errors, because
                 // ../tools/login.ts translates EADDRINUSE into the remedy the user needs.
                 let pending = bindings.length;
-                let listening = 0;
+                const listening = [];
                 let decided = false;
                 const bindErrors = [];
                 const decide = () => {
                     if (decided || pending > 0)
                         return;
                     decided = true;
-                    if (listening > 0)
-                        return bound({ promise, close });
+                    if (listening.length > 0)
+                        return bound({ promise, close, addresses: listening });
                     const bindError = new Error(`OAuth callback server error: ${bindErrors.join('; ')}`);
                     finish(() => reject(bindError));
                     bindFailed(bindError);
@@ -226,7 +226,7 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                     });
                     binding.server.on('listening', () => {
                         pending -= 1;
-                        listening += 1;
+                        listening.push(binding.address);
                         decide();
                     });
                 }

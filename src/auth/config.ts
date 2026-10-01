@@ -5,8 +5,9 @@ import {
   CONFIG_ACCOUNTS,
   readKeychainConfig,
   resolveTokenStoreKey,
+  runSecurity,
   type ConfigEnvName,
-  type KeychainConfig,
+  type RunSecurity,
 } from './store-key.js';
 
 export const DEFAULT_CALLBACK_PORT = 8976;
@@ -175,17 +176,33 @@ export function validateSubdomain(value: string): string {
 
 // Env WINS, the Keychain fills the gaps: an install that passes everything through the environment
 // (Claude Code as it works today) behaves exactly as it did, and — because the Keychain is read only
-// when something is actually missing — never touches it at all, so it cannot be broken by a locked
-// one either. A Keychain that cannot be read throws rather than reading as empty: see readKeychainConfig.
-function withKeychainConfig(env: NodeJS.ProcessEnv, readConfig: () => KeychainConfig): NodeJS.ProcessEnv {
+// when something is actually missing — never touches it at all, so it cannot be broken by a locked one
+// either. A Keychain that cannot be read throws rather than reading as empty: see readKeychainConfig.
+function withKeychainConfig(env: NodeJS.ProcessEnv, security: RunSecurity): NodeJS.ProcessEnv {
   const missing = (Object.keys(CONFIG_ACCOUNTS) as ConfigEnvName[]).filter((name) => !env[name]);
   if (missing.length === 0) return env;
-  const stored = readConfig();
+  const stored = readKeychainConfig(security);
   const filled: NodeJS.ProcessEnv = { ...env };
   for (const name of missing) {
-    if (stored[name]) filled[name] = stored[name];
+    const value = stored[name];
+    // A STORED value that the rule below would refuse is dropped rather than carried forward, for two
+    // reasons. It must not reach the error message: that message is tool output, and the owner decided
+    // the customer's instance name is not to lie around in the open. And dropping it makes the
+    // configuration incomplete again, which is what gets the setup page offered instead of a start that
+    // fails on a value nobody can see or correct.
+    if (!value || (name === 'ZENDESK_SUBDOMAIN' && !isUsableSubdomain(value))) continue;
+    filled[name] = value;
   }
   return filled;
+}
+
+function isUsableSubdomain(value: string): boolean {
+  try {
+    validateSubdomain(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface ResolvedAuthConfig {
@@ -216,14 +233,14 @@ function required(env: NodeJS.ProcessEnv, name: keyof typeof USER_CONFIG_FIELDS)
 // identical dataDir → an identical tokens.enc path, and one and the same Keychain key opens it. The
 // key is no longer derived from the client secret, so rotating the secret leaves the store readable.
 //
-// readStoreKey is a parameter for the same reason platform/env are parameters on defaultDataDir: the
-// resolution is testable without touching a real Keychain.
+// `security` is a parameter for the same reason env/platform are parameters on defaultDataDir: ONE seam
+// for the whole Keychain path — the key and the three values — so the real logic in ./store-key.ts runs
+// under test rather than being stubbed out, and no suite reaches a real login keychain.
 export function resolveAuthConfig(
   rawEnv: NodeJS.ProcessEnv,
-  readStoreKey: () => string = resolveTokenStoreKey,
-  readConfig: () => KeychainConfig = readKeychainConfig,
+  security: RunSecurity = runSecurity,
 ): ResolvedAuthConfig {
-  const env = withKeychainConfig(stripPlaceholders(rawEnv), readConfig);
+  const env = withKeychainConfig(stripPlaceholders(rawEnv), security);
   // Falsy-coalesce (not ??): an empty-string env var is "absent", not a value.
   // Otherwise CLAUDE_PLUGIN_DATA='' → tokens.enc at the fs root, and
   // ZENDESK_OAUTH_CALLBACK_PORT='' → Number('')===0 → bind to port 0.
@@ -249,7 +266,7 @@ export function resolveAuthConfig(
     dataDir,
     // Memoized: one `security` invocation per process, however many readers there are.
     get tokenStoreKey(): string {
-      return (storeKey ??= readStoreKey());
+      return (storeKey ??= resolveTokenStoreKey(security));
     },
     // Single source of the token file location so server + authorize bin never drift. join(), not
     // a template literal: the manifest declares win32, where '/' would mix separators.

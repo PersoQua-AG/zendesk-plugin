@@ -8,7 +8,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../../src/server.js';
 import { RateLimiter } from '../../src/client/rate-limiter.js';
 import { ResponseCache } from '../../src/client/cache.js';
-import { readStoreKey } from '../auth/store-key-stub.js';
+import { keychain } from '../auth/keychain.js';
 
 export const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const read = (rel: string): string => readFileSync(join(root, rel), 'utf8');
@@ -90,7 +90,7 @@ export async function boot(reply: (c: Call, n: number) => Response = () => json(
       incrementalRateLimiter: new RateLimiter({ requestsPerMinute: 10, sleep: async () => {} }),
       cache: new ResponseCache(join(dataDir, 'cache')),
       fetchImpl,
-      readStoreKey,
+      security: keychain(),
     },
   );
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();

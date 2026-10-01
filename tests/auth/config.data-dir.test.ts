@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { dataDirOf, defaultDataDir, resolveAuthConfig } from '../../src/auth/config.js';
+import { keychain } from './keychain.js';
 
 const fullEnv = (): NodeJS.ProcessEnv => ({
   ZENDESK_SUBDOMAIN: 'acme',
@@ -31,20 +32,20 @@ describe('defaultDataDir', () => {
 
 describe('resolveAuthConfig data dir', () => {
   it('defaults to the per-user data dir, not a cwd-relative folder', () => {
-    const { dataDir, tokensPath } = resolveAuthConfig(fullEnv());
+    const { dataDir, tokensPath } = resolveAuthConfig(fullEnv(), keychain());
     expect(dataDir).toBe(defaultDataDir(fullEnv()));
     expect(isAbsolute(dataDir)).toBe(true);
     expect(tokensPath).toBe(join(dataDir, 'tokens.enc'));
   });
 
   it('still honors an explicit absolute CLAUDE_PLUGIN_DATA (Claude Code plugin path)', () => {
-    const { dataDir, tokensPath } = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '/var/data' });
+    const { dataDir, tokensPath } = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '/var/data' }, keychain());
     expect(dataDir).toBe('/var/data');
     expect(tokensPath).toBe(join('/var/data', 'tokens.enc'));
   });
 
   it('treats an empty-string CLAUDE_PLUGIN_DATA as absent', () => {
-    expect(resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '' }).dataDir).toBe(
+    expect(resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '' }, keychain()).dataDir).toBe(
       defaultDataDir(fullEnv()),
     );
   });

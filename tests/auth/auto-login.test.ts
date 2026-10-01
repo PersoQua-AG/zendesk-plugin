@@ -33,7 +33,7 @@ const unreadableStore = {
 function countingListen(counted: { listeners: number }): NonNullable<LoginDeps['listen']> {
   return async (): Promise<CallbackListener> => {
     counted.listeners += 1;
-    return { promise: new Promise<never>(() => {}), close: () => {} };
+    return { promise: new Promise<never>(() => {}), close: () => {}, addresses: ['127.0.0.1', '::1'] };
   };
 }
 

@@ -7,6 +7,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer, type ServerDeps } from '../../src/server.js';
 import { RateLimiter } from '../../src/client/rate-limiter.js';
 import { ResponseCache } from '../../src/client/cache.js';
+import { keychain } from '../auth/keychain.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -26,7 +27,7 @@ function fixtureEnv(): NodeJS.ProcessEnv {
 
 // Build a server the given way, list its tools over an in-memory transport pair.
 async function listTools(env: NodeJS.ProcessEnv, deps?: ServerDeps) {
-  const { server } = createServer(env, deps);
+  const { server } = createServer(env, { security: keychain(), ...deps });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'parity', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);

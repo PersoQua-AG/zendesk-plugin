@@ -113,9 +113,7 @@ export interface SetupResponse {
   body: string;
 }
 
-export interface SetupRoute {
-  handle: (req: IncomingMessage, url: URL) => Promise<SetupResponse>;
-}
+export type SetupRoute = (req: IncomingMessage, url: URL) => Promise<SetupResponse>;
 
 // A callback listener that is BOUND but not yet awaited. The two-step login tool needs those two
 // moments apart: it hands the user the authorization URL on the first tool call and collects the
@@ -127,6 +125,10 @@ export interface CallbackListener {
   promise: Promise<AuthorizationResult>;
   // Closes the listener and settles a still-pending `promise`. A no-op once settled.
   close: () => void;
+  // The loopback addresses this listener actually bound — never empty. One family is allowed to fail,
+  // so a caller that hands out a URL must build it from THIS and not from an assumption: a URL naming
+  // the family that did not bind points at whatever else holds that port.
+  addresses: readonly string[];
 }
 
 // Resolves only once the port is actually bound, and REJECTS on a bind failure (e.g. EADDRINUSE) —
@@ -190,7 +192,7 @@ export function startCallbackListener(
               void res.writeHead(answer.status, answer.headers).end(answer.body);
             // A throw out of the page must take neither the pending authorization nor the server with
             // it, and must not describe itself: this request carries the client secret.
-            void setup.handle(req, url).then(write, () =>
+            void setup(req, url).then(write, () =>
               write({
                 status: 500,
                 headers: { 'Content-Type': 'text/plain; charset=utf-8' },
@@ -269,13 +271,13 @@ export function startCallbackListener(
         // on is the failure, and then the reason carries both families' errors, because
         // ../tools/login.ts translates EADDRINUSE into the remedy the user needs.
         let pending = bindings.length;
-        let listening = 0;
+        const listening: string[] = [];
         let decided = false;
         const bindErrors: string[] = [];
         const decide = (): void => {
           if (decided || pending > 0) return;
           decided = true;
-          if (listening > 0) return bound({ promise, close });
+          if (listening.length > 0) return bound({ promise, close, addresses: listening });
           const bindError = new Error(`OAuth callback server error: ${bindErrors.join('; ')}`);
           finish(() => reject(bindError));
           bindFailed(bindError);
@@ -300,7 +302,7 @@ export function startCallbackListener(
           });
           binding.server.on('listening', () => {
             pending -= 1;
-            listening += 1;
+            listening.push(binding.address);
             decide();
           });
         }

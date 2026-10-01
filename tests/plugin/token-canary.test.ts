@@ -15,6 +15,8 @@ import type { SetupValues } from '../../src/tools/setup.js';
 import type { CallbackListener, OAuthConfig } from '../../src/auth/oauth-flow.js';
 import { exchangeCodeForTokens, refreshAccessToken } from '../../src/auth/oauth-flow.js';
 import { DEFAULT_SCOPES } from '../../src/auth/config.js';
+import { resolveTokenStoreKey, writeKeychainConfig } from '../../src/auth/store-key.js';
+import { fakeKeychain } from '../auth/keychain.js';
 import { config, dataDir, deps, freePort, setupLoginHarness, tokensPath } from '../auth/login-harness.js';
 
 setupLoginHarness('token-canary-');
@@ -200,5 +202,34 @@ describe('a client secret typed into the setup page', () => {
     expectNoCanary(console_.lines(), 'the console');
     expectNoCanary(dataDirContents(), 'the data directory');
     console_.restore();
+  });
+});
+
+// The surface the three searches above cannot see: a process ARGUMENT. `ps` shows every argv element of
+// every process on the machine to every user, for as long as the call runs, and what this plugin stores
+// is the customer's client secret and the key to their tokens (#68 B4).
+describe('the argv surface', () => {
+  it('carries no secret at all — not the client secret, not the token-store key', () => {
+    const fake = fakeKeychain();
+    const key = resolveTokenStoreKey(fake.run);
+    writeKeychainConfig(
+      {
+        ZENDESK_SUBDOMAIN: 'acme',
+        ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
+        ZENDESK_OAUTH_CLIENT_SECRET: CLIENT_SECRET,
+      },
+      fake.run,
+    );
+
+    // Stored — so this case would not pass on a path that wrote nothing.
+    expect(fake.items.get('oauth-client-secret')).toBe(CLIENT_SECRET);
+    expect(fake.items.get('token-store-key')).toBe(key);
+
+    const argv = fake.argv().join(' ');
+    for (const secret of [CLIENT_SECRET, key]) {
+      expect(argv, `${secret.slice(0, 8)}… must never be an argument`).not.toContain(secret);
+    }
+    // It went in on stdin instead, which is what `-w` last asks `security` to read.
+    expect(fake.calls.some((call) => (call.input ?? '').includes(CLIENT_SECRET))).toBe(true);
   });
 });

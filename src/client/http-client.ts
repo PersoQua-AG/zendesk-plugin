@@ -5,7 +5,10 @@ import { mapErrorResponse, parseRetryAfter } from './errors.js';
 const MAX_RATE_LIMIT_RETRIES = 3;
 
 export interface ZendeskHttpClientOptions {
-  subdomain: string;
+  // A function where the host is not known yet: the first-run setup page supplies the subdomain
+  // mid-session (#68), and a base URL frozen at construction would send every later request to
+  // https://.zendesk.com. Every other caller passes the string it already has.
+  subdomain: string | (() => string);
   // AuthManager is a TokenProvider, so all existing call sites remain assignable; per-user
   // resolution injects a different TokenProvider per session (M9).
   authManager: TokenProvider;
@@ -24,14 +27,20 @@ export interface RequestOptions {
 }
 
 export class ZendeskHttpClient {
-  private readonly baseUrl: string;
+  private readonly subdomain: () => string;
   private readonly fetchImpl: typeof fetch;
   private readonly maxRateLimitRetries: number;
 
   constructor(private readonly options: ZendeskHttpClientOptions) {
-    this.baseUrl = `https://${options.subdomain}.zendesk.com/api/v2`;
+    const { subdomain } = options;
+    this.subdomain = typeof subdomain === 'function' ? subdomain : () => subdomain;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.maxRateLimitRetries = options.maxRateLimitRetries ?? MAX_RATE_LIMIT_RETRIES;
+  }
+
+  // Read per request, not cached: see the `subdomain` option.
+  private get baseUrl(): string {
+    return `https://${this.subdomain()}.zendesk.com/api/v2`;
   }
 
   // Pick the bucket for this request. 'incremental' selects the 10/min limiter when configured,

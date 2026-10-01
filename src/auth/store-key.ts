@@ -1,17 +1,19 @@
 // src/auth/store-key.ts
-// Everything this plugin keeps in the macOS Keychain: the token-store key, and — since the first-run
-// setup page — the three OAuth values the customer enters there (subdomain, client id, client
-// secret). One file, because there is one way in: the `security` built-in, reached with an ARGUMENT
-// ARRAY and never a shell string, so no value here can be word-split or interpreted by a shell. Both
-// the guard in tests/plugin/no-process-spawn.test.ts and the single sanctioned child process depend
-// on that staying true of exactly this file.
+// Everything this plugin keeps in the macOS Keychain: the token-store key, and the three OAuth values
+// the first-run setup page collects (subdomain, client id, client secret). One file, because there is
+// one way in — the `security` built-in, reached with an ARGUMENT ARRAY and never a shell string — and
+// both tests/plugin/no-process-spawn.test.ts and the single sanctioned child process depend on that
+// staying true of exactly this file.
 //
-// The key the token store is encrypted with. It is a RANDOM 32-byte value kept in the macOS
-// Keychain, deliberately not the OAuth client secret: rotating the client secret must not brick the
-// stored tokens, and the client secret must not double as the decrypt-all key. Same reasoning, same
-// shape and the same entropy floor as the remote path's REMOTE_TOKEN_ENC_KEY
+// The token-store key is a RANDOM 32-byte value and deliberately not the OAuth client secret: rotating
+// the secret must not brick the stored tokens, and the secret must not double as the decrypt-all key.
+// Same reasoning, same shape and the same entropy floor as the remote path's REMOTE_TOKEN_ENC_KEY
 // (src/remote/remote-server.ts:78-88), which is where this pattern already runs in production.
 //
+// EVERY SECRET GOES IN THROUGH STDIN. `man security`: "-w password — Specify password to be added. Put
+// at end of command to be prompted (recommended)". An argv element is readable by `ps` for the lifetime
+// of the call, and the values here are the customer's client secret and the key to their tokens.
+// Measured: with `-w` last, `security` prompts twice (password, retype), so the value is written twice.
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
@@ -19,32 +21,17 @@ const SECURITY_BIN = '/usr/bin/security';
 const SERVICE = 'zendesk-plugin';
 const ACCOUNT = 'token-store-key';
 
-// The three OAuth values, by the env var each one stands in for — so the merge in ./config.ts is a
-// plain object spread and neither side needs to know the other's spelling. The client id and the
-// subdomain are in here beside the secret by owner decision: the id is internal, and the instance
-// name is not to lie around in the open either.
-export const CONFIG_ACCOUNTS = {
-  ZENDESK_SUBDOMAIN: 'oauth-subdomain',
-  ZENDESK_OAUTH_CLIENT_ID: 'oauth-client-id',
-  ZENDESK_OAUTH_CLIENT_SECRET: 'oauth-client-secret',
-} as const;
+// `security` exits 44 for "item not found" — the ordinary first-run case. Any other non-zero exit is a
+// locked, denied or unreadable Keychain, and that must NOT be mistaken for "nothing stored yet":
+// creating a second key there would silently make every stored token undecryptable, and overwriting a
+// stored configuration would discard a working one.
+export const KEYCHAIN_ABSENT = 44;
+// There is no `security` binary at all, i.e. this is not macOS. That is not a failure of the Keychain,
+// it is the absence of one (#69), and the two are answered differently everywhere below.
+export const KEYCHAIN_UNAVAILABLE = -1;
+const SPAWN_FAILED = -2;
 
-export type ConfigEnvName = keyof typeof CONFIG_ACCOUNTS;
-export type KeychainConfig = Partial<Record<ConfigEnvName, string>>;
-
-// macOS only, and the one place that is decided. Windows and Linux are #69; nothing falls back to
-// anything weaker, here or anywhere else.
-export function keychainAvailable(platform: NodeJS.Platform = process.platform): boolean {
-  return platform === 'darwin';
-}
-
-// `security` exits 44 for "item not found" — the ordinary first-run case. Any other non-zero exit is
-// a locked or unreadable Keychain, and that must NOT be mistaken for "no key yet": creating a second
-// key there would silently make every stored token undecryptable.
-const ITEM_NOT_FOUND = 44;
-
-// 32 bytes = a 256-bit AES key's worth. Lifted verbatim from src/remote/remote-server.ts:27-36
-// rather than invented here.
+// 32 bytes = a 256-bit AES key's worth. Lifted verbatim from src/remote/remote-server.ts:27-36.
 const MIN_ENC_KEY_BYTES = 32;
 
 // ponytail: the second copy of remote-server.ts's strength gate, because #68 may not touch
@@ -57,30 +44,46 @@ export function encKeyStrengthBytes(key: string): number {
 
 export interface SecurityOutcome {
   status: number;
-  // stdout on success; the failure's first line otherwise. NEVER interpolated into an error, because
-  // on the read path stdout IS the key.
+  // stdout on success. NEVER interpolated into an error: on a read path stdout IS the value.
   output: string;
 }
 
-export type RunSecurity = (args: string[]) => SecurityOutcome;
+// The one seam the whole Keychain path is tested through — so the logic below runs in the suite instead
+// of being stubbed out, on any platform, and without touching a real login keychain.
+export type RunSecurity = (args: string[], input?: string) => SecurityOutcome;
 
-// stdio: stderr is discarded rather than inherited — `security` writes its own diagnostics there and
-// stderr on the stdio path belongs to util/warn-config.ts alone. A missing binary (every non-macOS
-// platform) has no exit status at all, which is -1 here: not 44, so it is never read as "no key yet".
-//
-// `bin` is a parameter so the two outcomes of this function can be MEASURED rather than excluded from
-// coverage: a test runs it against /bin/echo and against a path that does not exist, on any platform.
-export function runSecurity(args: string[], bin: string = SECURITY_BIN): SecurityOutcome {
+// A runner with no Keychain to reach: what the remote bridge passes, so a macOS-hosted bridge can never
+// serve remote users out of the operator's own personal OAuth client.
+export const noKeychain: RunSecurity = () => ({ status: KEYCHAIN_UNAVAILABLE, output: '' });
+
+// `bin` is a parameter so that both outcomes of this function — and the three ways it can fail — are
+// MEASURED rather than excluded from coverage: a test runs it against /bin/echo, a binary that exits
+// non-zero, a path that does not exist, and a process that dies on a signal, on any platform.
+export function runSecurity(args: string[], input?: string, bin: string = SECURITY_BIN): SecurityOutcome {
   try {
-    return { status: 0, output: execFileSync(bin, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) };
+    // stdin is always a pipe, so a command that prompts reads what it was given and one that does not
+    // sees EOF. stderr is discarded: `security` writes its prompts and diagnostics there, and stderr on
+    // the stdio path belongs to util/warn-config.ts alone.
+    const output = execFileSync(bin, args, {
+      input: input ?? '',
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    return { status: 0, output };
   } catch (err) {
-    const status = (err as { status?: number }).status;
-    return { status: typeof status === 'number' ? status : -1, output: '' };
+    const { code, status } = err as { code?: string; status?: number };
+    if (code === 'ENOENT') return { status: KEYCHAIN_UNAVAILABLE, output: '' };
+    return { status: typeof status === 'number' ? status : SPAWN_FAILED, output: '' };
   }
 }
 
-// A non-zero exit that is NOT "item not found": locked, access denied, user cancelled. Never carries
-// `output`, because on a read path stdout is the value itself.
+export const UNSUPPORTED_PLATFORM =
+  'The Zendesk configuration and the token-store key live in the macOS Keychain, and this is not macOS. ' +
+  'A Windows or Linux key source is issue #69 (github.com/PersoQua-AG/zendesk-plugin/issues/69); until ' +
+  'then pass ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID and ZENDESK_OAUTH_CLIENT_SECRET in the ' +
+  'environment. There is deliberately no weaker fallback.';
+
+// Never carries `output`, because on a read path stdout is the value itself.
 function unreadable(status: number): Error {
   return new Error(
     `The macOS Keychain could not be read (security exited ${status}). Unlock the login keychain, ` +
@@ -88,19 +91,13 @@ function unreadable(status: number): Error {
   );
 }
 
-export const UNSUPPORTED_PLATFORM =
-  'The Zendesk token store needs a key from the macOS Keychain, and this is not macOS. A Windows or ' +
-  'Linux key source is issue #69 (github.com/PersoQua-AG/zendesk-plugin/issues/69); there is ' +
-  'deliberately no weaker fallback.';
+// `-w` LAST and the value on stdin, twice: see the file header.
+function writeItem(run: RunSecurity, account: string, value: string): SecurityOutcome {
+  return run(['add-generic-password', '-s', SERVICE, '-a', account, '-U', '-w'], `${value}\n${value}\n`);
+}
 
-// Reads the key, creating it on first use. Platform and runner are parameters so the resolution is
-// testable without a real Keychain and without mutating the process.
-export function resolveTokenStoreKey(
-  platform: NodeJS.Platform = process.platform,
-  run: RunSecurity = runSecurity,
-): string {
-  if (!keychainAvailable(platform)) throw new Error(UNSUPPORTED_PLATFORM);
-
+// Reads the key, creating it on first use.
+export function resolveTokenStoreKey(run: RunSecurity = runSecurity): string {
   const found = run(['find-generic-password', '-s', SERVICE, '-a', ACCOUNT, '-w']);
   if (found.status === 0) {
     const key = found.output.trim();
@@ -112,13 +109,11 @@ export function resolveTokenStoreKey(
     }
     return key;
   }
-  if (found.status !== ITEM_NOT_FOUND) throw unreadable(found.status);
+  if (found.status === KEYCHAIN_UNAVAILABLE) throw new Error(UNSUPPORTED_PLATFORM);
+  if (found.status !== KEYCHAIN_ABSENT) throw unreadable(found.status);
 
   const key = randomBytes(MIN_ENC_KEY_BYTES).toString('base64');
-  // ponytail: the new key travels as an argv element, so it is visible to `ps` for the lifetime of
-  // this one call. `security add-generic-password` offers no stdin form. Upgrade path — a short
-  // Security-framework helper, or `-X` with a temp file, if that window ever has to close.
-  const added = run(['add-generic-password', '-s', SERVICE, '-a', ACCOUNT, '-w', key, '-U']);
+  const added = writeItem(run, ACCOUNT, key);
   if (added.status !== 0) {
     throw new Error(
       `The token-store key could not be written to the macOS Keychain (security exited ${added.status}).`,
@@ -127,46 +122,71 @@ export function resolveTokenStoreKey(
   return key;
 }
 
+// The three OAuth values, by the env var each one stands in for — so the merge in ./config.ts is a plain
+// object spread and neither side needs to know the other's spelling. The client id and the subdomain are
+// in here beside the secret by owner decision: the id is internal, and the instance name is not to lie
+// around in the open either.
+export const CONFIG_ACCOUNTS = {
+  ZENDESK_SUBDOMAIN: 'oauth-subdomain',
+  ZENDESK_OAUTH_CLIENT_ID: 'oauth-client-id',
+  ZENDESK_OAUTH_CLIENT_SECRET: 'oauth-client-secret',
+} as const;
+
+export type ConfigEnvName = keyof typeof CONFIG_ACCOUNTS;
+export type KeychainConfig = Partial<Record<ConfigEnvName, string>>;
+
 const configEntries = Object.entries(CONFIG_ACCOUNTS) as [ConfigEnvName, string][];
 
-// What the setup page stored, if anything. A missing item is simply absent — that is the first run,
-// not a failure — while a Keychain that cannot be READ throws, because answering "nothing is stored"
-// for a locked keychain would send a configured user back through setup and overwrite what is there.
-//
-// Returns {} off macOS rather than throwing: an env-configured install (Claude Code as it works
-// today) must not be made to depend on a key source that platform does not have.
-export function readKeychainConfig(
-  platform: NodeJS.Platform = process.platform,
-  run: RunSecurity = runSecurity,
-): KeychainConfig {
-  if (!keychainAvailable(platform)) return {};
+// What the setup page stored, if anything. A missing item is simply absent — that is the first run, not a
+// failure — while a Keychain that cannot be READ throws, because answering "nothing is stored" for a
+// locked or denied one would send a configured user back through setup and overwrite what is there. No
+// Keychain at all (another platform) is {}: an env-configured install must not be made to depend on a
+// source that platform does not have.
+export function readKeychainConfig(run: RunSecurity = runSecurity): KeychainConfig {
   const stored: KeychainConfig = {};
   for (const [name, account] of configEntries) {
     const found = run(['find-generic-password', '-s', SERVICE, '-a', account, '-w']);
-    if (found.status === ITEM_NOT_FOUND) continue;
+    if (found.status === KEYCHAIN_UNAVAILABLE) return {};
+    if (found.status === KEYCHAIN_ABSENT) continue;
     if (found.status !== 0) throw unreadable(found.status);
-    // `security -w` ends its output with a newline; an item that holds only whitespace is as absent
-    // as a missing one, and must not pass the required() check downstream as a value.
+    // `security -w` ends its output with a newline; an item holding only whitespace is as absent as a
+    // missing one and must not pass the required() check downstream as a value.
     const value = found.output.trim();
     if (value) stored[name] = value;
   }
   return stored;
 }
 
-// All three or nothing: a half-written set would leave the plugin configured with a subdomain and no
-// client, which is a state the setup page cannot tell apart from a fresh machine. -U so a retry
-// replaces what an earlier attempt left behind instead of failing on a collision.
-export function writeKeychainConfig(
-  values: Required<KeychainConfig>,
-  platform: NodeJS.Platform = process.platform,
-  run: RunSecurity = runSecurity,
-): void {
-  if (!keychainAvailable(platform)) throw new Error(UNSUPPORTED_PLATFORM);
+// ALL THREE OR NOTHING, and this time it is what the code does. A set of TWO is a configuration that
+// resolves — the client secret is optional on the code path — so the next start would find it complete,
+// never degrade, never offer the setup page again, and the user would be locked out for good. A failure
+// therefore takes back what it has already written.
+export function writeKeychainConfig(values: Required<KeychainConfig>, run: RunSecurity = runSecurity): void {
+  const written: string[] = [];
   for (const [name, account] of configEntries) {
-    const added = run(['add-generic-password', '-s', SERVICE, '-a', account, '-w', values[name], '-U']);
-    if (added.status !== 0) {
-      // The account name, never the value.
-      throw new Error(`"${account}" could not be written to the macOS Keychain (security exited ${added.status}).`);
+    const added = writeItem(run, account, values[name]);
+    if (added.status === 0) {
+      written.push(account);
+      continue;
     }
+    const platform = added.status === KEYCHAIN_UNAVAILABLE ? ` ${UNSUPPORTED_PLATFORM}` : '';
+    // The account name, never the value.
+    throw new Error(
+      `"${account}" could not be written to the macOS Keychain (security exited ${added.status}).` +
+        `${rollback(run, written)}${platform}`,
+    );
   }
+}
+
+// Returns what to append to the failure: whether the half-written set is really gone. A delete that
+// itself fails is the one case the user has to act on by hand, so it is named rather than swallowed.
+function rollback(run: RunSecurity, written: string[]): string {
+  const left = written.filter(
+    (account) => run(['delete-generic-password', '-s', SERVICE, '-a', account]).status !== 0,
+  );
+  if (left.length === 0) return ' Nothing was left behind.';
+  return (
+    ` ${left.map((account) => `"${account}"`).join(', ')} could not be removed again — delete ` +
+    `${left.length === 1 ? 'it' : 'them'} under the service "${SERVICE}" in Keychain Access before trying again.`
+  );
 }

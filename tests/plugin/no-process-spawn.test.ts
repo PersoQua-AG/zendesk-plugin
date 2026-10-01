@@ -41,7 +41,12 @@ describe('nothing spawns a process to open a browser', () => {
     expect(source.match(/execFile(Sync)?\(/g)).toHaveLength(1);
     expect(source).not.toMatch(/\bexec(Sync)?\(|\bspawn(Sync)?\(|\bfork\(|shell:\s*true/);
     expect(source).toContain("const SECURITY_BIN = '/usr/bin/security';");
-    expect(source).toContain('execFileSync(bin, args,');
+    // The secret is on stdin, never in argv (#68 B4): `-w` last is what makes security prompt.
+    expect(source).toContain("'-U', '-w'], `${value}\\n${value}\\n`");
+    expect(source).toMatch(/execFileSync\(bin, args, \{/);
+    // …where `bin` defaults to the one binary and is a parameter only so the runner's own outcomes can
+    // be measured against /bin/echo and a missing path. No caller in src/ passes it.
+    expect(source).toMatch(/bin: string = SECURITY_BIN/);
   });
 
   it('carries no browser launcher anywhere', () => {

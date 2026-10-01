@@ -145,8 +145,9 @@ npm install   # `prepare` runs the build automatically
 ### 0. First run: let the plugin walk you through it
 
 Ask Claude for anything from Zendesk on a machine that is not configured yet. The
-answer is a single local URL — `http://127.0.0.1:8976/setup?t=…` — and nothing
-else. Open it and the page (in German) does both halves of the job:
+answer is a single local URL — `http://127.0.0.1:8976/setup?t=…`, or
+`http://[::1]:8976/…` when that is the loopback family the listener got — and
+nothing else. Open it and the page (in German) does both halves of the job:
 
 1. it names the exact place in **your** Zendesk — Admin Center → Apps und
    Integrationen → APIs → OAuth-Clients → „OAuth-Client hinzufügen" — and the
@@ -155,9 +156,11 @@ else. Open it and the page (in German) does both halves of the job:
    and *Zugriffsart* left empty (empty means all scopes are allowed; the plugin
    asks for `read write`);
 2. it collects subdomain, client id and client secret, stores all three in the
-   **macOS Keychain**, and continues straight into the Zendesk authorization in
-   the same browser tab. The callback lands on the same local listener, the
-   tokens are encrypted to disk, and the plugin is ready after one reload.
+   **macOS Keychain** (all three or none — a write that fails takes back what it
+   already stored), and continues straight into the Zendesk authorization in the
+   same browser tab. The callback lands on the same local listener, the tokens
+   are encrypted to disk, and **the running session picks the configuration up
+   itself** — nothing has to be reloaded or restarted.
 
 Why a page and not a question in the chat: the client secret must never pass
 through the model or end up in a transcript. The MCP specification says so
@@ -167,8 +170,12 @@ credentials."* The page runs on loopback only, is reachable solely with a
 single-use token, accepts the form by `POST` from its own origin, and echoes no
 value back. The listener exists only while a setup or a login is pending.
 
-`zendesk_login` with `force: true` reaches the page again — a subdomain typed
-wrong, a replaced client, a different account.
+`zendesk_login` with **`setup: true`** reaches the page again when the stored
+values are the wrong ones — a subdomain typed `acmee`, a client deleted in
+Zendesk, a different account. (`force: true` keeps its own meaning: authorize
+again with the configuration that is there.) Values typed into the page never
+travel as process arguments: they are handed to `security` on stdin, so they are
+not visible to `ps`.
 
 Environment variables always win over the Keychain, so **Claude Code with
 `ZENDESK_SUBDOMAIN` etc. set behaves exactly as it did before** and never touches
@@ -304,7 +311,8 @@ inventory.
   the subdomain and the client id — three items under the service
   `zendesk-plugin`, separate from the token-store key. It is never written to
   disk in the clear, never logged, and never echoed back by the page that
-  collected it. Tokens are encrypted at rest
+  collected it, and never passed as a command-line argument. Tokens are
+  encrypted at rest
   (AES-256-GCM, file mode `0600`) with a **random 32-byte key of their own**, kept
   in the macOS Keychain and independent of the client secret: rotating the secret
   does not brick the token store, and the secret is not a decrypt-all key. On

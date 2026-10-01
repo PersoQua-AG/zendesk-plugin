@@ -28,8 +28,7 @@ function probeBind(port, address) {
     });
 }
 export async function diagnosticsReport(input) {
-    const probe = input.probe ?? probeBind;
-    const binds = await Promise.all(LOOPBACK_ADDRESSES.map((address) => probe(input.callbackPort, address)));
+    const binds = await Promise.all(LOOPBACK_ADDRESSES.map((address) => probeBind(input.callbackPort, address)));
     return [
         `hostname: ${hostname()}`,
         `platform: ${process.platform}`,

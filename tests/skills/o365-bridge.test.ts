@@ -29,6 +29,11 @@ describe('o365-bridge: the plugin itself only reaches Zendesk (SKILL.md:8)', () 
           // not that promise. Still the same rule — no host outside this machine or the customer's
           // own Zendesk may appear in a URL literal.
           if (host === '' || /^(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(host)) continue;
+          // The setup page's own URL takes the loopback address the listener REPORTED binding, so the
+          // host is a variable rather than a literal (#68 B2 — a hardcoded 127.0.0.1 could point at a
+          // foreign process holding that family). The values it can hold are asserted where they are
+          // produced: tests/auth/oauth-flow.dual-bind.test.ts and tests/auth/setup-flow.test.ts.
+          if (host === '${host}:${port}') continue;
           if (/^\$\{[^}]+\}\.zendesk\.com$/.test(host)) continue;
           foreign.push(`${file}:${i + 1} ${m[0]}`);
         }

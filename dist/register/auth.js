@@ -12,7 +12,7 @@ export function registerAuthTools(server, login) {
     if (!login)
         return;
     server.registerTool('zendesk_login', {
-        description: 'Authorize this Zendesk extension. It takes two calls, one after the other — never both in the same turn. Call 1 returns a Zendesk authorization URL: show it to the user and wait until they have approved it. Call 2 then finishes and stores the credentials. Reports "already authorized" when usable credentials exist; force=true authorizes again, or restarts an authorization already in progress.',
-        inputSchema: { force: z.boolean().optional() },
-    }, async ({ force }) => toText(await runLogin(login, { force })));
+        description: 'Authorize this Zendesk extension. It takes two calls, one after the other — never both in the same turn. Call 1 returns a URL: show it to the user and wait. On a machine that is not set up yet that is a LOCAL setup page which collects the Zendesk subdomain, OAuth client id and client secret (never ask for those in the chat — the page exists so the secret does not pass through here) and then continues into the Zendesk login by itself. Otherwise it is the Zendesk authorization URL. Call 2 finishes and stores the credentials. Reports "already authorized" when usable credentials exist; force=true authorizes again, or restarts an authorization already in progress; setup=true re-opens the setup page when the stored subdomain, client id or secret is wrong.',
+        inputSchema: { force: z.boolean().optional(), setup: z.boolean().optional() },
+    }, async ({ force, setup }) => toText(await runLogin(login, { force, setup })));
 }

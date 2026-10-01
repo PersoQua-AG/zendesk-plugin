@@ -4,6 +4,7 @@ import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { resolveAuthConfig } from '../auth/config.js';
+import { noKeychain } from '../auth/store-key.js';
 import { RateLimiter } from '../client/rate-limiter.js';
 import { DEFAULT_RATE_LIMIT_RPM, INCREMENTAL_RATE_LIMIT_RPM } from '../server.js';
 import { IdentityAuthResolver } from '../auth/identity-resolver.js';
@@ -74,7 +75,11 @@ export interface RemoteApp {
 // Build the remote MCP express app (no listen — callers/tests attach a server). Reuses
 // createServer() per session via SessionManager; the stdio entrypoint is untouched.
 export function buildRemoteApp(env: NodeJS.ProcessEnv = process.env, deps: RemoteDeps = {}): RemoteApp {
-  const { config, dataDir } = resolveAuthConfig(env);
+  // noKeychain: this process serves OTHER PEOPLE. A bridge on a macOS host with an incomplete env would
+  // otherwise read the operator's own first-run configuration out of their login keychain and serve
+  // every remote user from their personal OAuth client. The env is the only source here, as it was
+  // before the setup page existed.
+  const { config, dataDir } = resolveAuthConfig(env, noKeychain);
   // Data-encryption key is DISTINCT from the OAuth client secret and independently rotatable:
   // rotating the client secret must not brick per-user token files, and the client secret must not
   // double as the decrypt-all key. Required (fail-closed) whenever a default store is constructed.

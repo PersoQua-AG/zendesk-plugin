@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer, type ServerDeps } from '../../src/server.js';
-import { noStoredConfig } from './store-key-stub.js';
+import { keychain } from './keychain.js';
 
 // A FILE as data dir makes mkdirSync throw ENOTDIR deterministically, no chmod, even as root.
 
@@ -32,7 +32,7 @@ function configuredEnv(dataDir: string): NodeJS.ProcessEnv {
 }
 
 async function connect(env: NodeJS.ProcessEnv, deps: ServerDeps = {}) {
-  const { server } = createServer(env, { readConfig: noStoredConfig, ...deps });
+  const { server } = createServer(env, { security: keychain(), ...deps });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'degraded-cache', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);

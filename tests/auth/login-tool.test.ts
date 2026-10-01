@@ -23,6 +23,7 @@ function arrived(port: number, code = 'auth-code'): NonNullable<LoginDeps['liste
   return async (): Promise<CallbackListener> => ({
     promise: Promise.resolve({ code, redirectUri: `http://localhost:${port}/callback` }),
     close: () => {},
+    addresses: ['127.0.0.1', '::1'],
   });
 }
 

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer, type ServerDeps } from '../../src/server.js';
+import { keychain } from '../auth/keychain.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -24,7 +25,7 @@ function fixtureEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 async function listTools(env: NodeJS.ProcessEnv, deps?: ServerDeps) {
-  const { server } = createServer(env, deps);
+  const { server } = createServer(env, { security: keychain(), ...deps });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'login-reg', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);

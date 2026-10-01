@@ -3,7 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { AuthManager } from './auth/auth-manager.js';
 import { TokenStore } from './auth/token-store.js';
 import { dataDirOf, DEFAULT_CALLBACK_PORT, DEFAULT_SCOPES, resolveAuthConfig, stripPlaceholders, USER_CONFIG_FIELD_BY_ENV, } from './auth/config.js';
-import { resolveTokenStoreKey } from './auth/store-key.js';
+import { readKeychainConfig, resolveTokenStoreKey, runSecurity } from './auth/store-key.js';
 import { warnConfig } from './util/warn-config.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
@@ -70,12 +70,12 @@ function parseMarkdownDefault(raw) {
         `default, rather than reading it as a "no".`);
     return true;
 }
-function resolveOrDegrade(env, readStoreKey, readConfig) {
+function resolveOrDegrade(env, security) {
     try {
         // The spread READS tokenStoreKey, which is where the Keychain is actually reached — deliberately
         // inside this try, so a key source that cannot answer (another platform, a locked keychain)
         // degrades with its message like any other incomplete configuration instead of killing the server.
-        return { ok: true, ...resolveAuthConfig(env, readStoreKey, readConfig) };
+        return { ok: true, ...resolveAuthConfig(env, security) };
     }
     catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
@@ -85,7 +85,14 @@ function resolveOrDegrade(env, readStoreKey, readConfig) {
         const dataDir = dataDirOf(env);
         return {
             ok: false,
-            reason: `${reason} Open Settings \u2192 Extensions \u2192 Zendesk, complete the configuration, then reload the extension.`,
+            // Points at the setup page, which is what exists now: the Claude Code plugin has no settings
+            // dialog any more (#68 removed its user_config, the host bridge does not support one), and on a
+            // platform without a Keychain the environment is the only way in (#69). The MCPB extension still
+            // HAS the dialog, so it is named last rather than first.
+            reason: `${reason} Call the zendesk_login tool: on macOS it answers with a local setup page that ` +
+                'collects the subdomain, client id and client secret. Otherwise pass them in the environment ' +
+                '(ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET), or, in the Desktop ' +
+                'Extension, fill the configuration dialog under Settings \u2192 Extensions \u2192 Zendesk.',
             dataDir,
             tokensPath: join(dataDir, 'tokens.enc'),
         };
@@ -122,7 +129,8 @@ export function createServer(rawEnv = process.env, deps = {}) {
     // Drop unsubstituted ${user_config.*} placeholders once, up front, so every downstream default
     // (security level, markdown flag, report config) sees "absent" rather than a literal placeholder.
     const env = stripPlaceholders(rawEnv);
-    const resolved = resolveOrDegrade(env, deps.readStoreKey, deps.readConfig);
+    const security = deps.security ?? runSecurity;
+    const resolved = resolveOrDegrade(env, security);
     const { auth, cache, cacheOk } = deps.cache
         ? { auth: resolved, cache: deps.cache, cacheOk: true }
         : openCacheOrDegrade(resolved);
@@ -130,23 +138,18 @@ export function createServer(rawEnv = process.env, deps = {}) {
     const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
     const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
     const callbackPort = auth.ok ? auth.config.callbackPort : DEFAULT_CALLBACK_PORT;
-    // Can a first-run setup be offered? Only if what it produces can be STORED, and that is one
-    // question with one answer: a Keychain that yields the token-store key is one the three OAuth values
-    // can be written to as well — and on a platform that has no Keychain at all it is the same answer
-    // again, because the key source refuses there (#69). Asking it here, in a try, is what keeps the
-    // fresh-machine case
-    // honest — a locked keychain, or a user who denies access, leaves `setupKey` unset and the degraded
-    // wording (which then names the Keychain itself, because resolveAuthConfig reads it before anything
-    // honest: a locked keychain, or a user who denies access, leaves `setupKey` unset and the degraded
-    // wording (which then names the Keychain itself, because resolveAuthConfig reads it before anything
-    // else) stands instead of a page that could not save what it collected.
+    // Can a first-run setup be offered? Only where what it produces can be stored, and macOS ACLs are
+    // PER ITEM — so both halves are asked, the three values and the key. A locked keychain, a denied
+    // prompt, or no keychain at all (#69) leaves `setupKey` unset, and then the degraded wording stands
+    // instead of a page that could not save what it collected.
     let setupKey;
     if (!auth.ok && cacheOk) {
         try {
-            setupKey = (deps.readStoreKey ?? resolveTokenStoreKey)();
+            readKeychainConfig(security);
+            setupKey = resolveTokenStoreKey(security);
         }
         catch {
-            setupKey = undefined;
+            // Nowhere to store an answer. `auth.reason` already says why.
         }
     }
     // Only the local (stdio/extension) path can receive the localhost OAuth callback; an injected
@@ -163,27 +166,34 @@ export function createServer(rawEnv = process.env, deps = {}) {
                 configError: auth.reason,
                 setup: setupKey ? {} : undefined,
             };
+    // The first tool call without usable credentials starts the authorization itself and answers with the
+    // URL. Through runLogin, so it shares the ONE queue, the ONE flow and the ONE listener with
+    // zendesk_login — two concurrent tool calls cannot open two of either. Nothing opens a browser: the
+    // person clicks the URL on their own device (decision D3).
+    const startLogin = login && (() => runLogin(login));
+    // The configuration can arrive AFTER this server started: the setup page stores it mid-session. What
+    // the page hands back here is the configuration itself, so nothing is read a second time — and both
+    // halves that were frozen at startup are replaced, the token boundary AND the Zendesk host. Without
+    // the second one a healed token boundary would send every request to https://.zendesk.com.
+    let healed;
+    let healedSubdomain = '';
+    const configured = (config) => {
+        healedSubdomain = config.subdomain;
+        healed = new AuthManager(new TokenStore(tokensPath, setupKey), config, undefined, startLogin);
+    };
+    if (login?.setup)
+        login.setup.onConfigured = configured;
     const authManager = (cacheOk ? deps.authManager : undefined) ??
         (auth.ok
-            ? new AuthManager(new TokenStore(tokensPath, auth.tokenStoreKey), auth.config, undefined, 
-            // The first tool call without usable credentials starts the authorization itself and
-            // answers with the URL. Through runLogin, so it shares the ONE queue, the ONE flow and the
-            // ONE listener with zendesk_login — two concurrent tool calls cannot open two of either.
-            // Nothing opens a browser: the person clicks the URL on their own device (decision D3).
-            login && (() => runLogin(login)))
-            : // Stands in for AuthManager while the configuration is incomplete: every Zendesk request
-                // fails at the token boundary with the actionable message instead of reaching the network.
-                //
-                // It does NOT re-resolve after the first-run setup page has stored a configuration mid
-                // session, although it could: the subdomain is bound into ZendeskHttpClient at construction
-                // (src/client/http-client.ts:32), so healing the token boundary alone would send every request
-                // to https://.zendesk.com. Making the client take a late subdomain is a wider change than #68
-                // asked for, so the setup flow ends by saying that the plugin has to be reloaded — which is
-                // what the degraded message has always said, and what the host does on its own next start.
-                { getAccessToken: () => Promise.reject(new Error(auth.reason)) });
+            ? new AuthManager(new TokenStore(tokensPath, auth.tokenStoreKey), auth.config, undefined, startLogin)
+            : // Stands in for AuthManager while the configuration is incomplete: every Zendesk request fails
+                // at the token boundary with the actionable message instead of reaching the network — until the
+                // setup page supplies one, from which moment this delegates to the real thing.
+                { getAccessToken: () => (healed ? healed.getAccessToken() : Promise.reject(new Error(auth.reason))) });
     const rateLimiter = deps.rateLimiter ?? new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
     const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
-    const subdomain = auth.ok ? auth.config.subdomain : '';
+    // A function, not a string, for the degraded path only: the host is unknown until setup supplies it.
+    const subdomain = auth.ok ? auth.config.subdomain : () => healedSubdomain;
     const httpClient = new ZendeskHttpClient({ subdomain, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
     const server = new McpServer({ name: 'zendesk', version: '1.1.0' });
     const ctx = {

@@ -2,14 +2,19 @@ import { mapErrorResponse, parseRetryAfter } from './errors.js';
 const MAX_RATE_LIMIT_RETRIES = 3;
 export class ZendeskHttpClient {
     options;
-    baseUrl;
+    subdomain;
     fetchImpl;
     maxRateLimitRetries;
     constructor(options) {
         this.options = options;
-        this.baseUrl = `https://${options.subdomain}.zendesk.com/api/v2`;
+        const { subdomain } = options;
+        this.subdomain = typeof subdomain === 'function' ? subdomain : () => subdomain;
         this.fetchImpl = options.fetchImpl ?? fetch;
         this.maxRateLimitRetries = options.maxRateLimitRetries ?? MAX_RATE_LIMIT_RETRIES;
+    }
+    // Read per request, not cached: see the `subdomain` option.
+    get baseUrl() {
+        return `https://${this.subdomain()}.zendesk.com/api/v2`;
     }
     // Pick the bucket for this request. 'incremental' selects the 10/min limiter when configured,
     // otherwise falls back to the default so the client is usable without the second limiter.

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveAuthConfig, USER_CONFIG_FIELD_BY_ENV } from '../../src/auth/config.js';
-import { noStoredConfig, readStoreKey } from './store-key-stub.js';
+import { keychain } from './keychain.js';
 import { createServer } from '../../src/server.js';
 
 // The MCPB host substitutes ${user_config.x} only for values it actually has: an optional field the
@@ -50,7 +50,7 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
     'a required %s left as a placeholder fails loudly and names the config field',
     (name) => {
       const env = { ...fullEnv(), [name]: `\${user_config.${USER_CONFIG_FIELD_BY_ENV[name]}}` };
-      expect(() => resolveAuthConfig(env, readStoreKey, noStoredConfig)).toThrow(USER_CONFIG_FIELD_BY_ENV[name]);
+      expect(() => resolveAuthConfig(env, keychain())).toThrow(USER_CONFIG_FIELD_BY_ENV[name]);
     },
   );
 
@@ -60,8 +60,7 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
   it('a placeholder client secret reads as absent rather than as a secret', () => {
     const { config } = resolveAuthConfig(
       { ...fullEnv(), ZENDESK_OAUTH_CLIENT_SECRET: '${user_config.oauth_client_secret}' },
-      readStoreKey,
-      noStoredConfig,
+      keychain(),
     );
     expect(config.clientSecret).toBeUndefined();
   });

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createServer } from '../src/server.js';
-import { readStoreKey } from './auth/store-key-stub.js';
+import { keychain } from './auth/keychain.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -25,7 +25,7 @@ function fixtureEnv(): NodeJS.ProcessEnv {
 
 describe('createServer wiring', () => {
   it('wires the 400/10 rate buckets, standard security default, and reportConfig', () => {
-    const { rateLimiter, incrementalRateLimiter, ctx } = createServer(fixtureEnv(), { readStoreKey });
+    const { rateLimiter, incrementalRateLimiter, ctx } = createServer(fixtureEnv(), { security: keychain() });
     expect(rateLimiter.requestsPerMinute).toBe(400);
     expect(incrementalRateLimiter.requestsPerMinute).toBe(10);
     expect(ctx.securityLevel).toBe('standard');
@@ -36,7 +36,7 @@ describe('createServer wiring', () => {
   // zendesk_diagnostics (what this host did with the plugin), both local-path only.
   it('registers all 66 tools', () => {
     const spy = vi.spyOn(McpServer.prototype, 'registerTool');
-    createServer(fixtureEnv(), { readStoreKey });
+    createServer(fixtureEnv(), { security: keychain() });
     expect(spy).toHaveBeenCalledTimes(66);
   });
 });

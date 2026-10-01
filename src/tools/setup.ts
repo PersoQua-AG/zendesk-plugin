@@ -37,10 +37,12 @@ export function newSetupToken(): string {
   return randomBytes(32).toString('base64url');
 }
 
-// 127.0.0.1 rather than localhost: the browser must reach THIS listener, and `localhost` can resolve
-// to a family the listener may not have (one of the two binds is allowed to fail, oauth-flow.ts).
-export function setupUrl(port: number, token: string): string {
-  return `http://127.0.0.1:${port}/setup?t=${token}`;
+// `host` is the address the listener REPORTED binding, never an assumption: `localhost` can resolve to a
+// family this listener does not have, and a hardcoded 127.0.0.1 would hand the one-time token — and one
+// form later the client secret — to whatever foreign process holds that address while the other family
+// is ours. Measured: a foreign server on 127.0.0.1 with ::1 free received both.
+export function setupUrl(host: string, port: number, token: string): string {
+  return `http://${host}:${port}/setup?t=${token}`;
 }
 
 // Length-independent comparison, so a wrong token cannot be found a character at a time. A local port
@@ -52,32 +54,31 @@ function tokenMatches(given: string | null, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-// Only this page's own origin may POST here. A form on any other site can POST to a loopback port
-// without reading the answer, and the body of this one carries a client secret. A request with NO
-// Origin is refused too: every current browser sends one on a form POST, so its absence is not a
-// browser form.
+// A request that SENDS an Origin must send this page's own — that is what stops a form on another site
+// from posting to a loopback port it cannot read the answer from. A request that sends NONE is let
+// through: `Origin` is a control a browser applies to itself, so its absence means the caller is not a
+// browser, and against a non-browser caller the one-time token is the control, not a header that caller
+// writes itself. Refusing it bought nothing and would have broken any client that omits the header.
 function originAllowed(req: IncomingMessage, port: number): boolean {
   const origin = req.headers.origin;
-  if (typeof origin !== 'string') return false;
+  if (typeof origin !== 'string') return true;
   return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`].includes(origin);
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((done, failed) => {
-    let body = '';
-    let size = 0;
-    req.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        req.destroy();
-        failed(new Error('setup form too large'));
-        return;
-      }
-      body += chunk.toString('utf8');
-    });
-    req.on('end', () => done(body));
-    req.on('error', (err) => failed(err));
-  });
+async function readBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    // Dropped rather than answered: this is not a person pasting too much, it is a local caller making
+    // the server read until it runs out of memory, and the cheapest true answer is to stop reading.
+    if (size > MAX_BODY_BYTES) {
+      req.destroy();
+      throw new Error('setup form too large');
+    }
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 // A fixed sentence per field, never the submitted value and never the exception's message: the rule
@@ -90,15 +91,18 @@ const FIELD_PROBLEM: Record<keyof SetupValues, string> = {
 };
 
 // Generous, because Zendesk's own lengths are not documented and a cap that is too tight rejects a
-// legitimate credential. Control characters are refused outright: they belong in no OAuth value, and
-// they are what would let one line of a Keychain item look like several.
+// legitimate credential. PRINTABLE ASCII only, which is more than tidiness: measured on macOS,
+// `security find-generic-password -w` prints a password that is not plain ASCII as HEX, so a value with
+// one accented character would be stored, read back mangled and authorize nothing, with no symptom
+// pointing at the character. Control characters would additionally let one Keychain item look like
+// several lines.
 const MAX_FIELD_CHARS = 512;
-const CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+const PRINTABLE_ASCII = /^[\x20-\x7E]+$/;
 
 function plainField(raw: string | null): string | null {
   if (raw === null) return null;
   const value = raw.trim();
-  if (!value || value.length > MAX_FIELD_CHARS || CONTROL_CHARS.test(value)) return null;
+  if (!value || value.length > MAX_FIELD_CHARS || !PRINTABLE_ASCII.test(value)) return null;
   return value;
 }
 
@@ -127,15 +131,13 @@ export function parseSetupForm(body: string): { values: SetupValues } | { proble
   };
 }
 
-const escapeHtml = (value: string): string =>
-  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-// Interpolates only values this process generated (the port and the one-time token) plus one of the
-// fixed sentences above — never anything the form submitted.
+// Interpolates only values this process generated (the port and the one-time token, which is 32 random
+// bytes base64url) plus one of the fixed sentences above — never anything the form submitted, which is
+// why nothing here is escaped: there is no untrusted value to escape.
 export function setupPage(port: number, token: string, problem?: keyof SetupValues): string {
   const redirectUri = `http://localhost:${port}/callback`;
   const error = problem
-    ? `<p class="error">${escapeHtml(FIELD_PROBLEM[problem])} Bitte korrigieren und erneut absenden.</p>`
+    ? `<p class="error">${FIELD_PROBLEM[problem]} Bitte korrigieren und erneut absenden.</p>`
     : '';
   return `<!doctype html>
 <html lang="de">
@@ -145,17 +147,9 @@ export function setupPage(port: number, token: string, problem?: keyof SetupValu
 <title>Zendesk-Plugin einrichten</title>
 <style>
 :root { color-scheme: light dark; }
-body { font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0 auto; max-width: 42rem; padding: 2rem 1rem 4rem; }
-h1 { font-size: 1.5rem; margin-bottom: .25rem; }
-h2 { font-size: 1.1rem; margin-top: 2rem; }
-ol, ul { padding-left: 1.25rem; }
-li { margin: .4rem 0; }
-code { background: rgba(127,127,127,.18); border-radius: .25rem; padding: .1rem .3rem; }
-label { display: block; font-weight: 600; margin-top: 1rem; }
-input { box-sizing: border-box; font: inherit; margin-top: .3rem; padding: .5rem; width: 100%; }
-button { font: inherit; font-weight: 600; margin-top: 1.5rem; padding: .6rem 1.2rem; }
-.error { background: rgba(200,40,40,.14); border-left: .25rem solid #c82828; padding: .75rem; }
-.note { opacity: .8; font-size: .9rem; }
+body { margin: 0 auto; max-width: 42rem; padding: 1rem; }
+label { display: block; margin-top: 1rem; }
+.error { border-left: .25rem solid #c82828; padding-left: .75rem; }
 </style>
 </head>
 <body>
@@ -171,7 +165,7 @@ ${error}
 </ul>
 <p class="note">Nach dem Speichern zeigt Zendesk das Client-Secret <strong>einmal</strong> an. Kopieren Sie es jetzt.</p>
 <h2>2. Werte hier eintragen</h2>
-<form method="post" action="/setup?t=${escapeHtml(token)}" autocomplete="off">
+<form method="post" action="/setup?t=${token}" autocomplete="off">
 <label>Subdomain
 <input name="subdomain" placeholder="acme" required autofocus spellcheck="false" autocapitalize="off">
 </label>
@@ -214,33 +208,31 @@ export function createSetupRoute(deps: SetupRouteDeps): SetupRoute {
   // instructions plus an empty form.
   let spent = false;
 
-  return {
-    handle: async (req, url): Promise<SetupResponse> => {
-      if (spent || !tokenMatches(url.searchParams.get('t'), deps.token)) return notFound();
-      if (req.method === 'GET') return answer(200, setupPage(deps.port, deps.token));
-      // Nothing but GET and POST: the values are written on POST alone, so every other verb is a
-      // caller that has misunderstood the page.
-      if (req.method !== 'POST') {
-        return answer(405, 'Use POST to submit the setup form.', {
-          'Content-Type': 'text/plain; charset=utf-8',
-          Allow: 'GET, POST',
-        });
-      }
-      if (!originAllowed(req, deps.port)) {
-        return answer(403, 'Diese Anfrage kam nicht von der Einrichtungsseite.');
-      }
-
-      const parsed = parseSetupForm(await readBody(req));
-      if ('problem' in parsed) return answer(400, setupPage(deps.port, deps.token, parsed.problem));
-
-      // Stored first, redirected second: a redirect into an authorization whose client was not saved
-      // would authorize a configuration the next start cannot reproduce.
-      const authorizationUrl = deps.submit(parsed.values);
-      spent = true;
-      return answer(303, 'Weiter zur Zendesk-Anmeldung …', {
+  return async (req, url): Promise<SetupResponse> => {
+    if (spent || !tokenMatches(url.searchParams.get('t'), deps.token)) return notFound();
+    if (req.method === 'GET') return answer(200, setupPage(deps.port, deps.token));
+    // Nothing but GET and POST: the values are written on POST alone, so every other verb is a
+    // caller that has misunderstood the page.
+    if (req.method !== 'POST') {
+      return answer(405, 'Use POST to submit the setup form.', {
         'Content-Type': 'text/plain; charset=utf-8',
-        Location: authorizationUrl,
+        Allow: 'GET, POST',
       });
-    },
+    }
+    if (!originAllowed(req, deps.port)) {
+      return answer(403, 'Diese Anfrage kam nicht von der Einrichtungsseite.');
+    }
+
+    const parsed = parseSetupForm(await readBody(req));
+    if ('problem' in parsed) return answer(400, setupPage(deps.port, deps.token, parsed.problem));
+
+    // Stored first, redirected second: a redirect into an authorization whose client was not saved
+    // would authorize a configuration the next start cannot reproduce.
+    const authorizationUrl = deps.submit(parsed.values);
+    spent = true;
+    return answer(303, 'Weiter zur Zendesk-Anmeldung …', {
+      'Content-Type': 'text/plain; charset=utf-8',
+      Location: authorizationUrl,
+    });
   };
 }

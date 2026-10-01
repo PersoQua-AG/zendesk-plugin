@@ -5,19 +5,20 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../src/server.js';
-import { readStoreKey } from './auth/store-key-stub.js';
+import { CONFIG_ACCOUNTS } from '../src/auth/store-key.js';
+import { deniedKeychain, fakeKeychain, keychain, TEST_STORE_KEY, TOKEN_STORE_ACCOUNT } from './auth/keychain.js';
 import { freePort } from './auth/login-harness.js';
 import { abortLoginFlow } from '../src/tools/login.js';
 
-// Nothing stored, and nothing read from the developer's own Keychain either: an incomplete env is
-// exactly the case where resolveAuthConfig consults it, so every server built here says what it has.
-const noStoredConfig = () => ({});
-
-// The key source as a fresh machine has it (a usable Keychain) and as a locked one — or a platform
-// without one (#69) — has it. It is what decides whether a first-run setup can be offered at all.
-const keychainDenied = (): string => {
-  throw new Error('The macOS Keychain could not be read (security exited 51).');
-};
+// macOS ACLs are PER ITEM, so "can anything be stored" has two halves and a keychain can answer them
+// differently. This is the half QA found unguarded: the three OAuth values are denied while the
+// token-store key reads fine. A setup page offered here would collect three values, fail to write them,
+// and `-U` would have replaced whatever was already there on the way (#68 B3).
+const configDenied = (): ReturnType<typeof keychain> =>
+  fakeKeychain({
+    items: { [TOKEN_STORE_ACCOUNT]: TEST_STORE_KEY },
+    failRead: Object.fromEntries(Object.values(CONFIG_ACCOUNTS).map((account) => [account, 51])),
+  }).run;
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -42,8 +43,8 @@ function halfConfiguredEnv(): NodeJS.ProcessEnv {
   };
 }
 
-async function connect(env: NodeJS.ProcessEnv, storeKey: () => string = keychainDenied) {
-  const { server } = createServer(env, { readStoreKey: storeKey, readConfig: noStoredConfig });
+async function connect(env: NodeJS.ProcessEnv, security = deniedKeychain()) {
+  const { server } = createServer(env, { security });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'unconfigured', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);
@@ -62,22 +63,36 @@ describe('createServer with incomplete extension configuration', () => {
     await client.close();
   });
 
-  it('answers a Zendesk tool call by naming the empty user_config field, without a stack trace', async () => {
-    const client = await connect(halfConfiguredEnv());
-    const result = await client.callTool({ name: 'zendesk_get_me', arguments: {} });
-    const text = textOf(result);
-    expect(text).toContain('zendesk_subdomain');
-    expect(text).toMatch(/Settings/i);
+  // GATE-GAP 13: the remedy names the tool that can fix it. "Settings → Extensions → Zendesk" used to
+  // come FIRST, and on the Claude Code plugin that dialog does not exist any more — #68 removed its
+  // user_config, because the host bridge dropped the whole server over it.
+  it('answers a Zendesk tool call by naming what is missing and how to supply it, without a stack trace', async () => {
+    // A working Keychain, so what is missing really is the subdomain and not access to the Keychain.
+    const client = await connect(halfConfiguredEnv(), keychain());
+    const text = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
+    expect(text).toContain('ZENDESK_SUBDOMAIN');
+    expect(text).toMatch(/zendesk_login/);
+    expect(text).toMatch(/setup page/i);
     expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
     await client.close();
   });
 
   // With nowhere to store what a setup page would collect — a locked Keychain, a denied prompt, or a
-  // platform that has none (#69) — the field-naming message is still the whole answer.
-  it('answers zendesk_login with the same actionable message when nothing can be stored', async () => {
+  // platform that has none (#69) — the message that names what is missing is still the whole answer.
+  it('answers zendesk_login with that same message when nothing can be stored', async () => {
     const client = await connect(halfConfiguredEnv());
     const text = textOf(await client.callTool({ name: 'zendesk_login', arguments: {} }));
-    expect(text).toContain('zendesk_subdomain');
+    expect(text).toContain('ZENDESK_SUBDOMAIN');
+    expect(text).not.toContain('/setup');
+    await client.close();
+  });
+
+  // The per-item half of the same question (#68 B3). The key reads, so the OLD gate said "offer setup";
+  // the three values do not, so nothing it collected could be stored.
+  it('offers no setup page when the three values are denied but the key is readable', async () => {
+    const client = await connect(halfConfiguredEnv(), configDenied());
+    const text = textOf(await client.callTool({ name: 'zendesk_login', arguments: {} }));
+    expect(text).toMatch(/could not be read/);
     expect(text).not.toContain('/setup');
     await client.close();
   });
@@ -85,7 +100,7 @@ describe('createServer with incomplete extension configuration', () => {
   // And where it CAN be stored, the answer is the setup page and nothing else. Not the subdomain, not
   // the data directory, not a stack: the page is local, and what the user types there stays local.
   it('answers zendesk_login with the first-run setup URL, and nothing else, when the Keychain works', async () => {
-    const client = await connect(halfConfiguredEnv(), readStoreKey);
+    const client = await connect(halfConfiguredEnv(), keychain());
     const text = textOf(await client.callTool({ name: 'zendesk_login', arguments: {} }));
     const url = new URL(text.split(/\s+/).find((word) => word.startsWith('http://')) as string);
     expect(url.hostname).toBe('127.0.0.1');

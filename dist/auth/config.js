@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { CONFIG_ACCOUNTS, readKeychainConfig, resolveTokenStoreKey, } from './store-key.js';
+import { CONFIG_ACCOUNTS, readKeychainConfig, resolveTokenStoreKey, runSecurity, } from './store-key.js';
 export const DEFAULT_CALLBACK_PORT = 8976;
 const DATA_DIR_NAME = 'zendesk-plugin';
 // Exported because the first-run setup page states which scopes the plugin asks for, and an incomplete
@@ -148,19 +148,35 @@ export function validateSubdomain(value) {
 }
 // Env WINS, the Keychain fills the gaps: an install that passes everything through the environment
 // (Claude Code as it works today) behaves exactly as it did, and — because the Keychain is read only
-// when something is actually missing — never touches it at all, so it cannot be broken by a locked
-// one either. A Keychain that cannot be read throws rather than reading as empty: see readKeychainConfig.
-function withKeychainConfig(env, readConfig) {
+// when something is actually missing — never touches it at all, so it cannot be broken by a locked one
+// either. A Keychain that cannot be read throws rather than reading as empty: see readKeychainConfig.
+function withKeychainConfig(env, security) {
     const missing = Object.keys(CONFIG_ACCOUNTS).filter((name) => !env[name]);
     if (missing.length === 0)
         return env;
-    const stored = readConfig();
+    const stored = readKeychainConfig(security);
     const filled = { ...env };
     for (const name of missing) {
-        if (stored[name])
-            filled[name] = stored[name];
+        const value = stored[name];
+        // A STORED value that the rule below would refuse is dropped rather than carried forward, for two
+        // reasons. It must not reach the error message: that message is tool output, and the owner decided
+        // the customer's instance name is not to lie around in the open. And dropping it makes the
+        // configuration incomplete again, which is what gets the setup page offered instead of a start that
+        // fails on a value nobody can see or correct.
+        if (!value || (name === 'ZENDESK_SUBDOMAIN' && !isUsableSubdomain(value)))
+            continue;
+        filled[name] = value;
     }
     return filled;
+}
+function isUsableSubdomain(value) {
+    try {
+        validateSubdomain(value);
+        return true;
+    }
+    catch {
+        return false;
+    }
 }
 // Only an env var that HAS a user_config field may be required: the error names that field, and a
 // name without one is a compile error here rather than a fallback that names the raw env var.
@@ -176,10 +192,11 @@ function required(env, name) {
 // identical dataDir → an identical tokens.enc path, and one and the same Keychain key opens it. The
 // key is no longer derived from the client secret, so rotating the secret leaves the store readable.
 //
-// readStoreKey is a parameter for the same reason platform/env are parameters on defaultDataDir: the
-// resolution is testable without touching a real Keychain.
-export function resolveAuthConfig(rawEnv, readStoreKey = resolveTokenStoreKey, readConfig = readKeychainConfig) {
-    const env = withKeychainConfig(stripPlaceholders(rawEnv), readConfig);
+// `security` is a parameter for the same reason env/platform are parameters on defaultDataDir: ONE seam
+// for the whole Keychain path — the key and the three values — so the real logic in ./store-key.ts runs
+// under test rather than being stubbed out, and no suite reaches a real login keychain.
+export function resolveAuthConfig(rawEnv, security = runSecurity) {
+    const env = withKeychainConfig(stripPlaceholders(rawEnv), security);
     // Falsy-coalesce (not ??): an empty-string env var is "absent", not a value.
     // Otherwise CLAUDE_PLUGIN_DATA='' → tokens.enc at the fs root, and
     // ZENDESK_OAUTH_CALLBACK_PORT='' → Number('')===0 → bind to port 0.
@@ -203,7 +220,7 @@ export function resolveAuthConfig(rawEnv, readStoreKey = resolveTokenStoreKey, r
         dataDir,
         // Memoized: one `security` invocation per process, however many readers there are.
         get tokenStoreKey() {
-            return (storeKey ??= readStoreKey());
+            return (storeKey ??= resolveTokenStoreKey(security));
         },
         // Single source of the token file location so server + authorize bin never drift. join(), not
         // a template literal: the manifest declares win32, where '/' would mix separators.

@@ -4,6 +4,7 @@ import { startCallbackListener, waitForAuthorizationCode } from '../../src/auth/
 import { resolveAuthConfig } from '../../src/auth/config.js';
 import { runLogin } from '../../src/tools/login.js';
 import { deps, freePort, occupyPort, settlesWithin, setupLoginHarness } from './login-harness.js';
+import { keychain } from './keychain.js';
 
 setupLoginHarness('login-bind-liveness-');
 
@@ -80,7 +81,7 @@ describe('startCallbackListener settles for every port listen() refuses', () => 
     };
     // Producer 1 — resolveAuthConfig (src/auth/config.ts:161), used by the stdio server, the CLI
     // (src/auth/authorize.ts:49) and the remote bridge (src/remote/remote-server.ts:72).
-    expect(() => resolveAuthConfig({ ...base, ZENDESK_OAUTH_CALLBACK_PORT: '0' })).toThrow(/oauth_callback_port/);
+    expect(() => resolveAuthConfig({ ...base, ZENDESK_OAUTH_CALLBACK_PORT: '0' }, keychain())).toThrow(/oauth_callback_port/);
     // Producer 2 — NO_OAUTH_CONFIG (src/server.ts:101) DOES carry callbackPort 0, but it always
     // travels with configError, which runLogin answers before it reads the port at all
     // (src/tools/login.ts:213). Asserted rather than trusted to the comment beside it.

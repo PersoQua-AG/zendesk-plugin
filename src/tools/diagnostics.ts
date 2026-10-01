@@ -38,12 +38,10 @@ export interface DiagnosticsInput {
   // Exactly what the client announced in `initialize`, rendered verbatim: this is what reveals
   // whether elicitation exists on this host and in which modes, and a summary would lose that.
   clientCapabilities: unknown;
-  probe?: (port: number, address: string) => Promise<string>;
 }
 
 export async function diagnosticsReport(input: DiagnosticsInput): Promise<string> {
-  const probe = input.probe ?? probeBind;
-  const binds = await Promise.all(LOOPBACK_ADDRESSES.map((address) => probe(input.callbackPort, address)));
+  const binds = await Promise.all(LOOPBACK_ADDRESSES.map((address) => probeBind(input.callbackPort, address)));
   return [
     `hostname: ${hostname()}`,
     `platform: ${process.platform}`,

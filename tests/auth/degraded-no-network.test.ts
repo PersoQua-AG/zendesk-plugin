@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from '../../src/server.js';
-import { noStoredConfig } from './store-key-stub.js';
+import { keychain } from './keychain.js';
 
 // resolveOrDegrade (src/server.ts:50) keeps the server alive with an EMPTY subdomain, so the http
 // client's base URL is literally "https://.zendesk.com/api/v2". Nothing may ever reach that host.
@@ -30,14 +30,14 @@ function spyFetch() {
 describe('an incompletely configured server never reaches the network', () => {
   it('rejects a JSON request at the token boundary, naming the empty field, without fetching', async () => {
     const fetchImpl = spyFetch();
-    const { ctx } = createServer(degradedEnv(), { fetchImpl, readConfig: noStoredConfig });
+    const { ctx } = createServer(degradedEnv(), { fetchImpl, security: keychain() });
     await expect(ctx.httpClient.request('/users/me.json')).rejects.toThrow(/zendesk_subdomain/);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('rejects the binary upload path the same way, without fetching', async () => {
     const fetchImpl = spyFetch();
-    const { ctx } = createServer(degradedEnv(), { fetchImpl, readConfig: noStoredConfig });
+    const { ctx } = createServer(degradedEnv(), { fetchImpl, security: keychain() });
     await expect(
       ctx.httpClient.requestUpload('/uploads.json', new Uint8Array([1, 2, 3]), 'text/plain'),
     ).rejects.toThrow(/zendesk_subdomain/);
@@ -45,7 +45,7 @@ describe('an incompletely configured server never reaches the network', () => {
   });
 
   it('never puts the degraded empty-subdomain host into the failure message', async () => {
-    const { ctx } = createServer(degradedEnv(), { fetchImpl: spyFetch(), readConfig: noStoredConfig });
+    const { ctx } = createServer(degradedEnv(), { fetchImpl: spyFetch(), security: keychain() });
     const err = (await ctx.httpClient.request('/users/me.json').catch((e: unknown) => e)) as Error;
     expect(err.message).not.toContain('.zendesk.com');
   });

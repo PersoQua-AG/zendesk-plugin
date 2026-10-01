@@ -50,6 +50,10 @@ export interface LoginDeps {
 
 export interface SetupDeps {
   writeConfig?: (values: SetupValues) => void;
+  // Called the moment a configuration has been stored, with the configuration itself. The server hands
+  // this in so the session it already started can pick the values up — the token boundary AND the
+  // Zendesk host were both frozen before any of them existed — instead of asking the user to reload.
+  onConfigured?: (config: OAuthConfig) => void;
   // How long the page and the authorization behind it stay reachable. Longer than a login's window:
   // the human step here includes creating an OAuth client in Zendesk.
   timeoutMs?: number;
@@ -57,10 +61,26 @@ export interface SetupDeps {
 
 export interface LoginOptions {
   force?: boolean;
+  // Re-enter subdomain, client id and secret even though a configuration resolves. The one way back
+  // from a configuration that is COMPLETE and WRONG — a subdomain typed `acmee`, a client deleted in
+  // Zendesk, an account switch — which otherwise never degrades and so would never offer the page
+  // again. `force` cannot carry this: on a configured install it means "authorize again", and the two
+  // have to stay separable.
+  setup?: boolean;
 }
 
 const RETRY_RESOLVED = 'Run zendesk_login again once that is resolved.';
-const RETRY_FRESH = 'Run zendesk_login again to start a new authorization.';
+const RETRY_FRESH =
+  'Run zendesk_login again to start a new authorization. If the stored subdomain, client id or client ' +
+  'secret is the problem, run zendesk_login with setup=true to enter them again.';
+
+// What setup=true answers where no configuration can be stored: another platform (#69), a locked or
+// denied Keychain, or a data directory that cannot be used. The server leaves `setup` unset in all three
+// and its own reason, when it has one, is the better message.
+const SETUP_UNAVAILABLE =
+  'There is nowhere to store a Zendesk configuration on this machine: the macOS Keychain is the only ' +
+  'place the plugin writes one, and it could not be used. Pass ZENDESK_SUBDOMAIN, ' +
+  'ZENDESK_OAUTH_CLIENT_ID and ZENDESK_OAUTH_CLIENT_SECRET in the environment instead.';
 
 const UNREADABLE_STORE =
   'Stored credentials could not be read (encryption secret changed or file corrupt) — starting a new authorization.';
@@ -203,7 +223,6 @@ async function beginSetup(
   // function nothing ever calls. The submit closure below reaches it lazily, which it may: the page's
   // URL — and with it the only token that opens the route — is published after the bind.
   let flow!: ActiveFlow;
-  const page = setupUrl(port, token);
   const route = createSetupRoute({
     port,
     token,
@@ -217,6 +236,9 @@ async function beginSetup(
       };
       flow.config = config;
       flow.url = buildAuthorizationUrl(config, generateCodeChallenge(verifier), state);
+      // Stored, so the session that is already running may have it — before the redirect, because the
+      // very next tool call can arrive while the person is still at Zendesk.
+      setup.onConfigured?.(config);
       return flow.url;
     },
   });
@@ -229,6 +251,13 @@ async function beginSetup(
     // answer here: it names what is missing and where to put it.
     return fallback;
   }
+  // The URL names an address the listener REPORTED binding. 127.0.0.1 when it is there, because that is
+  // the one a browser reaches without a DNS answer; [::1] when only that family came up. Never a family
+  // that failed to bind — that URL would point at whatever else holds the port (#68 B2).
+  // 127.0.0.1 when it is there, because that is the one a browser reaches without asking a resolver;
+  // otherwise the family that did come up — in brackets, which is how an IPv6 literal is spelled in a URL.
+  const bound = listener.addresses;
+  const page = setupUrl(bound.includes('127.0.0.1') ? '127.0.0.1' : `[${bound[0]}]`, port, token);
   flow = { verifier, url: '', outcome: { kind: 'pending' }, close: listener.close, setupUrl: page };
   void listener.promise.then(
     (result) => {
@@ -291,7 +320,7 @@ async function collectFlow(
   // configuration at startup: the Zendesk client it holds is still the empty one. Saying so is the
   // honest end of that path — see the note in src/server.ts on why it does not re-resolve itself.
   return flow.config
-    ? 'Authorization complete — the configuration and the Zendesk credentials are stored encrypted. Reload the plugin (or restart the app) so this session picks up the new configuration, then verify with zendesk_get_me.'
+    ? 'Authorization complete — the configuration is in the Keychain, the Zendesk credentials are stored encrypted, and this session is using both already. Verify with zendesk_get_me.'
     : 'Authorization complete — the Zendesk credentials are stored encrypted and are refreshed automatically. Verify with zendesk_get_me.';
 }
 
@@ -323,13 +352,14 @@ async function runQueuedLogin(deps: LoginDeps, options: LoginOptions): Promise<s
   // lost the browser tab is not stuck until the listener times out. It is also how setup is reached a
   // SECOND time — a subdomain typed wrong, a client replaced, an account switched — because the
   // branch below runs again from scratch, on the same single-flight lock as every other login.
-  if (options.force) abortLoginFlow();
+  if (options.force || options.setup) abortLoginFlow();
   if (activeFlow) return collectFlow(activeFlow, deps, exchange);
 
-  // No usable configuration: the first-run page is the answer, not an error. Only where one can
-  // actually be stored, though — otherwise the degraded wording stands.
-  if (deps.configError) {
-    return deps.setup ? beginSetup(deps, deps.setup, listen, deps.configError) : deps.configError;
+  // No usable configuration — or one the user says is the wrong one. The first-run page is the answer,
+  // not an error, but only where one can actually be stored: otherwise the degraded wording stands.
+  if (deps.configError || options.setup) {
+    if (!deps.setup) return deps.configError ?? SETUP_UNAVAILABLE;
+    return beginSetup(deps, deps.setup, listen, deps.configError ?? SETUP_UNAVAILABLE);
   }
 
   const existing = readExistingTokens(deps);

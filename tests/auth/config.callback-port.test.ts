@@ -8,6 +8,7 @@ import {
   resolveAuthConfig,
   stripPlaceholders,
 } from '../../src/auth/config.js';
+import { keychain } from './keychain.js';
 
 const fullEnv = (): NodeJS.ProcessEnv => ({
   ZENDESK_SUBDOMAIN: 'acme',
@@ -30,7 +31,7 @@ describe('callback port validation', () => {
     ['not a whole number', '8976.5'],
     ['not a number at all', 'eight-thousand'],
   ])('rejects a port that is %s', (_label, value) => {
-    expect(() => resolveAuthConfig(withPort(value))).toThrow(
+    expect(() => resolveAuthConfig(withPort(value), keychain())).toThrow(
       `Invalid environment variable: ZENDESK_OAUTH_CALLBACK_PORT="${value}" (extension configuration field ` +
         '"oauth_callback_port" must be a whole number between 1024 and 65535).',
     );
@@ -41,17 +42,17 @@ describe('callback port validation', () => {
     ['the highest existing port', '65535', 65535],
     ['an ordinary port', '9000', 9000],
   ])('accepts %s', (_label, value, expected) => {
-    expect(resolveAuthConfig(withPort(value)).config.callbackPort).toBe(expected);
+    expect(resolveAuthConfig(withPort(value), keychain()).config.callbackPort).toBe(expected);
   });
 
   // Unchanged, and deliberately so: an optional user_config field the user left blank arrives as the
   // literal ${...} placeholder, which stripPlaceholders makes ABSENT. Absent is not invalid — it is
   // the shipped default. Rejecting it would make the untouched extension refuse to start.
   it('still treats a blank and a placeholder callback port as absent, not as invalid', () => {
-    expect(resolveAuthConfig(withPort('')).config.callbackPort).toBe(8976);
+    expect(resolveAuthConfig(withPort(''), keychain()).config.callbackPort).toBe(8976);
     const raw = withPort('${user_config.oauth_callback_port}');
     expect(stripPlaceholders(raw).ZENDESK_OAUTH_CALLBACK_PORT).toBeUndefined();
-    expect(resolveAuthConfig(raw).config.callbackPort).toBe(8976);
+    expect(resolveAuthConfig(raw, keychain()).config.callbackPort).toBe(8976);
   });
 
   // The MCPB manifest declares the same range to its host, which is the layer that can refuse the
