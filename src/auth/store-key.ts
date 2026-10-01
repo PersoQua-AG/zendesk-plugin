@@ -41,15 +41,19 @@ export interface SecurityOutcome {
 export type RunSecurity = (args: string[]) => SecurityOutcome;
 
 // stdio: stderr is discarded rather than inherited — `security` writes its own diagnostics there and
-// stderr on the stdio path belongs to util/warn-config.ts alone.
-const runSecurity: RunSecurity = (args) => {
+// stderr on the stdio path belongs to util/warn-config.ts alone. A missing binary (every non-macOS
+// platform) has no exit status at all, which is -1 here: not 44, so it is never read as "no key yet".
+//
+// `bin` is a parameter so the two outcomes of this function can be MEASURED rather than excluded from
+// coverage: a test runs it against /bin/echo and against a path that does not exist, on any platform.
+export function runSecurity(args: string[], bin: string = SECURITY_BIN): SecurityOutcome {
   try {
-    return { status: 0, output: execFileSync(SECURITY_BIN, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) };
+    return { status: 0, output: execFileSync(bin, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) };
   } catch (err) {
     const status = (err as { status?: number }).status;
     return { status: typeof status === 'number' ? status : -1, output: '' };
   }
-};
+}
 
 export const UNSUPPORTED_PLATFORM =
   'The Zendesk token store needs a key from the macOS Keychain, and this is not macOS. A Windows or ' +
@@ -60,7 +64,7 @@ export const UNSUPPORTED_PLATFORM =
 // testable without a real Keychain and without mutating the process.
 export function resolveTokenStoreKey(
   platform: NodeJS.Platform = process.platform,
-  run: RunSecurity = runSecurity,
+  run: RunSecurity = (args) => runSecurity(args),
 ): string {
   if (platform !== 'darwin') throw new Error(UNSUPPORTED_PLATFORM);
 

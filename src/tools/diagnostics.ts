@@ -25,7 +25,9 @@ export function substitutionState(raw: string | undefined): SubstitutionState {
 function probeBind(port: number, address: string): Promise<string> {
   return new Promise<string>((done) => {
     const server = createServer();
-    server.on('error', (err) => done(`${address}:${port} unavailable (${(err as NodeJS.ErrnoException).code ?? err.message})`));
+    // The code, not the message: a listen error always carries one, and the message repeats the
+    // address — which is already in the line.
+    server.on('error', (err) => done(`${address}:${port} unavailable (${(err as NodeJS.ErrnoException).code})`));
     server.listen(port, address, () => server.close(() => done(`${address}:${port} binds`)));
   });
 }

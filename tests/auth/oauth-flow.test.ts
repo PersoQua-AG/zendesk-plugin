@@ -146,3 +146,42 @@ describe('refreshAccessToken', () => {
     );
   });
 });
+
+// #68: a public OAuth client has no secret, and PKCE is what authenticates the exchange ("with PKCE
+// you can optionally omit the client_secret property"; "Public OAuth clients … must use PKCE").
+// Omitted, not blank: Zendesk refuses an empty one, and a wrong one is a 401 nobody can explain.
+describe('a client without a secret', () => {
+  const bodies: Record<string, unknown>[] = [];
+  const capturing = (async (_url: string, init: RequestInit) => {
+    bodies.push(JSON.parse(init.body as string));
+    return new Response(JSON.stringify({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as unknown as typeof fetch;
+
+  const publicClient = { subdomain: 'acme', clientId: 'client-123', callbackPort: 18976, scopes: ['read'] };
+
+  it('leaves client_secret out of the exchange body, and keeps code_verifier in it', async () => {
+    bodies.length = 0;
+    await exchangeCodeForTokens(publicClient, 'code-1', 'verifier-1', 'http://localhost:18976/callback', capturing);
+    expect(bodies[0]).not.toHaveProperty('client_secret');
+    expect(bodies[0]).toMatchObject({ code_verifier: 'verifier-1', client_id: 'client-123' });
+  });
+
+  it('leaves client_secret out of the refresh body too', async () => {
+    bodies.length = 0;
+    await refreshAccessToken(publicClient, 'rt-1', capturing);
+    expect(bodies[0]).not.toHaveProperty('client_secret');
+    expect(bodies[0]).toMatchObject({ grant_type: 'refresh_token', refresh_token: 'rt-1' });
+  });
+
+  it('still sends it when an install has one — every existing install and the CLI', async () => {
+    bodies.length = 0;
+    const confidential = { ...publicClient, clientSecret: 'secret-abc' };
+    await exchangeCodeForTokens(confidential, 'code-1', 'verifier-1', 'http://localhost:18976/callback', capturing);
+    await refreshAccessToken(confidential, 'rt-1', capturing);
+    expect(bodies[0]).toMatchObject({ client_secret: 'secret-abc' });
+    expect(bodies[1]).toMatchObject({ client_secret: 'secret-abc' });
+  });
+});

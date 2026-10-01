@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { defaultDataDir, resolveAuthConfig } from '../../src/auth/config.js';
+import { dataDirOf, defaultDataDir, resolveAuthConfig } from '../../src/auth/config.js';
 
 const fullEnv = (): NodeJS.ProcessEnv => ({
   ZENDESK_SUBDOMAIN: 'acme',
@@ -47,5 +47,16 @@ describe('resolveAuthConfig data dir', () => {
     expect(resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '' }).dataDir).toBe(
       defaultDataDir(fullEnv()),
     );
+  });
+});
+
+// The degraded startup path cannot reject a bad CLAUDE_PLUGIN_DATA — it is already degrading — so it
+// resolves one instead, and a relative value must not reach the cache or the token store either.
+describe('dataDirOf, the fallback the degraded startup uses', () => {
+  it('honours an absolute value and ignores anything else', () => {
+    expect(dataDirOf({ CLAUDE_PLUGIN_DATA: '/var/data' })).toBe('/var/data');
+    expect(dataDirOf({ CLAUDE_PLUGIN_DATA: 'relative/data' })).toBe(defaultDataDir({}));
+    expect(dataDirOf({ CLAUDE_PLUGIN_DATA: '' })).toBe(defaultDataDir({}));
+    expect(dataDirOf({})).toBe(defaultDataDir({}));
   });
 });

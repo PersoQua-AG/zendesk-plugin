@@ -6,7 +6,8 @@ Help Center/Guide, and a data-analytics layer over ticket metrics and
 incremental exports. Includes a Microsoft 365 bridge (Outlook/Teams/Calendar/
 SharePoint).
 
-65 MCP tools (64 Zendesk tools + `zendesk_login`) · 5 skills · 5 slash commands ·
+66 MCP tools (64 Zendesk tools + `zendesk_login` + `zendesk_diagnostics`) ·
+5 skills · 5 slash commands ·
 a support subagent. Ships two ways: a Claude Code plugin and a Claude Desktop
 Extension (`.mcpb`).
 
@@ -37,7 +38,7 @@ No terminal required.
    |---|---|---|
    | Zendesk Subdomain | **yes** | — |
    | OAuth Client ID | **yes** | — |
-   | OAuth Client Secret | **yes** (stored as a secret) | — |
+   | OAuth Client Secret | no — see below | — |
    | OAuth Callback Port | no | `8976` |
    | Injection-Screening Level | no | `standard` |
    | Markdown to HTML Conversion | no | on |
@@ -45,10 +46,16 @@ No terminal required.
    | Business Work Hours | no | 09:00–17:00 |
    | Business Workdays | no | Mon–Fri |
 
+   The client secret is optional: a **public** OAuth client has none, and PKCE
+   (S256, always on) is what authenticates the token exchange. Give it only if
+   your Zendesk client is a confidential one.
+
    The **redirect URI you register in Zendesk must match the callback port**:
    `http://localhost:<OAuth Callback Port>/callback` — with the default port,
    `http://localhost:8976/callback`.
-4. In a chat, run the **`zendesk_login`** tool **twice**:
+4. In a chat, run the **`zendesk_login`** tool **twice** — or simply ask for
+   something from Zendesk, because the first tool call without valid credentials
+   starts the authorization itself and answers with the URL:
    - The **first call** returns a Zendesk authorization URL and starts listening
      for the redirect. Open the URL, approve access — the browser tab confirms
      the redirect landed. This call does not wait for you; the authorization
@@ -106,6 +113,18 @@ From Claude Code, add the marketplace and install the plugin:
 `marketplace add` / `plugin install` clone only committed files and do **not**
 run a build, so the compiled `dist/` is committed to the repo (see note below).
 
+The plugin asks for **no configuration of its own**: the Claude Code host bridge
+does not support plugin user configuration and drops the whole MCP server when a
+manifest references any (`user_config is not supported on the desktop host
+bridge; dropping server`). Settings therefore reach the server as ordinary
+environment variables, and a plugin that has none starts anyway and says what is
+missing in the answer to every tool call. `zendesk_diagnostics` reports what the
+host actually did with the plugin — platform, whether `${CLAUDE_PLUGIN_ROOT}` and
+`${CLAUDE_PLUGIN_DATA}` were substituted, the client capabilities announced in
+`initialize`, and whether the callback port binds on each address family. It
+reports those as states, never as values, so its output is safe to paste into an
+issue.
+
 To work on the plugin from source instead:
 
 ```bash
@@ -133,13 +152,15 @@ http://localhost:8976/callback
 **Client ID** and **Client Secret**.
 
 ### 2. Provide plugin configuration
-When Claude Code installs the plugin it prompts for `userConfig`:
+The Desktop Extension (`.mcpb`) asks for these in its configuration dialog. On the
+Claude Code plugin they are environment variables (`ZENDESK_SUBDOMAIN`,
+`ZENDESK_OAUTH_CLIENT_ID`, …) — see section B.
 
 | Key | Type | Required | Purpose |
 |---|---|---|---|
 | `zendesk_subdomain` | string | yes | `{subdomain}.zendesk.com` |
 | `oauth_client_id` | string | yes | From step 1 |
-| `oauth_client_secret` | string (sensitive) | yes | From step 1 — stored in the OS keychain, never in settings |
+| `oauth_client_secret` | string (sensitive) | no | From step 1 — a public client has none, and PKCE authenticates the exchange |
 | `oauth_callback_port` | number | no | Localhost redirect port (default `8976`) |
 | `security_level` | `strict`\|`standard`\|`off` | no | Prompt-injection screening (default `standard`) |
 | `markdown_conversion` | boolean | no | Markdown→HTML on writes (default `true`) |
@@ -160,7 +181,7 @@ uses exported:
 ```bash
 export ZENDESK_SUBDOMAIN=acme
 export ZENDESK_OAUTH_CLIENT_ID=...        # from step 1
-export ZENDESK_OAUTH_CLIENT_SECRET=...    # from step 1
+export ZENDESK_OAUTH_CLIENT_SECRET=...    # only for a confidential client
 export CLAUDE_PLUGIN_DATA=...             # MUST match what the server uses (see below)
 export ZENDESK_OAUTH_CALLBACK_PORT=8976   # only if you overrode oauth_callback_port
 npm run authorize
@@ -178,9 +199,12 @@ revoke access or rotate the client secret.
 > value — otherwise it writes to the default per-user data directory and the
 > server reports "No authorization found". If you leave `CLAUDE_PLUGIN_DATA`
 > unset, the CLI prints a warning and the absolute path it used; make sure that
-> path is where the server looks. The tokens are encrypted with a key derived
-> from your client secret, so the same credentials + same path let the server
-> pick them up with no extra steps.
+> path is where the server looks. The tokens are encrypted with a random key kept
+> in the macOS Keychain (service `zendesk-plugin`, account `token-store-key`),
+> created on first use — so the same **path** is all the server needs to pick
+> them up, and rotating the client secret leaves the store readable.
+> `CLAUDE_PLUGIN_DATA` must be an absolute path; a relative one is refused rather
+> than resolved against whatever working directory the host used.
 
 > **Where credentials live.** With `CLAUDE_PLUGIN_DATA` unset — which is the
 > Desktop Extension case — `tokens.enc` (mode `0600`) and the response cache go
@@ -216,7 +240,9 @@ Ask Claude: **"Who am I in Zendesk?"** → runs `zendesk_get_me` and confirms au
 - `/zendesk:escalate <id>` — push a ticket to Teams/Outlook
 
 ### Tools
-`zendesk_login` (authorize this installation) plus 64 namespaced `zendesk_*`
+`zendesk_login` (authorize this installation), `zendesk_diagnostics` (what this
+host did with the plugin — platform, variable substitution, client capabilities,
+callback bind per address family; states only, never values) plus 64 namespaced `zendesk_*`
 tools across Support, Users/Orgs, Search, Business
 Rules, Guide, Analytics, and a `zendesk_query` utility that re-slices cached
 responses without re-fetching. Read tools save the full JSON response to the
@@ -235,9 +261,20 @@ inventory.
 - **Safe writes.** Ticket updates use optimistic concurrency (`safe_update`,
   409-on-conflict → re-fetch + confirm); tags append by default; macro apply is
   preview → confirm → persist; every write is confirmed in conversation.
-- **Secrets.** The client secret is stored in the OS keychain; tokens are
-  encrypted at rest (AES-256-GCM). No secrets or tokens are ever written to
-  logs or stdout.
+- **Secrets.** The OAuth client secret is **not** stored by this plugin at all:
+  it arrives as `ZENDESK_OAUTH_CLIENT_SECRET` (the MCPB manifest marks the field
+  `sensitive: true`, which is a request to the host, not a guarantee from here),
+  and it is optional — a public client has none. Tokens are encrypted at rest
+  (AES-256-GCM, file mode `0600`) with a **random 32-byte key of their own**, kept
+  in the macOS Keychain and independent of the client secret: rotating the secret
+  does not brick the token store, and the secret is not a decrypt-all key. On
+  Windows and Linux the key source is not implemented yet
+  ([#69](https://github.com/PersoQua-AG/zendesk-plugin/issues/69)) and the server
+  says so rather than falling back to anything weaker. No secrets or tokens are
+  ever written to logs or stdout.
+- **The OAuth callback is loopback-only.** The listener binds `127.0.0.1` and
+  `::1` — both, because `localhost` resolves to `::1` first on macOS — and
+  nothing else, so it is not reachable from the network while it is open.
 
 ### Known limitation — rich Guide articles
 The Markdown→HTML converter handles standard comment/article formatting. For

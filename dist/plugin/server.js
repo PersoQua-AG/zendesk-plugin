@@ -21126,16 +21126,16 @@ function encKeyStrengthBytes(key) {
   if (/^[A-Za-z0-9+/]+={0,2}$/.test(key)) return Buffer.from(key, "base64").length;
   return Buffer.byteLength(key, "utf8");
 }
-var runSecurity = (args) => {
+function runSecurity(args, bin = SECURITY_BIN) {
   try {
-    return { status: 0, output: execFileSync(SECURITY_BIN, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) };
+    return { status: 0, output: execFileSync(bin, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }) };
   } catch (err) {
     const status = err.status;
     return { status: typeof status === "number" ? status : -1, output: "" };
   }
-};
+}
 var UNSUPPORTED_PLATFORM = "The Zendesk token store needs a key from the macOS Keychain, and this is not macOS. A Windows or Linux key source is issue #69 (github.com/PersoQua-AG/zendesk-plugin/issues/69); there is deliberately no weaker fallback.";
-function resolveTokenStoreKey(platform = process.platform, run = runSecurity) {
+function resolveTokenStoreKey(platform = process.platform, run = (args) => runSecurity(args)) {
   if (platform !== "darwin") throw new Error(UNSUPPORTED_PLATFORM);
   const found = run(["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"]);
   if (found.status === 0) {
@@ -21379,7 +21379,7 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
             pending -= 1;
             bindErrors.push(`${binding.address}: ${err.message}`);
             warnConfig(
-              `the OAuth callback listener could not bind ${binding.address}:${port} (${err.code ?? err.message}) \u2014 continuing on the other address family if it bound.`
+              `the OAuth callback listener could not bind ${binding.address}:${port} (${err.code}) \u2014 continuing on the other address family if it bound.`
             );
             decide();
           });
@@ -21539,7 +21539,7 @@ var AuthManager = class {
 };
 
 // src/auth/encrypted-file.ts
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes as randomBytes2 } from "node:crypto";
 var EncryptedFile = class {
@@ -21558,6 +21558,7 @@ var EncryptedFile = class {
     const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
     const payload = Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString("base64");
     writeFileSync(this.filePath, payload, { mode: 384 });
+    chmodSync(this.filePath, 384);
   }
   // null for a missing or empty file. A decrypt/integrity failure THROWS: a tampered or
   // wrong-key file must never be mistaken for "not there".
@@ -21980,7 +21981,7 @@ function substitutionState(raw) {
 function probeBind(port, address) {
   return new Promise((done) => {
     const server = createServer2();
-    server.on("error", (err) => done(`${address}:${port} unavailable (${err.code ?? err.message})`));
+    server.on("error", (err) => done(`${address}:${port} unavailable (${err.code})`));
     server.listen(port, address, () => server.close(() => done(`${address}:${port} binds`)));
   });
 }

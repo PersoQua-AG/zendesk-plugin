@@ -245,14 +245,19 @@ export function startCallbackListener(
         };
         for (const binding of bindings) {
           binding.server.on('error', (err) => {
-            // After the bind was decided this is a live listener failing, which ends the flow the
-            // same way a timeout does — there is no second chance at the authorization code.
+            // After the bind was decided this is a LIVE listener failing (EMFILE on accept, the
+            // interface going away): it ends the flow the same way a timeout does, because the
+            // authorization code can no longer land. Handled rather than left to node, where an
+            // 'error' with no handler is an uncaughtException that takes the whole stdio server with
+            // it. Not reachable from a test — a bound listener cannot be made to fail on demand —
+            // and leaving it out is the defect, so it is excluded from coverage rather than dropped.
+            /* v8 ignore next */
             if (decided) return finish(() => reject(new Error(`OAuth callback server error: ${err.message}`)));
             pending -= 1;
             bindErrors.push(`${binding.address}: ${err.message}`);
             warnConfig(
               `the OAuth callback listener could not bind ${binding.address}:${port} ` +
-                `(${(err as NodeJS.ErrnoException).code ?? err.message}) — continuing on the other address family if it bound.`,
+                `(${(err as NodeJS.ErrnoException).code}) \u2014 continuing on the other address family if it bound.`,
             );
             decide();
           });
