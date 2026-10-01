@@ -109,11 +109,11 @@ describe('freePort() when the probe itself cannot run', () => {
 
 describe('freePort() when every candidate answers "held"', () => {
   it('gives up after the probe budget instead of walking the band', () => {
-    // A probe binary that always exits 1 is "this port is taken" for every candidate. Without a
-    // ceiling freePort() answers that by probing all 10 000 band ports; at the measured 16-24 ms a
-    // probe that is 3-4 minutes, and at PROBE_TIMEOUT_MS it is 5.5 hours of blocked event loop
-    // that no vitest timeout can reach. The exit is instant here, so this case costs milliseconds
-    // and still fails if the ceiling is gone.
+    // A probe binary that always exits 1 is "this port is taken" for every candidate, so both
+    // passes spend their full budget and freePort() refuses. Without a ceiling it would instead
+    // probe all 10 000 band ports; at the measured 16-24 ms a probe that is 3-4 minutes, and at
+    // PROBE_TIMEOUT_MS it is 5.5 hours of blocked event loop that no vitest timeout can reach. The
+    // exit is instant here, so this case costs milliseconds and still fails if the ceiling is gone.
     const always = join(ISOLATED_TMP, 'probe-that-says-taken.sh');
     writeFileSync(always, '#!/bin/sh\nexit 1\n');
     chmodSync(always, 0o755);
@@ -129,8 +129,11 @@ describe('freePort() when every candidate answers "held"', () => {
     });
     const burned = claimCount() - before;
 
+    // Two passes, deliberately: the second exists so a budget spent on strangers does not refuse
+    // while the band behind them is free (port-probe-budget.test.ts), and it costs a second
+    // budget's worth of claims. The bound is therefore 2x, chosen, not inherited.
     expect(burned, `claims consumed before giving up: ${burned}`).toBeLessThanOrEqual(
-      harness.MAX_PROBES_PER_ACQUISITION,
+      2 * harness.MAX_PROBES_PER_ACQUISITION,
     );
     expect(
       thrown?.message ?? '(returned a port)',

@@ -231,16 +231,18 @@ function claimPort(port: number): boolean {
 const PROBE_ADDRESSES = ['0.0.0.0', '127.0.0.1', '::1'] as const;
 const PROBE_TIMEOUT_MS = 2_000;
 
-// How many candidates may be PROBED in one freePort() before it gives up. Not how many may be
-// examined: a port another run has claimed costs a link() and no probe at all, and the band is
-// what makes concurrent runs disagree, so that part stays uncapped.
+// How many candidates may be PROBED in one pass of freePort() before it moves on. Not how many may
+// be examined: a port another run has claimed costs a link() and no probe at all, and the claims
+// are what make concurrent runs disagree, so that walk stays uncapped — a fully claimed band is
+// 2 774 ms on macOS and 187 ms on Linux of blocked event loop (measured here, claimPort() against a pre-filled band), which is a cost, not a
+// hazard.
 //
-// 64 because a probe costs 23.8 ms on macOS and 16.2 ms on Linux (measured, 25 probes each), so
-// the ceiling is 1.5 s / 1.0 s — under the 5.2 s the slowest single file already holds a claim for,
-// and nowhere near the 15.5 s suite. Without a ceiling the worst case is PORT_BAND_SIZE probes,
-// and with PROBE_TIMEOUT_MS each that is 5.5 hours of blocked event loop that no vitest timeout can
-// interrupt. Sixty-four consecutive band ports held by strangers is not a port problem anyway; #48
-// was one.
+// 64 because a probe costs 23.8 ms on macOS and 16.2 ms on Linux (measured, 25 probes each), so one
+// pass is at most 1.5 s / 1.0 s and both passes 3.0 s / 2.0 s — the same order as the 5.2 s the
+// slowest single file already holds a claim for. Without a ceiling the worst case is
+// PORT_BAND_SIZE probes, and with PROBE_TIMEOUT_MS each that is 5.5 hours of blocked event loop
+// that no vitest timeout can interrupt. Sixty-four probed band ports all held by strangers is not
+// a port problem anyway; #48 was one.
 export const MAX_PROBES_PER_ACQUISITION = 64;
 
 export function portHeldOn(port: number, addresses: readonly string[] = PROBE_ADDRESSES): string {
@@ -264,47 +266,66 @@ export function portHeldOn(port: number, addresses: readonly string[] = PROBE_AD
 let nextCandidate = process.pid % PORT_BAND_SIZE;
 
 export function freePort(): number {
-  let probed = 0;
   const heldPorts: string[] = [];
-  for (let tried = 0; tried < PORT_BAND_SIZE; tried += 1) {
-    const port = PORT_BAND_FIRST + (nextCandidate % PORT_BAND_SIZE);
-    nextCandidate += 1;
-    if (probed >= MAX_PROBES_PER_ACQUISITION) {
-      throw new Error(
-        `gave up after probing ${probed} band ports from ${heldPorts[0]} and finding every one of ` +
-          `them held: ${heldPorts.slice(0, 5).join(', ')}${heldPorts.length > 5 ? ', …' : ''}. That ` +
-          `is not a stale claim and not an exhausted band — either this host really has that many ` +
-          `foreign listeners in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}, or the probe is answering ` +
-          `wrongly (see portHeldOn above; a probe that collides with its own sockets looks exactly ` +
-          `like this).`,
+  // TWO passes. The first spends the probe budget; every port it rejects KEEPS its claim, so the
+  // second walks past all of them for a link() each and spends a fresh budget on ports nobody has
+  // probed yet. Without it the refusal landed while the next candidate was free — measured with 64
+  // strangers in front: `freePort()` threw, `portHeldOn()` on the very next candidate returned '',
+  // and the immediately following `freePort()` succeeded (macOS 26028/26029, Linux 20800/20801).
+  // A failure the next call undoes is a flake, and which worker draws it is decided by
+  // `nextCandidate = process.pid % PORT_BAND_SIZE` — the same pid positioning #48 is about. This PR
+  // may not add one of those.
+  let bandExhausted = false;
+  for (let pass = 0; pass < 2 && !bandExhausted; pass += 1) {
+    let probed = 0;
+    let budgetSpent = false;
+    for (let tried = 0; tried < PORT_BAND_SIZE; tried += 1) {
+      if (probed >= MAX_PROBES_PER_ACQUISITION) {
+        budgetSpent = true;
+        break;
+      }
+      const port = PORT_BAND_FIRST + (nextCandidate % PORT_BAND_SIZE);
+      nextCandidate += 1;
+      // A port another run claimed — or one THIS pass already rejected — costs a link() and
+      // nothing else, so it does not count against the probe budget.
+      if (!claimPort(port)) continue;
+      probed += 1;
+      const refusedAt = portHeldOn(port);
+      if (refusedAt === '') return port;
+      heldPorts.push(`${port} (${refusedAt})`);
+      // The claim is KEPT: it names this pid, so it holds the port against every concurrent run for
+      // as long as this process lives, and the sweep takes it back once the pid is gone. Releasing
+      // it would only make the next acquirer — and the second pass above — pay for the same probe.
+      //
+      // And it is said out loud, because the staleness assumption at line 69 had exactly one
+      // observation that could contradict it — the named EADDRINUSE from src/tools/login.ts:113 —
+      // and skipping the port here is what takes that observation away.
+      //
+      // The address is the FIRST one that refused the bind, which is not always the one the
+      // stranger sits on: on Linux any IPv4 holder — wildcard, 0.0.0.0 or 127.0.0.1 — is refused at
+      // 0.0.0.0, the first address probed (measured, both platforms; the matrix is above
+      // portHeldOn). The wording says that rather than naming an address the holder may not be on.
+      process.stderr.write(
+        `[test-ports] skipping band port ${port}: a listener outside this suite holds it; first ` +
+          `probe address refused: ${refusedAt}\n`,
       );
     }
-    // A port another run claimed costs a link() and nothing else, so it does not count against the
-    // probe budget.
-    if (!claimPort(port)) continue;
-    probed += 1;
-    const refusedAt = portHeldOn(port);
-    if (refusedAt === '') return port;
-    heldPorts.push(`${port} (${refusedAt})`);
-    // The claim is KEPT: it names this pid, so it holds the port against every concurrent run for
-    // as long as this process lives, and the sweep takes it back once the pid is gone. Releasing it
-    // would only make the next acquirer pay for the same probe.
-    //
-    // And it is said out loud, because the staleness assumption at line 69 had exactly one
-    // observation that could contradict it — the named EADDRINUSE from src/tools/login.ts:113 — and
-    // skipping the port here is what takes that observation away.
-    //
-    // The address is the FIRST one that refused the bind, which is not always the one the stranger
-    // sits on: on Linux any IPv4 holder — wildcard, 0.0.0.0 or 127.0.0.1 — is refused at 0.0.0.0,
-    // the first address probed (measured, both platforms; the matrix is above portHeldOn). The
-    // wording says that rather than naming an address the holder may not be on.
-    process.stderr.write(
-      `[test-ports] skipping band port ${port}: a listener outside this suite holds it; first ` +
-        `probe address refused: ${refusedAt}\n`,
+    bandExhausted = !budgetSpent;
+  }
+  if (bandExhausted) {
+    throw new Error(
+      `no unclaimed port left in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}; stale claims under ${CLAIM_DIR}?`,
     );
   }
   throw new Error(
-    `no unclaimed port left in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}; stale claims under ${CLAIM_DIR}?`,
+    `gave up after probing ${heldPorts.length} band ports in two passes, from ${heldPorts[0]}, and ` +
+      `finding every one of them held: ${heldPorts.slice(0, 5).join(', ')}` +
+      `${heldPorts.length > 5 ? ', …' : ''}. That is ${heldPorts.length} of the ${PORT_BAND_SIZE} ` +
+      `ports in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}, so it says nothing about the rest of the ` +
+      `band. Either this host really has that many foreign listeners, or the probe is answering ` +
+      `wrongly — see portHeldOn above; a probe that collides with its own sockets looks exactly ` +
+      `like this. The claims this path leaves behind under ${CLAIM_DIR} are live, not stale, while ` +
+      `this process runs, and become sweepable wreckage the moment it exits.`,
   );
 }
 
