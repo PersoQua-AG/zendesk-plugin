@@ -9,6 +9,13 @@
 // Twenty of those lines in ~/Library/Logs/Claude/main.log is what "the plugin never starts" was. So
 // the single most important property of this file is a NEGATIVE one, and it is asserted on the raw
 // text rather than on the parsed object: not one `${user_config.` may appear anywhere in it.
+//
+// #68 left one env entry behind and the same host dropped the server again, with a new line:
+//
+//   [PluginMcpHostConfig] Plugin "…" server "zendesk": failed to build host proxy target:
+//   env declares reserved variable name "CLAUDE_PLUGIN_DATA"
+//
+// So the second negative property: the env block may declare no name the host reserves for itself.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -17,7 +24,14 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const raw = readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8');
 const plugin = JSON.parse(raw);
-const env: Record<string, string> = plugin.mcpServers.zendesk.env;
+const env: Record<string, string> = plugin.mcpServers.zendesk.env ?? {};
+
+// The host refuses an env name it sets itself. Read out of the Claude Desktop bundle
+// (/Applications/Claude.app/Contents/Resources/app.asar, the reserved-name predicate behind the
+// "env declares reserved variable name" throw): an exact-name list plus these prefixes, with PATH
+// and CLAUDE_PLUGIN_ROOT the only two exemptions. The prefixes are the part that is stable enough
+// to pin; a name outside them can still be reserved, so this is a floor, not a full check.
+const RESERVED_PREFIXES = /^(CLAUDE_|ANTHROPIC_|OTEL_|LD_|DYLD_|BASH_FUNC_|GIT_|NPM_CONFIG_|UV_)/;
 
 describe('the Claude Code plugin manifest', () => {
   it('references no plugin user configuration at all — the one line that dropped the server', () => {
@@ -25,11 +39,15 @@ describe('the Claude Code plugin manifest', () => {
     expect(plugin.userConfig).toBeUndefined();
   });
 
-  it('passes CLAUDE_PLUGIN_DATA and nothing else', () => {
-    // Claude Code owns the plugin data dir and substitutes this one itself; every other setting now
-    // reaches the server as an ordinary environment variable or not at all, and the server starts in
-    // its degraded mode and explains itself when it is not there.
-    expect(env).toEqual({ CLAUDE_PLUGIN_DATA: '${CLAUDE_PLUGIN_DATA}' });
+  it('declares no env name the host reserves — the one line that dropped the server after #68', () => {
+    // CLAUDE_PLUGIN_DATA in particular: the host injects it into every plugin stdio server itself,
+    // so declaring it was never a passthrough, only a rejection. Same rationale as the MCPB side
+    // (tests/plugin/mcpb-manifest.test.ts).
+    expect(raw).not.toContain('CLAUDE_PLUGIN_DATA');
+    const reserved = Object.keys(env).filter(
+      (name) => name.toUpperCase() !== 'CLAUDE_PLUGIN_ROOT' && RESERVED_PREFIXES.test(name.toUpperCase()),
+    );
+    expect(reserved).toEqual([]);
   });
 
   it('still launches the bundled plugin server from the plugin root', () => {
