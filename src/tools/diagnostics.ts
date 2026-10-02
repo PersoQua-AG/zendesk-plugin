@@ -48,7 +48,7 @@ export async function diagnosticsReport(input: DiagnosticsInput): Promise<string
     `os release: ${release()}`,
     `node: ${process.version}`,
     `CLAUDE_PLUGIN_ROOT: ${substitutionState(input.rawEnv.CLAUDE_PLUGIN_ROOT)}`,
-    `CLAUDE_PLUGIN_DATA: ${substitutionState(input.rawEnv.CLAUDE_PLUGIN_DATA)}`,
+    `CLAUDE_PLUGIN_DATA (host-set, not read by this server): ${substitutionState(input.rawEnv.CLAUDE_PLUGIN_DATA)}`,
     'client capabilities from initialize (verbatim):',
     JSON.stringify(input.clientCapabilities ?? null, null, 2),
     'callback port:',

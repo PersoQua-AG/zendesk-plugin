@@ -21,7 +21,7 @@ function fixtureEnv(): NodeJS.ProcessEnv {
     ZENDESK_SUBDOMAIN: 'acme',
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
-    CLAUDE_PLUGIN_DATA: dataDir,
+    ZENDESK_DATA_DIR: dataDir,
   };
 }
 

@@ -39,7 +39,7 @@ function halfConfiguredEnv(): NodeJS.ProcessEnv {
   return {
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CALLBACK_PORT: String(freePort()),
-    CLAUDE_PLUGIN_DATA: dataDir,
+    ZENDESK_DATA_DIR: dataDir,
   };
 }
 
@@ -94,7 +94,7 @@ describe('createServer with incomplete extension configuration', () => {
   it('names an unusable callback port as well as the missing value', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'zd-badport-'));
     dirs.push(dataDir);
-    const client = await connect({ ZENDESK_OAUTH_CALLBACK_PORT: '70000', CLAUDE_PLUGIN_DATA: dataDir });
+    const client = await connect({ ZENDESK_OAUTH_CALLBACK_PORT: '70000', ZENDESK_DATA_DIR: dataDir });
     const text = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
 
     expect(text).toContain('ZENDESK_SUBDOMAIN');

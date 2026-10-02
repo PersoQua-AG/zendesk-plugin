@@ -4,7 +4,7 @@ import { diagnosticsReport } from '../tools/diagnostics.js';
 // configure the plugin is exactly the host this tool is there to describe.
 export function registerDiagnosticsTool(server, deps) {
     server.registerTool('zendesk_diagnostics', {
-        description: 'Report how this host loaded the plugin: hostname, platform, OS release, whether CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA were substituted (never their values), the client capabilities announced in initialize, and whether the OAuth callback port binds per address family. Carries no configuration value and no credential.',
+        description: 'Report how this host loaded the plugin: hostname, platform, OS release, whether CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA were substituted by the host (never their values; the server reads neither for its data directory), the client capabilities announced in initialize, and whether the OAuth callback port binds per address family. Carries no configuration value and no credential.',
     }, async () => toText(await diagnosticsReport({
         ...deps,
         // Read at CALL time, not at registration: the client announces its capabilities during

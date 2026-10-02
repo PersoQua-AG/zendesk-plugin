@@ -27,7 +27,7 @@ function configuredEnv(dataDir: string): NodeJS.ProcessEnv {
     ZENDESK_SUBDOMAIN: 'acme',
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
-    CLAUDE_PLUGIN_DATA: dataDir,
+    ZENDESK_DATA_DIR: dataDir,
   };
 }
 
@@ -94,7 +94,7 @@ describe('createServer with a data directory the cache cannot be created in', ()
 
   it('names both problems when the configuration is incomplete as well', async () => {
     const dataDir = unwritableDataDir();
-    const client = await connect({ ZENDESK_OAUTH_CLIENT_ID: 'client-abc', CLAUDE_PLUGIN_DATA: dataDir });
+    const client = await connect({ ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_DATA_DIR: dataDir });
     const text = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
     expect(text).toContain('zendesk_subdomain');
     expectCacheProblem(text, dataDir);

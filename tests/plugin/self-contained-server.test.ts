@@ -32,13 +32,13 @@ function copyPluginPayload(dest: string): void {
 // suite, which no source-parsing guard can see (tests/setup/no-real-keychain.ts now does).
 //
 // So it is spawned in the one state that needs no key at all: no subdomain, so resolveAuthConfig throws
-// before the lazily-read key, and a CLAUDE_PLUGIN_DATA that is a FILE, so the cache cannot be opened and
+// before the lazily-read key, and a ZENDESK_DATA_DIR that is a FILE, so the cache cannot be opened and
 // the first-run setup gate is skipped too. The subject of this test is unaffected — whether the bundle the
 // manifest launches runs at all, and whether it registers the same tools as this process — because the tool
 // surface is registered whatever the configuration says. What the child can no longer prove, that the
 // bundler kept the Keychain path, is asserted on the artifact in the case below.
 function keylessEnv(dataDirAsFile: string): Record<string, string> {
-  return { CLAUDE_PLUGIN_DATA: dataDirAsFile };
+  return { ZENDESK_DATA_DIR: dataDirAsFile };
 }
 
 function fileNotDirectory(path: string): string {

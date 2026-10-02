@@ -23,12 +23,12 @@ export function fixtureEnv(): NodeJS.ProcessEnv {
     ZENDESK_SUBDOMAIN: 'acme',
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
-    CLAUDE_PLUGIN_DATA: tempDir('zd-prompts-'),
+    ZENDESK_DATA_DIR: tempDir('zd-prompts-'),
   };
 }
 
 export function unconfiguredEnv(): NodeJS.ProcessEnv {
-  return { CLAUDE_PLUGIN_DATA: tempDir('zd-prompts-unconfigured-') };
+  return { ZENDESK_DATA_DIR: tempDir('zd-prompts-unconfigured-') };
 }
 
 export async function connect(env: NodeJS.ProcessEnv): Promise<Client> {

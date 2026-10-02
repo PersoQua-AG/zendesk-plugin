@@ -81,7 +81,7 @@ export async function startRemote(
     // Required by the default store construction (the refresh-token store is built from env);
     // 32 base64 bytes so the fail-closed strength check passes.
     REMOTE_TOKEN_ENC_KEY: '0+k4qZ+4xicM8rKBVMRYFikJpkLODNCh33wHb08pJyU=',
-    CLAUDE_PLUGIN_DATA: dataDir,
+    ZENDESK_DATA_DIR: dataDir,
     ...envOverrides,
   };
   const config: OAuthConfig = { subdomain: 'acme', clientId: 'client-abc', clientSecret: SECRET, callbackPort: 8976, scopes: ['read', 'write'] };

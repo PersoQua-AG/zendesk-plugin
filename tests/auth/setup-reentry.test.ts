@@ -29,7 +29,7 @@ afterEach(() => {
 function configuredEnv(): NodeJS.ProcessEnv {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-reentry-'));
   dirs.push(dataDir);
-  return { ZENDESK_OAUTH_CALLBACK_PORT: String(freePort()), CLAUDE_PLUGIN_DATA: dataDir };
+  return { ZENDESK_OAUTH_CALLBACK_PORT: String(freePort()), ZENDESK_DATA_DIR: dataDir };
 }
 
 async function connect(env: NodeJS.ProcessEnv, security: ReturnType<typeof configuredKeychain>) {

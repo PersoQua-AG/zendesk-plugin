@@ -116,9 +116,10 @@ function resolveOrDegrade(env: NodeJS.ProcessEnv, security: RunSecurity): AuthRe
     // The port is validated AFTER the subdomain, so `reason` is almost never about it — and a port nobody
     // mentions is a redirect URL the person registers wrong. Named here, where every tool answer carries it.
     const { problem } = callbackPortOrDefault(env);
-    // Same precedence as resolveAuthConfig: an explicit CLAUDE_PLUGIN_DATA wins, so the cache and
-    // the token store stay in the configured directory even while the configuration is incomplete —
-    // but a relative one is dropped here rather than honoured, since it is why we may be degrading.
+    // Same precedence as resolveAuthConfig, over the same seam rather than a setting: where
+    // ZENDESK_DATA_DIR is set the cache and the token store stay in that directory even while the
+    // configuration is incomplete — but a relative one is dropped here rather than honoured, since
+    // it is why we may be degrading.
     const dataDir = dataDirOf(env);
     return {
       ok: false,

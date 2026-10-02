@@ -25,7 +25,7 @@ function unconfiguredEnv(): NodeJS.ProcessEnv {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-heal-'));
   dirs.push(dataDir);
   // A port from the suite's band: the setup page binds a REAL listener on it.
-  return { ZENDESK_OAUTH_CALLBACK_PORT: String(freePort()), CLAUDE_PLUGIN_DATA: dataDir };
+  return { ZENDESK_OAUTH_CALLBACK_PORT: String(freePort()), ZENDESK_DATA_DIR: dataDir };
 }
 
 const textOf = (result: unknown): string =>

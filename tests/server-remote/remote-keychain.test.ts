@@ -17,7 +17,7 @@ import { configuredKeychain, fakeKeychain } from '../auth/keychain.js';
 // by running it, and that the bridge passes it is asserted on the one line that does.
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-const incompleteEnv = { ZENDESK_OAUTH_CLIENT_ID: 'bridge-id', CLAUDE_PLUGIN_DATA: '/var/data' };
+const incompleteEnv = { ZENDESK_OAUTH_CLIENT_ID: 'bridge-id', ZENDESK_DATA_DIR: '/var/data' };
 
 describe('the remote bridge and the login keychain', () => {
   it('reads nothing from a Keychain when it is handed noKeychain', () => {
@@ -54,14 +54,14 @@ describe('the remote bridge and the login keychain', () => {
     });
 
     // What SessionManager does per session, with the runner the bridge gives it.
-    createServer({ ZENDESK_SUBDOMAIN: 'tenant', ZENDESK_OAUTH_CLIENT_ID: 'id', CLAUDE_PLUGIN_DATA: '/var/data' }, {
+    createServer({ ZENDESK_SUBDOMAIN: 'tenant', ZENDESK_OAUTH_CLIENT_ID: 'id', ZENDESK_DATA_DIR: '/var/data' }, {
       security: noKeychain,
       authManager: { getAccessToken: async () => 'tok' },
     });
 
     // And with the operator's, to show what the default would have read — the inverse measurement, so
     // this case cannot pass because nothing reached the Keychain for an unrelated reason.
-    createServer({ ZENDESK_SUBDOMAIN: 'tenant', ZENDESK_OAUTH_CLIENT_ID: 'id', CLAUDE_PLUGIN_DATA: '/var/data' }, {
+    createServer({ ZENDESK_SUBDOMAIN: 'tenant', ZENDESK_OAUTH_CLIENT_ID: 'id', ZENDESK_DATA_DIR: '/var/data' }, {
       security: operator.run,
       authManager: { getAccessToken: async () => 'tok' },
     });

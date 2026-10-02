@@ -18,7 +18,7 @@ function envWithLevel(level?: string): NodeJS.ProcessEnv {
     ZENDESK_SUBDOMAIN: 'acme',
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
-    CLAUDE_PLUGIN_DATA: dataDir,
+    ZENDESK_DATA_DIR: dataDir,
   };
   if (level !== undefined) env.ZENDESK_SECURITY_LEVEL = level;
   return env;

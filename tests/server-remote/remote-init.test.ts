@@ -25,7 +25,7 @@ function fixtureEnv(): { env: NodeJS.ProcessEnv; issued: IssuedTokenStore } {
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
     REMOTE_TOKEN_ENC_KEY: '0+k4qZ+4xicM8rKBVMRYFikJpkLODNCh33wHb08pJyU=',
-    CLAUDE_PLUGIN_DATA: dataDir,
+    ZENDESK_DATA_DIR: dataDir,
   };
   const issued = new IssuedTokenStore(join(dataDir, 'issued'), 'secret-xyz');
   return { env, issued };
@@ -76,8 +76,8 @@ describe('remote entrypoint', () => {
 
   it('enforces audit retention at startup (expired line pruned)', () => {
     const { env } = fixtureEnv();
-    const auditPath = join(env.CLAUDE_PLUGIN_DATA as string, 'audit', 'write-audit.jsonl');
-    mkdirSync(join(env.CLAUDE_PLUGIN_DATA as string, 'audit'), { recursive: true });
+    const auditPath = join(env.ZENDESK_DATA_DIR as string, 'audit', 'write-audit.jsonl');
+    mkdirSync(join(env.ZENDESK_DATA_DIR as string, 'audit'), { recursive: true });
     const expired = JSON.stringify({ ts: Date.now() - RETENTION_MS - 1, identityHash: 'h', tool: 't', targetId: '1', outcome: 'applied' });
     writeFileSync(auditPath, `${expired}\n`);
 

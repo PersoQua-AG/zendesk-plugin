@@ -20,7 +20,7 @@ function degradedEnv(): NodeJS.ProcessEnv {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-degraded-'));
   dirs.push(dataDir);
   // Client id present, required subdomain and secret missing → degraded, not throwing.
-  return { ZENDESK_OAUTH_CLIENT_ID: 'client-abc', CLAUDE_PLUGIN_DATA: dataDir };
+  return { ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_DATA_DIR: dataDir };
 }
 
 function spyFetch() {
@@ -51,13 +51,13 @@ describe('an incompletely configured server never reaches the network', () => {
   });
 
   // US-3: the cache follows the same directory as the token store. The degraded path must apply the
-  // same CLAUDE_PLUGIN_DATA precedence as resolveAuthConfig (src/auth/config.ts:83) — otherwise a
+  // same ZENDESK_DATA_DIR precedence as resolveAuthConfig (src/auth/config.ts:83) — otherwise a
   // configured data dir is silently abandoned for the per-user default the moment a field is empty.
-  it('still honors CLAUDE_PLUGIN_DATA for the response cache', () => {
+  it('still honors ZENDESK_DATA_DIR for the response cache', () => {
     const env = degradedEnv();
     const { ctx } = createServer(env, { fetchImpl: spyFetch(), security: keychain() });
     const entry = ctx.cache.save('zendesk_get_me', { id: 1 });
-    expect(existsSync(join(env.CLAUDE_PLUGIN_DATA as string, 'cache'))).toBe(true);
+    expect(existsSync(join(env.ZENDESK_DATA_DIR as string, 'cache'))).toBe(true);
     expect(ctx.cache.load(entry.handle)).toMatchObject({ id: 1 });
   });
 });
