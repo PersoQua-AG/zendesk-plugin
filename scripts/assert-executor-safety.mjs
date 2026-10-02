@@ -53,15 +53,47 @@
 //     on a path where something has already gone wrong. Everywhere ELSE a settle call is merely not
 //     a foreign call itself — its arguments are still walked, so `reject(load())` on the ordinary
 //     path is reported, because `load()` throwing there settles nothing.
+// THE CALLER NAMES THE TREE (#76). The scan root is argv[2] and there is no default. While the
+// default was 'src', a run aimed anywhere else still reported success: measured on 3ee1d43,
+// `node scripts/assert-executor-safety.mjs tests/util` printed "0 executors, 0 inspected" and
+// exited 0 — "scanned the wrong tree" and "found nothing" produced the same green.
+//
+// THE MARK OF THE GUARDED TREE: the root must DIRECTLY contain server.ts, the module `npm run
+// build` bundles. That is the tree this guard is for — the code that ships — and it is nothing
+// else here: measured on 3ee1d43 by running
+//   git ls-files '*/server.ts' 'server.ts'
+// → src/server.ts, 1 directory, out of the 27 that hold a tracked .ts file
+// (`git ls-files '*.ts' | xargs -n1 dirname | sort -u | wc -l` → measured on 3ee1d43: 27).
+// Why a mark at all, when this walk is RECURSIVE and a too-WIDE root therefore still inspects the
+// guarded file (measured on 3ee1d43: `node scripts/assert-executor-safety.mjs .` reports
+// `src/auth/oauth-flow.ts:149:54  (resolve, reject)  nested, inspected`)? Because the misedit that
+// hides something is the NARROW one, and narrow is silent: measured on 3ee1d43, `src/auth` → 2
+// executors and `tests/util` → 0 executors, both exited 0 before this mark existed. The counts are
+// printed in every outcome, but a count only reports; it cannot refuse, and a floor under it would
+// mean writing down a number that rots on the next merge.
+// AS IN THE SIBLING GUARD, THE MARK GATES SUCCESS, NOT THE SCAN: an unmarked tree is still walked
+// whole and every finding in it is still named by file and line — it just can never exit 0.
+// The one cost, named rather than discovered later: this hangs on a filename. Move or rename
+// src/server.ts and the guard refuses its own tree — loudly, and in the same commit that breaks
+// `npm run build`, which names that exact path, so it cannot drift silently.
 import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import ts from 'typescript';
 
+const ENTRY = 'server.ts';
+
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+// Exactly one, not "at least one": a second root would be dropped without a word, so
+// `check:executors src src/bin` would have guarded half of what it named and said nothing.
+if (process.argv.length !== 3) {
+  console.error('Expected exactly one scan root: node scripts/assert-executor-safety.mjs <dir>');
+  process.exit(1);
+}
 // Resolved against the repo root, so a relative argument is convenient and an absolute one (the
 // tests hand it temp trees) is honoured rather than silently appended to the root.
-const target = resolvePath(root, process.argv[2] ?? 'src');
+const target = resolvePath(root, process.argv[2]);
 
 const SOURCE = /\.(ts|tsx|mts|cts)$/;
 const DECLARATION = /\.d\.(ts|mts|cts)$/;
@@ -261,12 +293,15 @@ for (const file of files) {
   findRoots(source);
 }
 
+const show = relative(root, target) || target;
+const marked = existsSync(join(target, ENTRY));
+
 // Printed in EVERY outcome, pass or fail: a gate that only speaks when it is happy leaves a red
-// build with no record of what was actually looked at.
-console.log(
-  `Promise executors in ${relative(root, target) || target}/: ${inventory.length} executors, ${inspectedCount} inspected.`,
-);
-for (const entry of inventory) console.log(`  - ${entry}`);
+// build with no record of what was actually looked at. On stderr when the tree is not the guarded
+// one: a run that ends in 1 must leave nothing on stdout that reads like a report.
+const report = marked ? console.log : console.error;
+report(`Promise executors in ${show}/: ${inventory.length} executors, ${inspectedCount} inspected.`);
+for (const entry of inventory) report(`  - ${entry}`);
 
 if (problems.length > 0) {
   console.error('\nRefusing the tree: an inspected promise executor calls out unguarded.');
@@ -303,7 +338,17 @@ if (problems.length > 0) {
           'call in the body at once. There is no per-call exemption on purpose: the calls nobody\n' +
           'thought of are the ones that bite.',
   );
-  process.exit(1);
 }
+
+// Both notices, never one: findings alone would make a run aimed at the wrong tree by accident
+// look like an ordinary hit, and the reader would fix the fixture instead of the argument.
+if (!marked) {
+  console.error(`\nNot the guarded tree: ${show}/ does not directly contain ${ENTRY}.`);
+  console.error(`${files.length} file(s) looked at. A tree that is not the one the build bundles is`);
+  console.error('not the tree this guard is for, so a clean result here would mean nothing.');
+  console.error('Name the tree to scan, for example src.');
+}
+
+if (problems.length > 0 || !marked) process.exit(1);
 
 console.log('Every call on an inspected executor path is on a settling path.');

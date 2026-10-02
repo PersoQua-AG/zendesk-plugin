@@ -17,19 +17,24 @@ afterEach(() => {
 
 type Run = { status: number; stdout: string; stderr: string };
 
+// Every fixture meant to BE a guarded tree carries its mark — a server.ts directly in the scanned
+// root, exactly as src/ carries the module the build bundles. An unmarked tree is still scanned and
+// its findings are still named, but it can never exit 0. See the script header.
 function fixtureDir(source: string, fileName: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'executor-guard-'));
   temps.push(dir);
   mkdirSync(join(dir, 'src'));
   writeFileSync(join(dir, 'src', fileName), source);
+  writeFileSync(join(dir, 'src', 'server.ts'), '// marks this tree as the one the build bundles\n');
   return join(dir, 'src');
 }
 
 // Every case below is a real run of the real script over a real tree on disk — the directory to
-// inspect is argv[2] — not an assertion about a string in a file.
+// inspect is argv[2] — not an assertion about a string in a file. With no source it runs over the
+// repo's own src/, which is the tree package.json points it at; there is no default any more.
 function runGuard(source?: string, fileName = 'subject.ts'): Run {
-  const args = source === undefined ? [GUARD] : [GUARD, fixtureDir(source, fileName)];
-  const run = spawnSync('node', args, { encoding: 'utf8' });
+  const target = source === undefined ? 'src' : fixtureDir(source, fileName);
+  const run = spawnSync('node', [GUARD, target], { encoding: 'utf8' });
   return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
 }
 
@@ -392,6 +397,51 @@ export const f = (server: { listen: (p: number) => void }) =>
     });
   });
 
+  describe('the scan root the caller names', () => {
+    it('refuses to run without a scan root, and refuses more roots than it scans', () => {
+      const bare = spawnSync('node', [GUARD], { encoding: 'utf8' });
+      expect(bare.status).toBe(1);
+      expect(bare.stderr).toContain('Expected exactly one scan root');
+      // A second root would be dropped silently, so its executors would never be looked at.
+      const second = fixtureDir(WEDGE, 'subject.ts');
+      const two = spawnSync('node', [GUARD, 'src', second], { encoding: 'utf8' });
+      expect(two.status).toBe(1);
+      expect(two.stderr).toContain('Expected exactly one scan root');
+    });
+
+    // The defect this ticket exists for: before the mark, `tests/util` printed "0 executors,
+    // 0 inspected" and exited 0, so an empty tree was indistinguishable from a clean one.
+    it('refuses a tree that is not the one the build bundles, however clean it is', () => {
+      const run = spawnSync('node', [GUARD, 'tests/util'], { encoding: 'utf8' });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('Not the guarded tree');
+      expect(run.stdout).not.toContain('Promise executors in');
+    });
+
+    // The mark gates success, not the scan: an unmarked tree is still walked whole, and a wedge in
+    // it is still named by file and line — alongside the notice that the root is wrong.
+    it('still names every finding in an unmarked tree, and says the root is wrong too', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'executor-guard-'));
+      temps.push(dir);
+      writeFileSync(join(dir, 'subject.ts'), WEDGE);
+      const run = spawnSync('node', [GUARD, dir], { encoding: 'utf8' });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toMatch(/subject\.ts:\d+:\d+\s+server\.listen\(port\)/);
+      expect(run.stderr).toContain('Not the guarded tree');
+    });
+
+    // THE HEADER'S COUNT, EXECUTED — the sibling guard's header claim was wrong three times in one
+    // PR while it lived on paper only. Run the documented command and the next drift is red here.
+    it('runs the counting command from the script header and gets src/server.ts, nothing else', () => {
+      const COUNT = String.raw`git ls-files '*/server.ts' 'server.ts'`;
+      // Read out of the header, not retyped: a header that drifts from the command actually run
+      // would put the claim back on paper only.
+      expect(readFileSync(GUARD, 'utf8')).toContain(COUNT);
+      const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8' });
+      expect(run.stdout.trim().split('\n')).toEqual(['src/server.ts']);
+    });
+  });
+
   describe('the tree it guards', () => {
     it('passes src/ and reports every executor it found, with its real parameter names', () => {
       const { status, stdout } = runGuard();
@@ -427,7 +477,7 @@ export const f = () =>
 
     it('is wired into npm and into CI, so a violation turns the build red', () => {
       const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-      expect(pkg.scripts['check:executors']).toBe('node scripts/assert-executor-safety.mjs');
+      expect(pkg.scripts['check:executors']).toBe('node scripts/assert-executor-safety.mjs src');
       expect(pkg.devDependencies.typescript).toBeDefined(); // the guard's only import, already there
       expect(readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8')).toContain(
         'npm run check:executors',
