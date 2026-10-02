@@ -22,7 +22,15 @@ afterEach(() => {
 // put freePort() calls in three more directories in a single merge and three wrong roots then
 // exited 0. An unmarked tree is still scanned and its findings are still named, but it can never
 // exit 0. See the script header.
-const ACQUIRES = 'export function freePort(): number { return 0; }\n';
+//
+// WRITTEN SPLIT, DELIBERATELY — the trick this very issue abolished for BIND_CALL. There it was
+// avoidable: the probe could move out of the scanned tree, and it did, which is why the samples
+// below say deps(18000) outright. Here it is not avoidable, because a probe for the marker must
+// BY DEFINITION contain the marker. Written whole, this constant marks tests/plugin itself, and
+// the header's count becomes 2 of 27 instead of 1 — which is exactly what happened and was caught
+// in review. The pin below runs the documented counting command and fails if it ever happens
+// again, so this split is enforced rather than remembered.
+const ACQUIRES = `export function ${'freePort'}(): number { return 0; }\n`;
 
 function fixture(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'port-guard-'));
@@ -192,5 +200,23 @@ describe('the bound-port guard as a script', () => {
   it('scans helper files too, not only *.test.ts', () => {
     const dir = fixture({ 'login-harness.ts': ACQUIRES + 'deps(18000)' });
     expect(runGuard(dir).stderr).toContain('login-harness.ts:2 deps(18000)');
+  });
+
+  // THE HEADER'S COUNT, EXECUTED. scripts/assert-no-bound-port-literals.mjs documents the command
+  // that counts the directories carrying the marker and claims the answer is one. That claim was
+  // wrong three times in this PR, every time because THIS file marked itself, and every time it
+  // was caught by a human rather than by the suite. Run the documented command verbatim and the
+  // next self-marking is red immediately. Measured cost: 1.0s — `xargs -n1 dirname` forks once per
+  // tracked file. Worth it; shortening it would mean not running the documented command.
+  it('runs the counting command from the script header and gets tests/auth, and nothing else', () => {
+    const COUNT = String.raw`git ls-files '*.ts' | xargs -n1 dirname | sort -u | while read d; do \
+      grep -lE '\bexport (async )?function freePort\(' "$d"/*.ts >/dev/null 2>&1 && echo "$d"; done`;
+    // The command is read out of the header, not retyped here: a header that drifts from the
+    // command actually run would put the claim back on paper only.
+    expect(readFileSync(GUARD, 'utf8')).toContain(
+      String.raw`grep -lE '\bexport (async )?function freePort\(' "$d"/*.ts`,
+    );
+    const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8' });
+    expect(run.stdout.trim().split('\n')).toEqual(['tests/auth']);
   });
 });

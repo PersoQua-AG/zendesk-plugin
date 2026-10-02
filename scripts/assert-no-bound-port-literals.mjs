@@ -40,8 +40,13 @@ const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|li
 // in this repo that holds a tracked .ts file with
 //   git ls-files '*.ts' | xargs -n1 dirname | sort -u | while read d; do \
 //     grep -lE '\bexport (async )?function freePort\(' "$d"/*.ts >/dev/null 2>&1 && echo "$d"; done
-// Measured on this commit: 27 directories, of which **1** carries the definition (tests/auth, in
-// login-harness.ts) and **4** merely mention freePort. The mark is the first number.
+// Measured on this commit by running exactly that command: 27 directories, **1** of which carries
+// the definition (tests/auth, in login-harness.ts), against **4** that match the old `\bfreePort\(`
+// mention. The mark is the first number. That claim is not left on paper: the counting command is
+// executed by tests/plugin/bound-port-literals-guard.test.ts, "runs the counting command from the
+// script header", which demands tests/auth and nothing else. It is pinned because it was wrong
+// three times in this PR — every time because the guard's own test file wrote the marker whole
+// into a fixture constant and thereby marked tests/plugin. That constant is split on purpose now.
 // The one cost, named rather than discovered later: this hangs on a name and a spelling. Renaming
 // freePort(), or rewriting it as `export const freePort = () =>`, makes the guard refuse its own
 // tree. Moving login-harness.ts moves the mark with it and refuses the tree left behind. Loud in
