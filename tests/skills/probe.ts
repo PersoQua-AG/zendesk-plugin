@@ -83,7 +83,7 @@ export async function boot(reply: (c: Call, n: number) => Response = () => json(
     return reply(c, calls.length);
   }) as unknown as typeof fetch;
   const { server } = createServer(
-    { ZENDESK_SUBDOMAIN: 'acme', ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz', CLAUDE_PLUGIN_DATA: dataDir, ...env },
+    { ZENDESK_SUBDOMAIN: 'acme', ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz', ZENDESK_DATA_DIR: dataDir, ...env },
     {
       authManager: { getAccessToken: async () => 'tok' },
       rateLimiter: new RateLimiter({ requestsPerMinute: 400, sleep: async () => {} }),

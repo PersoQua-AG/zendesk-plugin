@@ -27,8 +27,8 @@ describe('resolveAuthConfig', () => {
     expect(config.callbackPort).toBe(8976);
   });
 
-  it('treats an empty-string CLAUDE_PLUGIN_DATA as absent (""→tokens.enc at fs root)', () => {
-    const resolved = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '' }, keychain());
+  it('treats an empty-string ZENDESK_DATA_DIR as absent (""→tokens.enc at fs root)', () => {
+    const resolved = resolveAuthConfig({ ...fullEnv(), ZENDESK_DATA_DIR: '' }, keychain());
     expect(resolved.dataDir).toBe(defaultDataDir(fullEnv()));
     expect(resolved.tokensPath).toBe(`${defaultDataDir(fullEnv())}/tokens.enc`);
   });
@@ -37,9 +37,9 @@ describe('resolveAuthConfig', () => {
     expect(resolveAuthConfig(fullEnv(), keychain()).config.scopes).toEqual(['read', 'write']);
   });
 
-  it('defaults dataDir and honors CLAUDE_PLUGIN_DATA', () => {
+  it('defaults dataDir and honors ZENDESK_DATA_DIR', () => {
     expect(resolveAuthConfig(fullEnv(), keychain()).dataDir).toBe(defaultDataDir(fullEnv()));
-    const overridden = resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: '/var/data' }, keychain());
+    const overridden = resolveAuthConfig({ ...fullEnv(), ZENDESK_DATA_DIR: '/var/data' }, keychain());
     expect(overridden.dataDir).toBe('/var/data');
   });
 
@@ -49,7 +49,7 @@ describe('resolveAuthConfig', () => {
     // the bin writes tokens the server cannot find. The KEY no longer comes from the env at all —
     // it comes from the one Keychain item (src/auth/store-key.ts), which is what makes rotating the
     // client secret harmless; what still has to hold is that both callers read that same one value.
-    const env = { ...fullEnv(), CLAUDE_PLUGIN_DATA: '/var/data' };
+    const env = { ...fullEnv(), ZENDESK_DATA_DIR: '/var/data' };
     const forServer = resolveAuthConfig(env, keychain());
     const forBin = resolveAuthConfig(env, keychain());
     expect(forServer.tokensPath).toBe('/var/data/tokens.enc');
@@ -77,9 +77,9 @@ describe('resolveAuthConfig', () => {
     ).toBeUndefined();
   });
 
-  it('rejects a relative CLAUDE_PLUGIN_DATA instead of placing tokens.enc under the working directory', () => {
-    expect(() => resolveAuthConfig({ ...fullEnv(), CLAUDE_PLUGIN_DATA: 'data' }, keychain())).toThrow(
-      /CLAUDE_PLUGIN_DATA="data" \(must be an absolute path/,
+  it('rejects a relative ZENDESK_DATA_DIR instead of placing tokens.enc under the working directory', () => {
+    expect(() => resolveAuthConfig({ ...fullEnv(), ZENDESK_DATA_DIR: 'data' }, keychain())).toThrow(
+      /ZENDESK_DATA_DIR="data" \(must be an absolute path/,
     );
   });
 

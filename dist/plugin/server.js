@@ -21259,7 +21259,7 @@ function stripPlaceholders(env) {
   return out;
 }
 function dataDirOf(env) {
-  const raw = env.CLAUDE_PLUGIN_DATA;
+  const raw = env.ZENDESK_DATA_DIR;
   return raw && isAbsolute(raw) ? raw : defaultDataDir(env);
 }
 var MIN_CALLBACK_PORT = 1024;
@@ -21335,10 +21335,10 @@ function required2(env, name) {
 }
 function resolveAuthConfig(rawEnv, security = runSecurity) {
   const env = withKeychainConfig(stripPlaceholders(rawEnv), security);
-  const raw = env.CLAUDE_PLUGIN_DATA;
+  const raw = env.ZENDESK_DATA_DIR;
   if (raw && !isAbsolute(raw)) {
     throw new Error(
-      `Invalid environment variable: CLAUDE_PLUGIN_DATA="${raw}" (must be an absolute path \u2014 a relative one places tokens.enc under whatever working directory the host started the server in).`
+      `Invalid environment variable: ZENDESK_DATA_DIR="${raw}" (must be an absolute path \u2014 a relative one places tokens.enc under whatever working directory the host started the server in).`
     );
   }
   const dataDir = raw || defaultDataDir(env);
@@ -22313,7 +22313,10 @@ async function diagnosticsReport(input) {
     `os release: ${release()}`,
     `node: ${process.version}`,
     `CLAUDE_PLUGIN_ROOT: ${substitutionState(input.rawEnv.CLAUDE_PLUGIN_ROOT)}`,
-    `CLAUDE_PLUGIN_DATA: ${substitutionState(input.rawEnv.CLAUDE_PLUGIN_DATA)}`,
+    // Reported as an observation of the HOST, not of our configuration: the server does not read this
+    // variable (see dataDirOf). It stays in the report because it is the fastest way to see that a host
+    // has changed what it does with the name again, which is what #68 cost two releases to find.
+    `CLAUDE_PLUGIN_DATA (host-set, not read by this server): ${substitutionState(input.rawEnv.CLAUDE_PLUGIN_DATA)}`,
     "client capabilities from initialize (verbatim):",
     JSON.stringify(input.clientCapabilities ?? null, null, 2),
     "callback port:",
@@ -22326,7 +22329,7 @@ function registerDiagnosticsTool(server, deps) {
   server.registerTool(
     "zendesk_diagnostics",
     {
-      description: "Report how this host loaded the plugin: hostname, platform, OS release, whether CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA were substituted (never their values), the client capabilities announced in initialize, and whether the OAuth callback port binds per address family. Carries no configuration value and no credential."
+      description: "Report how this host loaded the plugin: hostname, platform, OS release, whether CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA were substituted by the host (never their values; the server reads neither for its data directory), the client capabilities announced in initialize, and whether the OAuth callback port binds per address family. Carries no configuration value and no credential."
     },
     async () => toText(
       await diagnosticsReport({

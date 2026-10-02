@@ -26,11 +26,15 @@ const raw = readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8');
 const plugin = JSON.parse(raw);
 const env: Record<string, string> = plugin.mcpServers.zendesk.env ?? {};
 
-// The host refuses an env name it sets itself. Read out of the Claude Desktop bundle
-// (/Applications/Claude.app/Contents/Resources/app.asar, the reserved-name predicate behind the
-// "env declares reserved variable name" throw): an exact-name list plus these prefixes, with PATH
-// and CLAUDE_PLUGIN_ROOT the only two exemptions. The prefixes are the part that is stable enough
-// to pin; a name outside them can still be reserved, so this is a floor, not a full check.
+// The host refuses an env name it sets itself. These are the reserved PREFIXES, not the whole list:
+// the predicate also holds an exact-name list of ~90 entries (NODE_OPTIONS, HOME, TMPDIR, APPDATA, the
+// GO*/PERL*/PYTHON* families, …) that is too version-specific to copy here, so this guard is a FLOOR —
+// a reserved name outside these prefixes would still pass it.
+//
+// Re-derive rather than trust: read Claude Desktop 2.19675.0's
+// /Applications/Claude.app/Contents/Resources/app.asar and find the string
+// "reserved variable name"; the predicate called just before that throw holds both lists, and the only
+// two exemptions are PATH and CLAUDE_PLUGIN_ROOT. Claude Code 2.1.287 carries the same families.
 const RESERVED_PREFIXES = /^(CLAUDE_|ANTHROPIC_|OTEL_|LD_|DYLD_|BASH_FUNC_|GIT_|NPM_CONFIG_|UV_)/;
 
 describe('the Claude Code plugin manifest', () => {

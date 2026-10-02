@@ -52,14 +52,22 @@ export function stripPlaceholders(env) {
     }
     return out;
 }
-// A relative CLAUDE_PLUGIN_DATA is never used as given: the host's working directory is not the
-// extension's, so "data" would put tokens.enc and the cache wherever the server happened to be
-// started and lose both on the next launch. resolveAuthConfig REJECTS such a value (loudly, naming
-// the variable); this resolver is what the degraded startup path falls back to, where there is
-// nothing left to reject into.
+// One data directory on every host. CLAUDE_PLUGIN_DATA is deliberately NOT read: Claude Code injects
+// it per install and Claude Desktop reserves the name outright, so reading it meant the SAME account
+// resolved tokens.enc to two different places depending on which host started the server (#68). Since
+// neither manifest passes anything, a production install always lands on defaultDataDir() — the
+// property tests/plugin/mcpb-manifest.test.ts already asserted for the MCPB side, now true for both.
+//
+// ZENDESK_DATA_DIR is the one override: env-only and absent from both manifests, like the REMOTE_*
+// settings. It is how the suites stay off the real token file and how an operator relocates the store.
+//
+// A relative value is never used as given: the host's working directory is not the extension's, so
+// "data" would put tokens.enc and the cache wherever the server happened to be started and lose both
+// on the next launch. resolveAuthConfig REJECTS such a value (loudly, naming the variable); this
+// resolver is what the degraded startup path falls back to, where there is nothing left to reject into.
 export function dataDirOf(env) {
     // Falsy-coalesce, not ??: an empty-string value is "absent", not a value.
-    const raw = env.CLAUDE_PLUGIN_DATA;
+    const raw = env.ZENDESK_DATA_DIR;
     return raw && isAbsolute(raw) ? raw : defaultDataDir(env);
 }
 // A port a non-root process can actually be handed: below 1024 is privileged, above 65535 does not
@@ -219,11 +227,11 @@ function required(env, name) {
 export function resolveAuthConfig(rawEnv, security = runSecurity) {
     const env = withKeychainConfig(stripPlaceholders(rawEnv), security);
     // Falsy-coalesce (not ??): an empty-string env var is "absent", not a value.
-    // Otherwise CLAUDE_PLUGIN_DATA='' → tokens.enc at the fs root, and
+    // Otherwise ZENDESK_DATA_DIR='' → tokens.enc at the fs root, and
     // ZENDESK_OAUTH_CALLBACK_PORT='' → Number('')===0 → bind to port 0.
-    const raw = env.CLAUDE_PLUGIN_DATA;
+    const raw = env.ZENDESK_DATA_DIR;
     if (raw && !isAbsolute(raw)) {
-        throw new Error(`Invalid environment variable: CLAUDE_PLUGIN_DATA="${raw}" (must be an absolute path \u2014 a ` +
+        throw new Error(`Invalid environment variable: ZENDESK_DATA_DIR="${raw}" (must be an absolute path \u2014 a ` +
             'relative one places tokens.enc under whatever working directory the host started the server in).');
     }
     const dataDir = raw || defaultDataDir(env);

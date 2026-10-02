@@ -58,7 +58,7 @@ async function start({ liveSession = true, refreshGrant = true, breakMint = fals
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: SECRET,
     REMOTE_TOKEN_ENC_KEY: KEY,
-    CLAUDE_PLUGIN_DATA: dataDir,
+    ZENDESK_DATA_DIR: dataDir,
   };
   const config: OAuthConfig = { subdomain: 'acme', clientId: 'client-abc', clientSecret: SECRET, callbackPort: 8976, scopes: ['read', 'write'] };
   const resolver = new IdentityAuthResolver(new IdentityTokenStore(join(dataDir, 'users'), KEY), config);
@@ -266,7 +266,7 @@ describe('downstream refresh grant over /token (AC1–AC5)', () => {
     expect(readdirSync(join(dataDir, 'refresh'))).toHaveLength(2);
 
     buildRemoteApp(
-      { ZENDESK_SUBDOMAIN: 'acme', ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_OAUTH_CLIENT_SECRET: SECRET, REMOTE_TOKEN_ENC_KEY: KEY, CLAUDE_PLUGIN_DATA: dataDir },
+      { ZENDESK_SUBDOMAIN: 'acme', ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_OAUTH_CLIENT_SECRET: SECRET, REMOTE_TOKEN_ENC_KEY: KEY, ZENDESK_DATA_DIR: dataDir },
       { refreshGrant: false },
     );
     expect(readdirSync(join(dataDir, 'refresh'))).toHaveLength(0);

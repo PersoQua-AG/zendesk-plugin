@@ -113,7 +113,7 @@ async function bootTwoIdentity(zdTokens: Record<string, string>): Promise<{
     // suite asserts cross-identity isolation, not key strength, so their key is deliberately left
     // as it was rather than silently re-keyed.
     REMOTE_TOKEN_ENC_KEY: '0+k4qZ+4xicM8rKBVMRYFikJpkLODNCh33wHb08pJyU=',
-    CLAUDE_PLUGIN_DATA: dataDir,
+    ZENDESK_DATA_DIR: dataDir,
   };
   const config: OAuthConfig = { subdomain: 'acme', clientId: 'client-abc', clientSecret: SECRET, callbackPort: 8976, scopes: ['read', 'write'] };
   const resolver = new IdentityAuthResolver(new IdentityTokenStore(join(dataDir, 'users'), 'enc-key-123'), config);

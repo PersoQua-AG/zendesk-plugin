@@ -13,7 +13,7 @@ export function registerDiagnosticsTool(
     'zendesk_diagnostics',
     {
       description:
-        'Report how this host loaded the plugin: hostname, platform, OS release, whether CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA were substituted (never their values), the client capabilities announced in initialize, and whether the OAuth callback port binds per address family. Carries no configuration value and no credential.',
+        'Report how this host loaded the plugin: hostname, platform, OS release, whether CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA were substituted by the host (never their values; the server reads neither for its data directory), the client capabilities announced in initialize, and whether the OAuth callback port binds per address family. Carries no configuration value and no credential.',
     },
     async () =>
       toText(

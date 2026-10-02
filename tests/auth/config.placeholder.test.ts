@@ -13,7 +13,7 @@ const fullEnv = (): NodeJS.ProcessEnv => ({
   ZENDESK_SUBDOMAIN: 'acme',
   ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
   ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
-  CLAUDE_PLUGIN_DATA: '/var/data',
+  ZENDESK_DATA_DIR: '/var/data',
 });
 
 const dirs: string[] = [];
@@ -25,7 +25,7 @@ afterEach(() => {
 function serverEnv(): NodeJS.ProcessEnv {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-placeholder-'));
   dirs.push(dataDir);
-  return { ...fullEnv(), CLAUDE_PLUGIN_DATA: dataDir };
+  return { ...fullEnv(), ZENDESK_DATA_DIR: dataDir };
 }
 
 describe('unsubstituted ${user_config.*} placeholders', () => {
@@ -38,10 +38,10 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
     expect(Number.isNaN(config.callbackPort)).toBe(false);
   });
 
-  it('a placeholder CLAUDE_PLUGIN_DATA does not become a literal directory name', () => {
+  it('a placeholder ZENDESK_DATA_DIR does not become a literal directory name', () => {
     const { dataDir } = resolveAuthConfig({
       ...fullEnv(),
-      CLAUDE_PLUGIN_DATA: '${user_config.data_dir}',
+      ZENDESK_DATA_DIR: '${user_config.data_dir}',
     }, keychain());
     expect(dataDir).not.toContain('${');
   });

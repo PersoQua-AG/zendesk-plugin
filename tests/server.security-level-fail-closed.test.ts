@@ -25,7 +25,7 @@ function levelFor(raw: string | undefined): SecurityLevel {
     ZENDESK_SUBDOMAIN: 'acme',
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
-    CLAUDE_PLUGIN_DATA: dataDir,
+    ZENDESK_DATA_DIR: dataDir,
   };
   if (raw !== undefined) env.ZENDESK_SECURITY_LEVEL = raw;
   return createServer(env, { security: keychain() }).ctx.securityLevel;

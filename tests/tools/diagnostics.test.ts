@@ -49,7 +49,7 @@ describe('the diagnostics report', () => {
     expect(text).toContain(`platform: ${process.platform}`);
     expect(text).toContain(`os release: ${release()}`);
     expect(text).toContain('CLAUDE_PLUGIN_ROOT: substituted');
-    expect(text).toContain('CLAUDE_PLUGIN_DATA: literal-placeholder');
+    expect(text).toContain('CLAUDE_PLUGIN_DATA (host-set, not read by this server): literal-placeholder');
     expect(text).not.toContain('secretname');
     expect(text).not.toContain('${CLAUDE_PLUGIN_DATA}');
   });
@@ -85,7 +85,8 @@ describe('zendesk_diagnostics as a tool', () => {
         ZENDESK_SUBDOMAIN: 'acme',
         ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
         ZENDESK_OAUTH_CALLBACK_PORT: String(freePort()),
-        CLAUDE_PLUGIN_DATA: tempDir(),
+        CLAUDE_PLUGIN_DATA: '/host/injected/path',
+        ZENDESK_DATA_DIR: tempDir(),
       },
       { security: keychain() },
     );
@@ -99,14 +100,16 @@ describe('zendesk_diagnostics as a tool', () => {
       const text = result.content.map((c) => c.text ?? '').join('\n');
       expect(text).toContain('client capabilities from initialize (verbatim):');
       expect(text).toContain('"roots"');
-      expect(text).toContain('CLAUDE_PLUGIN_DATA: substituted');
+      expect(text).toContain('CLAUDE_PLUGIN_DATA (host-set, not read by this server): substituted');
+      // and it did NOT become the data directory: that is the whole point of #68's follow-up.
+      expect(text).not.toContain('/host/injected/path');
     } finally {
       await client.close();
     }
   });
 
   it('is offered even when the plugin started with no configuration at all', async () => {
-    const { server } = createServer({ CLAUDE_PLUGIN_DATA: tempDir() }, { security: keychain() });
+    const { server } = createServer({ ZENDESK_DATA_DIR: tempDir() }, { security: keychain() });
     const [clientT, serverT] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'diag-unconfigured', version: '0.0.0' });
     await Promise.all([server.connect(serverT), client.connect(clientT)]);

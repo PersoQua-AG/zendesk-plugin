@@ -24,7 +24,7 @@ async function boot(): Promise<string> {
     ZENDESK_OAUTH_CLIENT_ID: 'client-abc',
     ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz',
     REMOTE_TOKEN_ENC_KEY: KEY,
-    CLAUDE_PLUGIN_DATA: dataDir,
+    ZENDESK_DATA_DIR: dataDir,
   };
   const issued = new IssuedTokenStore(join(dataDir, 'issued'), KEY);
   const { app } = buildRemoteApp(env, { issued });
