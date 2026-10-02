@@ -52,14 +52,14 @@ export function stripPlaceholders(env) {
     }
     return out;
 }
-// One data directory on every host. CLAUDE_PLUGIN_DATA is deliberately NOT read: Claude Code injects
-// it per install and Claude Desktop reserves the name outright, so reading it meant the SAME account
-// resolved tokens.enc to two different places depending on which host started the server (#68). Since
-// neither manifest passes anything, a production install always lands on defaultDataDir() — the
-// property tests/plugin/mcpb-manifest.test.ts already asserted for the MCPB side, now true for both.
-//
-// ZENDESK_DATA_DIR is the one override: env-only and absent from both manifests, like the REMOTE_*
-// settings. It is how the suites stay off the real token file and how an operator relocates the store.
+// ZENDESK_DATA_DIR is the one override, and it is a seam rather than a setting: env-only and passed by
+// neither manifest, like the REMOTE_* values. It is how the suites stay off the real token file, since
+// defaultDataDir reaches homedir() on darwin and no fixture can redirect that. Two cautions for anyone
+// pointing it at a real directory: it is only checked for absoluteness, so a path inside the plugin's
+// own versioned directory loses tokens on update — the failure defaultDataDir exists to prevent — and
+// an existing tokens.enc SYMLINK there is followed, not replaced. And it lives in the same ZENDESK_
+// namespace the README has users export, while Claude Code inherits the shell and a GUI-launched
+// Desktop does not: exporting it for one host and not the other recreates #68's split under a new name.
 //
 // A relative value is never used as given: the host's working directory is not the extension's, so
 // "data" would put tokens.enc and the cache wherever the server happened to be started and lose both

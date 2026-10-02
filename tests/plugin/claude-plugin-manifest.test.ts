@@ -15,7 +15,12 @@
 //   [PluginMcpHostConfig] Plugin "…" server "zendesk": failed to build host proxy target:
 //   env declares reserved variable name "CLAUDE_PLUGIN_DATA"
 //
-// So the second negative property: the env block may declare no name the host reserves for itself.
+// So the second negative property, and it is asserted as the strongest form available: there is no env
+// block at all. That beats enumerating what the host reserves (95 exact names plus the CLAUDE_/GIT_/
+// NPM_CONFIG_/… prefixes, minus three UV_ allowlist entries — re-derive by finding the string "reserved
+// variable name" in Claude Desktop 2.19675.0's /Applications/Claude.app/Contents/Resources/app.asar),
+// and it also forbids a name the host does NOT reserve, such as our own ZENDESK_DATA_DIR, whose whole
+// point is that no manifest passes it.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -24,18 +29,6 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const raw = readFileSync(join(root, '.claude-plugin/plugin.json'), 'utf8');
 const plugin = JSON.parse(raw);
-const env: Record<string, string> = plugin.mcpServers.zendesk.env ?? {};
-
-// The host refuses an env name it sets itself. These are the reserved PREFIXES, not the whole list:
-// the predicate also holds an exact-name list of ~90 entries (NODE_OPTIONS, HOME, TMPDIR, APPDATA, the
-// GO*/PERL*/PYTHON* families, …) that is too version-specific to copy here, so this guard is a FLOOR —
-// a reserved name outside these prefixes would still pass it.
-//
-// Re-derive rather than trust: read Claude Desktop 2.19675.0's
-// /Applications/Claude.app/Contents/Resources/app.asar and find the string
-// "reserved variable name"; the predicate called just before that throw holds both lists, and the only
-// two exemptions are PATH and CLAUDE_PLUGIN_ROOT. Claude Code 2.1.287 carries the same families.
-const RESERVED_PREFIXES = /^(CLAUDE_|ANTHROPIC_|OTEL_|LD_|DYLD_|BASH_FUNC_|GIT_|NPM_CONFIG_|UV_)/;
 
 describe('the Claude Code plugin manifest', () => {
   it('references no plugin user configuration at all — the one line that dropped the server', () => {
@@ -43,15 +36,16 @@ describe('the Claude Code plugin manifest', () => {
     expect(plugin.userConfig).toBeUndefined();
   });
 
-  it('declares no env name the host reserves — the one line that dropped the server after #68', () => {
-    // CLAUDE_PLUGIN_DATA in particular: the host injects it into every plugin stdio server itself,
-    // so declaring it was never a passthrough, only a rejection. Same rationale as the MCPB side
-    // (tests/plugin/mcpb-manifest.test.ts).
+  it('declares no env at all — the one line that dropped the server after #68', () => {
+    expect(plugin.mcpServers.zendesk.env).toBeUndefined();
+    // Named on the raw text too, so a reappearance anywhere — command, args, a second server — fails
+    // here rather than only where it is read. The host sets this one itself (Claude Code injects it;
+    // Desktop reserves the name), so declaring it was never a passthrough, only a rejection. Same
+    // rationale as the MCPB side, tests/plugin/mcpb-manifest.test.ts.
     expect(raw).not.toContain('CLAUDE_PLUGIN_DATA');
-    const reserved = Object.keys(env).filter(
-      (name) => name.toUpperCase() !== 'CLAUDE_PLUGIN_ROOT' && RESERVED_PREFIXES.test(name.toUpperCase()),
-    );
-    expect(reserved).toEqual([]);
+    // And the data-dir override stays a test and operator seam: a manifest that passed it would
+    // silently restore the per-host token directories this file exists to prevent.
+    expect(raw).not.toContain('ZENDESK_DATA_DIR');
   });
 
   it('still launches the bundled plugin server from the plugin root', () => {

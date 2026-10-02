@@ -122,7 +122,8 @@ bridge; dropping server`). Settings therefore reach the server as ordinary
 environment variables — and when there are none, the **first-run setup page**
 takes over (see below), so nothing has to be configured by hand at all. `zendesk_diagnostics` reports what the
 host actually did with the plugin — platform, whether `${CLAUDE_PLUGIN_ROOT}` and
-`${CLAUDE_PLUGIN_DATA}` were substituted, the client capabilities announced in
+`${CLAUDE_PLUGIN_DATA}` were substituted by the host (it reads neither for its data
+directory), the client capabilities announced in
 `initialize`, and whether the callback port binds on each address family. It
 reports those as states, never as values, so its output is safe to paste into an
 issue.
@@ -217,15 +218,13 @@ returns, then run `zendesk_login` once more to finish — that is the whole step
 (see section A, step 4).
 
 **Claude Code:** the one-time first-token flow runs a local browser callback via
-the CLI. From the plugin directory, with the same
-subdomain / client credentials **and the same `CLAUDE_PLUGIN_DATA`** the server
-uses exported:
+the CLI. From the plugin directory, with the same subdomain and client
+credentials the server uses exported:
 
 ```bash
 export ZENDESK_SUBDOMAIN=acme
 export ZENDESK_OAUTH_CLIENT_ID=...        # from step 1
 export ZENDESK_OAUTH_CLIENT_SECRET=...    # only for a confidential client
-export CLAUDE_PLUGIN_DATA=...             # MUST match what the server uses (see below)
 export ZENDESK_OAUTH_CALLBACK_PORT=8976   # only if you overrode oauth_callback_port
 npm run authorize
 ```
@@ -236,26 +235,22 @@ captures the redirect, exchanges the code, and saves encrypted tokens
 then refreshes the token automatically; you only re-run `authorize` if you
 revoke access or rotate the client secret.
 
-> **`CLAUDE_PLUGIN_DATA` must match.** The server receives `CLAUDE_PLUGIN_DATA`
-> from its `plugin.json` env and reads `tokens.enc` from `$CLAUDE_PLUGIN_DATA`.
-> The `authorize` CLI writes to the **same** path only if you export the same
-> value — otherwise it writes to the default per-user data directory and the
-> server reports "No authorization found". If you leave `CLAUDE_PLUGIN_DATA`
-> unset, the CLI prints a warning and the absolute path it used; make sure that
-> path is where the server looks. The tokens are encrypted with a random key kept
-> in the macOS Keychain (service `zendesk-plugin`, account `token-store-key`),
-> created on first use — so the same **path** is all the server needs to pick
-> them up, and rotating the client secret leaves the store readable.
-> `CLAUDE_PLUGIN_DATA` must be an absolute path; a relative one is refused rather
-> than resolved against whatever working directory the host used.
+> **There is no path to match.** The `authorize` CLI and the server resolve the
+> same directory on their own, so nothing has to be exported to line them up —
+> the CLI prints the absolute `tokens.enc` path it used, and that is where the
+> server looks. The tokens are encrypted with a random key kept in the macOS
+> Keychain (service `zendesk-plugin`, account `token-store-key`), created on
+> first use, so the **path** is all the server needs to pick them up and
+> rotating the client secret leaves the store readable.
 
-> **Where credentials live.** With `CLAUDE_PLUGIN_DATA` unset — which is the
-> Desktop Extension case — `tokens.enc` (mode `0600`) and the response cache go
-> to a stable per-user directory: `~/Library/Application Support/zendesk-plugin`
-> on macOS, `%APPDATA%\zendesk-plugin` on Windows,
-> `$XDG_DATA_HOME/zendesk-plugin` (or `~/.local/share/zendesk-plugin`) elsewhere.
-> It sits outside the extension directory, so an extension update does not
-> discard the authorization. The bundle itself never contains credentials.
+> **Where credentials live.** `tokens.enc` (mode `0600`) and the response cache
+> go to one stable per-user directory, the same under Claude Code and the Desktop
+> Extension: `~/Library/Application Support/zendesk-plugin` on macOS,
+> `%APPDATA%\zendesk-plugin` on Windows, `$XDG_DATA_HOME/zendesk-plugin` (or
+> `~/.local/share/zendesk-plugin`) elsewhere. It sits outside the plugin and
+> extension directories, so an update does not discard the authorization, and it
+> does not move when a host changes how it launches the server (#68). The bundle
+> itself never contains credentials.
 
 ### 4. Confirm
 Ask Claude: **"Who am I in Zendesk?"** → runs `zendesk_get_me` and confirms auth.

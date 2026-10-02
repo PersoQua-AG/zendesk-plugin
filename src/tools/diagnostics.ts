@@ -48,9 +48,6 @@ export async function diagnosticsReport(input: DiagnosticsInput): Promise<string
     `os release: ${release()}`,
     `node: ${process.version}`,
     `CLAUDE_PLUGIN_ROOT: ${substitutionState(input.rawEnv.CLAUDE_PLUGIN_ROOT)}`,
-    // Reported as an observation of the HOST, not of our configuration: the server does not read this
-    // variable (see dataDirOf). It stays in the report because it is the fastest way to see that a host
-    // has changed what it does with the name again, which is what #68 cost two releases to find.
     `CLAUDE_PLUGIN_DATA (host-set, not read by this server): ${substitutionState(input.rawEnv.CLAUDE_PLUGIN_DATA)}`,
     'client capabilities from initialize (verbatim):',
     JSON.stringify(input.clientCapabilities ?? null, null, 2),

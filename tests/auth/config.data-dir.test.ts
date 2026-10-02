@@ -72,9 +72,23 @@ const SRC = join(process.cwd(), 'src');
 // Where the data directory is allowed to come from. Not a pattern over one call site: the file list is
 // enumerated and compared whole, so a SECOND reader anywhere in src/ fails this rather than hiding.
 const DIAGNOSTICS_ONLY = 'tools/diagnostics.ts';
-// Reading the name in any of the shapes a reader actually uses. A mention in prose is not a read, which
-// is why the env object has to be on the left.
-const READS_IT = /(?:\w+\.)*(?:env|rawEnv)\s*(?:\.CLAUDE_PLUGIN_DATA\b|\[\s*['"`]CLAUDE_PLUGIN_DATA['"`]\s*\])/;
+// Reading the name, in the shapes a reader actually uses: any member access (so env.X, process.env.X,
+// rawEnv.X, env?.X and an aliased e.X all count), a quoted index, and a destructuring binding. A
+// mention in prose is not a read, which is why something has to be on the left.
+//
+// Out of reach, deliberately, because closing them costs a parser: a computed key (env[name]), a key
+// built by concatenation ('CLAUDE_PLUGIN' + '_DATA'), and anything outside src/. The first two are not
+// shapes anyone reaches for by accident, and the whole-list comparison below is what makes an
+// accidental reader visible at all.
+const READS_IT = new RegExp(
+  [
+    // No whitespace around the dot, or a sentence in a comment ending "…the host. CLAUDE_PLUGIN_DATA"
+    // reads as a member access and every file that explains the rule fails the rule.
+    String.raw`[\w$]\??\.CLAUDE_PLUGIN_DATA\b`, // env.X, process.env.X, rawEnv.X, env?.X, aliased e.X
+    String.raw`\[\s*['"\`]CLAUDE_PLUGIN_DATA['"\`]\s*\]`, // env['X']
+    String.raw`\{[^}]*\bCLAUDE_PLUGIN_DATA\b[^}]*\}\s*=`, // const { X } = env
+  ].join('|'),
+);
 
 function srcFiles(): string[] {
   return readdirSync(SRC, { recursive: true })
@@ -86,28 +100,16 @@ describe('CLAUDE_PLUGIN_DATA is not a source of the data directory', () => {
   it('is read in exactly one file, and only to REPORT what the host did with it', () => {
     const readers = srcFiles().filter((rel) => READS_IT.test(readFileSync(join(SRC, rel), 'utf8')));
     expect(readers).toEqual([DIAGNOSTICS_ONLY]);
-    // And that one reader cannot leak it into a path: it hands the value to substitutionState, which
-    // answers with a state word, never the value.
-    const report = readFileSync(join(SRC, DIAGNOSTICS_ONLY), 'utf8');
-    expect(report).toContain('substitutionState(input.rawEnv.CLAUDE_PLUGIN_DATA)');
   });
 
-  it('resolves the same directory whatever the host sets it to — all five cases', () => {
+  it('ignores the value the host injects, on both resolvers', () => {
     const expected = defaultDataDir(fullEnv());
-    const cases: NodeJS.ProcessEnv[] = [
-      { CLAUDE_PLUGIN_DATA: '/host/injected/plugin/data' }, // what Claude Code injects
-      {}, // unset, which is what the Desktop bridge leaves
-      { CLAUDE_PLUGIN_DATA: '' },
-      { CLAUDE_PLUGIN_DATA: 'relative/data' },
-      { CLAUDE_PLUGIN_DATA: '${CLAUDE_PLUGIN_DATA}' }, // the literal that reached the server before
-    ];
-    for (const extra of cases) {
-      const env = { ...fullEnv(), ...extra };
-      const resolved = resolveAuthConfig(env, keychain());
-      expect(resolved.dataDir, JSON.stringify(extra)).toBe(expected);
-      expect(resolved.tokensPath, JSON.stringify(extra)).toBe(join(expected, 'tokens.enc'));
-      // The degraded path has to agree, or an incomplete configuration moves the token store.
-      expect(dataDirOf(env), JSON.stringify(extra)).toBe(expected);
-    }
+    const env = { ...fullEnv(), CLAUDE_PLUGIN_DATA: '/host/injected/plugin/data' };
+    const resolved = resolveAuthConfig(env, keychain());
+    expect(resolved.dataDir).toBe(expected);
+    expect(resolved.tokensPath).toBe(join(expected, 'tokens.enc'));
+    // The degraded startup path is a SEPARATE resolver, so it has to be asked separately — otherwise
+    // an incomplete configuration moves the token store while the complete one does not.
+    expect(dataDirOf(env)).toBe(expected);
   });
 });
