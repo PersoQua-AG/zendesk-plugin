@@ -2,7 +2,7 @@
 // Deterministic halves of skills/o365-bridge/SKILL.md (S0 rows OB-1, OB-4). The M365 side comes
 // from a foreign connector and is out of the plugin's reach (recorded cases OB-2, OB-3).
 import { describe, it, expect, vi } from 'vitest';
-import { boot, filesIn, json, once, read, sample, type Booted } from './probe.js';
+import { boot, filesIn, json, once, read, sample, toolsNamedIn, type Booted } from './probe.js';
 
 // Modules that can open a socket. Only an injected fetchImpl may reach the network from src/.
 const NET = /^(node:)?(https?|http2|net|tls|dgram)$|^(undici|axios|node-fetch|express)$/;
@@ -85,5 +85,17 @@ describe('o365-bridge: ticket text is screened before it builds the summary (SKI
     expect(r.text).toMatch(/^Subject: <zendesk-content-ticket-5-subject-[0-9a-f]+>$/m);
     expect(r.text).toMatch(/^Description: <zendesk-content-ticket-5-description-[0-9a-f]+>$/m);
     expect(r.text).toContain('WARNING: prompt-injection patterns detected');
+  });
+});
+
+describe('o365-bridge: the Zendesk write set it names is pinned (SKILL.md "Side-effect contract")', () => {
+  // Static, not runtime: a name is a write iff it heads an entry of the probe's pinned WRITES list.
+  it('OB-3 failcheck: the only Zendesk write the skill and /escalate name is zendesk_add_comment', () => {
+    const writes = new Set(
+      [...read('tests/skills/probe.test.ts').matchAll(/^\s*'(zendesk_[a-z0-9_]+): [A-Z]+ /gm)].map((m) => m[1]),
+    );
+    expect(writes.size).toBeGreaterThan(1); // the WRITES list was really found, so the filter below can bite
+    const named = toolsNamedIn(`${read('skills/o365-bridge/SKILL.md')}\n${read('commands/escalate.md')}`);
+    expect(named.filter((n) => writes.has(n))).toEqual(['zendesk_add_comment']);
   });
 });
