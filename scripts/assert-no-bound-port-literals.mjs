@@ -120,8 +120,11 @@ const findings = sources.flatMap(([path, source]) =>
 );
 
 // Printed in every outcome, pass or fail: a green line that names the tree and the count is the
-// only way a reader can tell "clean" from "looked at almost nothing".
-console.log(`Bound port literals in ${show(target)}/: ${files.length} files scanned.`);
+// only way a reader can tell "clean" from "looked at almost nothing". On stderr when the tree is
+// not the guarded one: a run that ends in 1 must leave nothing on stdout that reads like a report.
+(marked ? console.log : console.error)(
+  `Bound port literals in ${show(target)}/: ${files.length} files scanned.`,
+);
 
 if (findings.length > 0) {
   console.error('\nRefusing the tree: a bind call names a fixed port.');

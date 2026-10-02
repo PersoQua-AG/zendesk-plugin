@@ -134,6 +134,10 @@ describe('the bound-port guard as a script', () => {
     expect(bare.status).toBe(1);
     expect(bare.stderr).toMatch(/p\.ts:3 deps\(18000\)/);
     expect(bare.stderr).toContain('Not the guarded tree');
+    // The streams are read apart, never merged: a run that ends in 1 leaves nothing on stdout
+    // that reads like a report. The count line used to go to stdout unconditionally, so a wrong
+    // tree left one there. spawnSync hands stdout and stderr back separately — no 2>&1.
+    expect(bare.stdout).toBe('');
 
     // The contrast that remains: a marked tree reports the same finding WITHOUT the wrong-tree
     // notice, so the two runs are still told apart by their message, not only by their exit code.
@@ -145,6 +149,10 @@ describe('the bound-port guard as a script', () => {
     expect(pretending.status).toBe(1);
     expect(pretending.stderr).toMatch(/p\.ts:3 deps\(18000\)/);
     expect(pretending.stderr).not.toContain('Not the guarded tree');
+    // And the other side of the same cut: a guarded tree still reports its count on stdout, even
+    // when it is refused for a finding. The line moves with the mark, not with the exit code.
+    expect(pretending.stdout).toContain('files scanned.');
+    expect(pretending.stderr).not.toContain('files scanned.');
   });
 
   // The wiring IS the scan root now, so an unwitnessed edit there is the M3 mutation one level up.
