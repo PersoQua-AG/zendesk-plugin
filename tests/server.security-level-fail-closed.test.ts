@@ -6,6 +6,7 @@ import { createServer, SECURITY_LEVELS } from '../src/server.js';
 import { screenContent, type SecurityLevel } from '../src/security/screen.js';
 import { summariseScreened } from '../src/tools/screening.js';
 import { startRemote, zendeskMock, type RemoteHarness } from './server-remote/harness.js';
+import { keychain } from './auth/keychain.js';
 
 const dirs: string[] = [];
 let h: RemoteHarness | undefined;
@@ -27,7 +28,7 @@ function levelFor(raw: string | undefined): SecurityLevel {
     CLAUDE_PLUGIN_DATA: dataDir,
   };
   if (raw !== undefined) env.ZENDESK_SECURITY_LEVEL = raw;
-  return createServer(env).ctx.securityLevel;
+  return createServer(env, { security: keychain() }).ctx.securityLevel;
 }
 
 // tests/server.security-level.test.ts pins the fix on a list of typos. What a list cannot state is

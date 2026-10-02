@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createServer as createHttpServer } from 'node:http';
+import { createServer as createHttpServer, type Server } from 'node:http';
 import { connect, type Socket } from 'node:net';
 import { abortLoginFlow, type LoginDeps } from '../../src/tools/login.js';
 import type { OAuthConfig } from '../../src/auth/oauth-flow.js';
@@ -334,7 +334,49 @@ export function config(port: number): OAuthConfig {
 }
 
 export function deps(port: number, overrides: Partial<LoginDeps> = {}): LoginDeps {
-  return { config: config(port), tokensPath, ...overrides };
+  // SECRET doubles as the store key here: the suites verify the file with
+  // `new TokenStore(tokensPath, SECRET)`, and one value keeps writer and reader in step. In
+  // production the two are unrelated — the key comes from the Keychain (src/auth/store-key.ts).
+  //
+  // `setup` is here because src/server.ts always carries it for an install whose configuration resolves —
+  // a configured one can still be the WRONG one, which is what setup=true is for — so a fixture without it
+  // would be a shape the product no longer produces. That lesson cost a round: a defect was "fixed"
+  // against a LoginDeps the server could not build, while the server went on answering the old way. The
+  // writer throws rather than stores, because none of the flows these suites drive may configure anything.
+  return {
+    config: config(port),
+    tokensPath,
+    tokenStoreKey: SECRET,
+    setup: {
+      writeConfig: () => {
+        throw new Error('an ordinary login must never store a configuration');
+      },
+    },
+    ...overrides,
+  };
+}
+
+// A port made genuinely unavailable to the production listener, which binds 127.0.0.1 AND ::1 since
+// #68. ONE wildcard listener is not enough to block it: on macOS a `::` bind does not reserve
+// 127.0.0.1 (measured, tests/server-remote/listen-loopback.test.ts:14-16), so the listener would come
+// up on the other family and a case meaning to pin a failed bind would pin nothing. Returns the
+// release function; a family already covered by the first bind is skipped rather than failed.
+export async function occupyPort(port: number): Promise<() => Promise<void>> {
+  const held: Server[] = [];
+  for (const address of ['127.0.0.1', '::1']) {
+    await new Promise<void>((done) => {
+      const server = createHttpServer(() => {});
+      server.on('error', () => done());
+      server.listen(port, address, () => {
+        held.push(server);
+        done();
+      });
+    });
+  }
+  expect(held.length, `nothing could be bound on port ${port}`).toBeGreaterThan(0);
+  return async () => {
+    await Promise.all(held.map((server) => new Promise<void>((closed) => server.close(() => closed()))));
+  };
 }
 
 export function authorizationUrl(text: string): URL {

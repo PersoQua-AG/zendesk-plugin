@@ -11,6 +11,7 @@ import {
   deps,
   freePort,
   hitCallback,
+  occupyPort,
   setupLoginHarness,
   tokensPath,
 } from './login-harness.js';
@@ -22,6 +23,7 @@ function arrived(port: number, code = 'auth-code'): NonNullable<LoginDeps['liste
   return async (): Promise<CallbackListener> => ({
     promise: Promise.resolve({ code, redirectUri: `http://localhost:${port}/callback` }),
     close: () => {},
+    addresses: ['127.0.0.1', '::1'],
   });
 }
 
@@ -176,8 +178,7 @@ describe('zendesk_login negative paths', () => {
 
   it('names the port and the oauth_callback_port field when the callback port is taken', async () => {
     const port = freePort();
-    const blocker = createHttpServer(() => {});
-    await new Promise<void>((r) => blocker.listen(port, r));
+    const release = await occupyPort(port);
     try {
       // Call 1 reports the bind failure itself, rather than handing out a URL whose callback could
       // never land — it waits for the bind result, which is immediate.
@@ -187,7 +188,7 @@ describe('zendesk_login negative paths', () => {
       expect(text).not.toMatch(/EADDRINUSE/);
       expect(text).not.toContain('https://');
     } finally {
-      await new Promise((r) => blocker.close(r));
+      await release();
     }
   });
 
@@ -195,12 +196,11 @@ describe('zendesk_login negative paths', () => {
   // EADDRINUSE then refused every later login for the lifetime of the process.
   it('reserves nothing when the bind fails, so the next login starts normally', async () => {
     const port = freePort();
-    const blocker = createHttpServer(() => {});
-    await new Promise<void>((r) => blocker.listen(port, r));
+    const release = await occupyPort(port);
     try {
       expect(await runLogin(deps(port))).toContain('oauth_callback_port');
     } finally {
-      await new Promise((r) => blocker.close(r));
+      await release();
     }
     const next = await runLogin(deps(port, { callbackTimeoutMs: 60_000 }));
     expect(next).toMatch(/authorization started/i);
@@ -245,12 +245,17 @@ describe('zendesk_login with an unreadable token store', () => {
 });
 
 describe('zendesk_login with incomplete extension configuration', () => {
+  // `setup: undefined` is the install where nothing can be stored — a locked or denied Keychain, or a
+  // platform without one (#69) — which is the only state in which this message is the whole answer. Where
+  // a configuration CAN be stored the answer is the setup page instead, on both sides pinned in
+  // tests/server.unconfigured.test.ts.
   it('returns the actionable configuration message and touches nothing', async () => {
     const port = freePort();
     const listen = vi.fn();
     const text = await runLogin(
       deps(port, {
         configError: 'Missing required environment variable: ZENDESK_SUBDOMAIN (extension configuration field "zendesk_subdomain" is empty).',
+        setup: undefined,
         listen: listen as unknown as LoginDeps['listen'],
       }),
     );

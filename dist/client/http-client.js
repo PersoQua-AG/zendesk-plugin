@@ -2,14 +2,19 @@ import { mapErrorResponse, parseRetryAfter } from './errors.js';
 const MAX_RATE_LIMIT_RETRIES = 3;
 export class ZendeskHttpClient {
     options;
-    baseUrl;
+    subdomain;
     fetchImpl;
     maxRateLimitRetries;
     constructor(options) {
         this.options = options;
-        this.baseUrl = `https://${options.subdomain}.zendesk.com/api/v2`;
+        const { subdomain } = options;
+        this.subdomain = typeof subdomain === 'function' ? subdomain : () => subdomain;
         this.fetchImpl = options.fetchImpl ?? fetch;
         this.maxRateLimitRetries = options.maxRateLimitRetries ?? MAX_RATE_LIMIT_RETRIES;
+    }
+    // Read per request, not cached: see the `subdomain` option.
+    get baseUrl() {
+        return `https://${this.subdomain()}.zendesk.com/api/v2`;
     }
     // Pick the bucket for this request. 'incremental' selects the 10/min limiter when configured,
     // otherwise falls back to the default so the client is usable without the second limiter.
@@ -24,10 +29,14 @@ export class ZendeskHttpClient {
     // paginators and bulk tools don't each reimplement it.
     async request(path, init = {}, opts = {}) {
         const limiter = this.limiterFor(opts);
+        // Read ONCE per request, not per attempt: the subdomain can change mid-session (the first-run setup
+        // page supplies it), and a retry that picked up the new one would send this request to a different
+        // tenant — where the token it carries is not valid anyway.
+        const url = `${this.baseUrl}${path}`;
         for (let attempt = 0;; attempt++) {
             await limiter.acquire();
             const token = await this.options.authManager.getAccessToken();
-            const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+            const response = await this.fetchImpl(url, {
                 ...init,
                 headers: {
                     ...init.headers,

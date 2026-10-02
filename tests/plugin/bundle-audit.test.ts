@@ -713,13 +713,10 @@ describe('the versioned artifact and its checksum', () => {
 });
 
 describe('a version mismatch blocks the release', () => {
-  it('fails when manifest.json and package.json disagree, before producing anything', () => {
-    const tree = makeTree({ manifestVersion: '1.0.0', packageVersion: '1.0.1' });
-    const run = runAudit(tree);
-    expect(run.status).not.toBe(0);
-    expect(run.stderr).toContain('manifest.json says 1.0.0, package.json says 1.0.1');
-    expect(existsSync(tree.artifact)).toBe(false);
-  });
+  // The rule "manifest.json and package.json must agree" stood here until #68 split the two version
+  // families on purpose: the MCPB extension is out of that issue's scope and keeps 1.0.1 while the
+  // plugin moved to 1.1.0. What the BUNDLE has to be right about is its own manifest, and that is the
+  // next case — package.json's number is not shipped inside the bundle at all.
 
   it('fails when the bundled manifest disagrees with the tree', () => {
     const tree = makeTree({ entries: clean('0.9.0') });
@@ -840,12 +837,12 @@ describe('the audit is wired in front of publication', () => {
     for (const specifier of imports) expect(specifier).toMatch(/^node:/);
   });
 
-  it('is stamped 1.0.1, with every other declaration held by the manifest validator', () => {
-    // scripts/validate-manifests.mjs owns the fan-out across all seven hand-kept sites and is CI's
-    // first step; tests/plugin/pack-script.test.ts drives it. Repeating it here would be a third
-    // owner for one question.
+  it('stamps the MCPB manifest 1.0.1 and the plugin 1.1.0, the rest held by the manifest validator', () => {
+    // scripts/validate-manifests.mjs owns the fan-out across the hand-kept sites and is CI's first
+    // step; tests/plugin/pack-script.test.ts drives it. Repeating it here would be a third owner for
+    // one question. The two numbers differ by decision (#68): the MCPB extension is unchanged.
     expect(JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')).version).toBe('1.0.1');
-    expect(pkg.version).toBe('1.0.1');
+    expect(pkg.version).toBe('1.1.0');
     expect(execFileSync('node', [join(root, 'scripts', 'validate-manifests.mjs')], { encoding: 'utf8' })).toContain(
       'Version agreement',
     );
@@ -1039,13 +1036,6 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
       rule: 'an empty archive is refused',
       mutate: [['if (readable && entries.length === 0) problems.push(', 'if (false) problems.push(']],
       entries: [],
-      baseline: (r) => expect(r.status).not.toBe(0),
-      ablated: (r) => expect(r.status).toBe(0),
-    },
-    {
-      rule: 'manifest.json and package.json must agree',
-      mutate: [['if (pkg && manifest && pkg.version !== manifest.version) {', 'if (false) {']],
-      tree: { manifestVersion: '1.0.0', packageVersion: '1.0.1' },
       baseline: (r) => expect(r.status).not.toBe(0),
       ablated: (r) => expect(r.status).toBe(0),
     },

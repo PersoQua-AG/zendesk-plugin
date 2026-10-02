@@ -1,10 +1,20 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import type { OAuthConfig } from './oauth-flow.js';
+import {
+  CONFIG_ACCOUNTS,
+  readKeychainConfig,
+  resolveTokenStoreKey,
+  runSecurity,
+  type ConfigEnvName,
+  type RunSecurity,
+} from './store-key.js';
 
-const DEFAULT_CALLBACK_PORT = 8976;
+export const DEFAULT_CALLBACK_PORT = 8976;
 const DATA_DIR_NAME = 'zendesk-plugin';
-const DEFAULT_SCOPES = ['read', 'write'];
+// Exported because the first-run setup page states which scopes the plugin asks for, and an incomplete
+// start still has to carry them into the authorization the page continues into.
+export const DEFAULT_SCOPES = ['read', 'write'];
 
 // A Desktop Extension is unpacked into a versioned directory and its working directory is the
 // host's, not the extension's — so a relative default would put tokens.enc somewhere arbitrary and
@@ -46,12 +56,29 @@ export const USER_CONFIG_FIELD_BY_ENV: Record<string, string> = USER_CONFIG_FIEL
 // so the shipped defaults apply instead of Number('${…}')===NaN or a literal directory name.
 const PLACEHOLDER = /^\$\{[^}]*\}$/;
 
+// Exported because zendesk_diagnostics reports the substitution state of ${CLAUDE_PLUGIN_ROOT} and
+// ${CLAUDE_PLUGIN_DATA}, and that question has to be asked of the RAW env with this same rule.
+export function isPlaceholder(value: string | undefined): boolean {
+  return typeof value === 'string' && PLACEHOLDER.test(value);
+}
+
 export function stripPlaceholders(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = { ...env };
   for (const [key, value] of Object.entries(out)) {
-    if (typeof value === 'string' && PLACEHOLDER.test(value)) delete out[key];
+    if (isPlaceholder(value)) delete out[key];
   }
   return out;
+}
+
+// A relative CLAUDE_PLUGIN_DATA is never used as given: the host's working directory is not the
+// extension's, so "data" would put tokens.enc and the cache wherever the server happened to be
+// started and lose both on the next launch. resolveAuthConfig REJECTS such a value (loudly, naming
+// the variable); this resolver is what the degraded startup path falls back to, where there is
+// nothing left to reject into.
+export function dataDirOf(env: NodeJS.ProcessEnv): string {
+  // Falsy-coalesce, not ??: an empty-string value is "absent", not a value.
+  const raw = env.CLAUDE_PLUGIN_DATA;
+  return raw && isAbsolute(raw) ? raw : defaultDataDir(env);
 }
 
 // A port a non-root process can actually be handed: below 1024 is privileged, above 65535 does not
@@ -80,6 +107,27 @@ function callbackPort(env: NodeJS.ProcessEnv): number {
     throw new Error(`Invalid environment variable: ZENDESK_OAUTH_CALLBACK_PORT="${raw}" (${CALLBACK_PORT_RULE}).`);
   }
   return port;
+}
+
+// The port for a start that could not resolve the rest, and the PROBLEM when the configured one is
+// unusable — because the reason resolveAuthConfig threw with is almost never about the port: the subdomain
+// is validated first, so a start with both a missing subdomain and a port of 70000 reported only the
+// subdomain. The person then registered http://localhost:8976/callback in Zendesk on the page's word,
+// finished setup, and the NEXT start threw on the port. So the problem travels with the fallback and the
+// caller puts it where the person will read it.
+export function callbackPortOrDefault(env: NodeJS.ProcessEnv): { port: number; problem?: string } {
+  try {
+    return { port: callbackPort(env) };
+  } catch (err) {
+    // `err as Error` is honest here and only here: the single thrower is callbackPort, two lines up, and it
+    // throws an Error carrying the field and the value. (oauth-flow.ts:226 refuses the same cast for the
+    // opposite reason — there the throw can come from anywhere.)
+    const problem = (err as Error).message.split('\n')[0];
+    return {
+      port: DEFAULT_CALLBACK_PORT,
+      problem: `${problem} Port ${DEFAULT_CALLBACK_PORT} is being used until that is corrected \u2014 register the redirect URL for the port you finally keep.`,
+    };
+  }
 }
 
 // The subdomain is interpolated into every Zendesk URL this plugin builds (oauth-flow.ts:48/:210,
@@ -115,7 +163,14 @@ const SUBDOMAIN_NOT_A_HOST_RULE =
 // Surrounding whitespace is a copy-paste artifact, not an opinion: trimmed, not rejected, because
 // "acme " and "acme" are indistinguishable in the settings dialog that produced them.
 function subdomain(env: NodeJS.ProcessEnv): string {
-  const raw = required(env, 'ZENDESK_SUBDOMAIN').trim();
+  return validateSubdomain(required(env, 'ZENDESK_SUBDOMAIN'));
+}
+
+// Exported because the first-run setup page takes the same value from a form, and a value that this
+// resolver would refuse must be refused THERE, where the person can still correct it — not stored and
+// then rejected at the next start. One rule, one implementation.
+export function validateSubdomain(value: string): string {
+  const raw = value.trim();
   if (!SUBDOMAIN_PATTERN.test(raw) || raw.length > MAX_SUBDOMAIN_LENGTH) {
     throw new Error(`Invalid environment variable: ZENDESK_SUBDOMAIN="${raw}" (${SUBDOMAIN_RULE}).`);
   }
@@ -140,10 +195,46 @@ function subdomain(env: NodeJS.ProcessEnv): string {
   return raw;
 }
 
+// Env WINS, the Keychain fills the gaps: an install that passes everything through the environment
+// (Claude Code as it works today) behaves exactly as it did, and — because the Keychain is read only
+// when something is actually missing — never touches it at all, so it cannot be broken by a locked one
+// either. A Keychain that cannot be read throws rather than reading as empty: see readKeychainConfig.
+function withKeychainConfig(env: NodeJS.ProcessEnv, security: RunSecurity): NodeJS.ProcessEnv {
+  const missing = (Object.keys(CONFIG_ACCOUNTS) as ConfigEnvName[]).filter((name) => !env[name]);
+  if (missing.length === 0) return env;
+  const stored = readKeychainConfig(security);
+  const filled: NodeJS.ProcessEnv = { ...env };
+  for (const name of missing) {
+    const value = stored[name];
+    // A STORED value that the rule below would refuse is dropped rather than carried forward, for two
+    // reasons. It must not reach the error message: that message is tool output, and the owner decided
+    // the customer's instance name is not to lie around in the open. And dropping it makes the
+    // configuration incomplete again, which is what gets the setup page offered instead of a start that
+    // fails on a value nobody can see or correct.
+    if (!value || (name === 'ZENDESK_SUBDOMAIN' && !isUsableSubdomain(value))) continue;
+    filled[name] = value;
+  }
+  return filled;
+}
+
+function isUsableSubdomain(value: string): boolean {
+  try {
+    validateSubdomain(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface ResolvedAuthConfig {
   config: OAuthConfig;
   dataDir: string;
   tokensPath: string;
+  // The TokenStore's encryption key. A random Keychain value, NOT the client secret — see
+  // ./store-key.ts for why the two must be independent. Resolved on FIRST READ, not on resolution:
+  // the remote path shares this resolver and encrypts with REMOTE_TOKEN_ENC_KEY instead, so it must
+  // not be made to answer a Keychain question it has no stake in (and could not answer on Linux).
+  readonly tokenStoreKey: string;
 }
 
 // Only an env var that HAS a user_config field may be required: the error names that field, and a
@@ -159,23 +250,45 @@ function required(env: NodeJS.ProcessEnv, name: keyof typeof USER_CONFIG_FIELDS)
   return value;
 }
 
-// Single source of env resolution shared by server + authorize bin, so identical
-// env yields an identical clientSecret + dataDir → identical TokenStore key/path.
-export function resolveAuthConfig(rawEnv: NodeJS.ProcessEnv): ResolvedAuthConfig {
-  const env = stripPlaceholders(rawEnv);
+// Single source of env resolution shared by server + authorize bin, so identical env yields an
+// identical dataDir → an identical tokens.enc path, and one and the same Keychain key opens it. The
+// key is no longer derived from the client secret, so rotating the secret leaves the store readable.
+//
+// `security` is a parameter for the same reason env/platform are parameters on defaultDataDir: ONE seam
+// for the whole Keychain path — the key and the three values — so the real logic in ./store-key.ts runs
+// under test rather than being stubbed out, and no suite reaches a real login keychain.
+export function resolveAuthConfig(
+  rawEnv: NodeJS.ProcessEnv,
+  security: RunSecurity = runSecurity,
+): ResolvedAuthConfig {
+  const env = withKeychainConfig(stripPlaceholders(rawEnv), security);
   // Falsy-coalesce (not ??): an empty-string env var is "absent", not a value.
   // Otherwise CLAUDE_PLUGIN_DATA='' → tokens.enc at the fs root, and
   // ZENDESK_OAUTH_CALLBACK_PORT='' → Number('')===0 → bind to port 0.
-  const dataDir = env.CLAUDE_PLUGIN_DATA || defaultDataDir(env);
+  const raw = env.CLAUDE_PLUGIN_DATA;
+  if (raw && !isAbsolute(raw)) {
+    throw new Error(
+      `Invalid environment variable: CLAUDE_PLUGIN_DATA="${raw}" (must be an absolute path \u2014 a ` +
+        'relative one places tokens.enc under whatever working directory the host started the server in).',
+    );
+  }
+  const dataDir = raw || defaultDataDir(env);
+  let storeKey: string | undefined;
   return {
     config: {
       subdomain: subdomain(env),
       clientId: required(env, 'ZENDESK_OAUTH_CLIENT_ID'),
-      clientSecret: required(env, 'ZENDESK_OAUTH_CLIENT_SECRET'),
+      // Optional since #68: a public OAuth client has no secret, and PKCE is what authenticates the
+      // exchange. Sent when configured (every existing install and the CLI), omitted when not.
+      clientSecret: env.ZENDESK_OAUTH_CLIENT_SECRET || undefined,
       callbackPort: callbackPort(env),
       scopes: DEFAULT_SCOPES,
     },
     dataDir,
+    // Memoized: one `security` invocation per process, however many readers there are.
+    get tokenStoreKey(): string {
+      return (storeKey ??= resolveTokenStoreKey(security));
+    },
     // Single source of the token file location so server + authorize bin never drift. join(), not
     // a template literal: the manifest declares win32, where '/' would mix separators.
     tokensPath: join(dataDir, 'tokens.enc'),

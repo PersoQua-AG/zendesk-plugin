@@ -90,23 +90,12 @@ describe('MCPB manifest shape', () => {
 
 });
 
+// The two manifests were mirrors of each other until #68. They are not any more, and the mirror
+// assertions are gone rather than weakened: the Claude Code host bridge does not support user_config
+// at all and dropped the whole server over it, so .claude-plugin/plugin.json now declares none. What
+// that file has to be right about is asserted in claude-plugin-manifest.test.ts; what the MCPB
+// manifest has to be right about stays here, and it is unchanged — the extension is not in #68.
 describe('MCPB user_config', () => {
-  it('exposes exactly the same configuration keys as the Claude Code plugin manifest', () => {
-    expect(Object.keys(userConfig).sort()).toEqual(Object.keys(plugin.userConfig).sort());
-  });
-
-  it('uses the same type, required flag and value bounds for every key as the plugin manifest', () => {
-    for (const [key, entry] of Object.entries(userConfig)) {
-      const mirror = plugin.userConfig[key] as UserConfigEntry;
-      expect(entry.type, key).toBe(mirror.type);
-      expect(Boolean(entry.required), key).toBe(Boolean(mirror.required));
-      // Bounds are what a host refuses a value by. Declared on one manifest only, the two hosts
-      // would disagree about which values ever reach the server.
-      expect(entry.min, `${key}.min`).toBe(mirror.min);
-      expect(entry.max, `${key}.max`).toBe(mirror.max);
-    }
-  });
-
   // That the bounds MATCH the server's range is asserted against the code constants, in both
   // manifests, in tests/auth/config.callback-port.test.ts:62-71. What is left here is the claim that
   // file cannot make: the port is the only field that carries bounds at all.
@@ -127,11 +116,8 @@ describe('MCPB user_config', () => {
   // against itself and could never fail. The claim's evidence is the source note at the top of this
   // file; what IS asserted below is what the manifests actually do about it.
   it('cannot declare an enum, so it names the accepted security levels in the description instead', () => {
-    for (const entry of [userConfig.security_level, plugin.userConfig.security_level as UserConfigEntry]) {
-      expect(Object.keys(entry)).not.toContain('enum');
-      expect(entry.description).toContain(SECURITY_LEVELS.join(' | '));
-    }
-    expect(userConfig.security_level.description).toBe(plugin.userConfig.security_level.description);
+    expect(Object.keys(userConfig.security_level)).not.toContain('enum');
+    expect(userConfig.security_level.description).toContain(SECURITY_LEVELS.join(' | '));
     expect(SECURITY_LEVELS).toContain(userConfig.security_level.default);
   });
 
@@ -149,6 +135,11 @@ describe('MCPB user_config', () => {
     expect(sensitive).toEqual(['oauth_client_secret']);
   });
 
+  // Still THREE here, and the server now requires only two: since #68 the client secret is optional
+  // on the code path (a public OAuth client has none and PKCE authenticates the exchange). The MCPB
+  // extension is out of that issue's scope and keeps its dialog as it shipped — changing the required
+  // flag would change a user-visible dialog in an installed extension for no gain. Deliberate
+  // divergence, named here so the next reader does not take it for drift.
   it('requires exactly subdomain + client id + client secret', () => {
     const required = Object.entries(userConfig).filter(([, e]) => e.required).map(([k]) => k).sort();
     expect(required).toEqual(['oauth_client_id', 'oauth_client_secret', 'zendesk_subdomain']);
@@ -177,20 +168,6 @@ describe('MCPB env mapping', () => {
   it('does not set CLAUDE_PLUGIN_DATA — the server derives a stable per-user data dir itself', () => {
     expect(serverEnv.CLAUDE_PLUGIN_DATA).toBeUndefined();
     expect(JSON.stringify(manifest)).not.toContain('CLAUDE_PLUGIN_DATA');
-  });
-
-  // The same env map has to be mirrored in .claude-plugin/plugin.json, which a different host
-  // loads. Without this, a new config field costs five edits and only four of them are covered.
-  it('the Claude Code plugin manifest passes the same env vars, plus CLAUDE_PLUGIN_DATA', () => {
-    const pluginEnv: Record<string, string> = plugin.mcpServers.zendesk.env;
-    for (const [envName, field] of Object.entries(USER_CONFIG_FIELD_BY_ENV)) {
-      expect(pluginEnv[envName], envName).toBe(`\${user_config.${field}}`);
-    }
-    // CLAUDE_PLUGIN_DATA is the one known extra: Claude Code owns the plugin data dir, an MCPB
-    // host does not (see the test right above).
-    expect(Object.keys(pluginEnv).sort()).toEqual(
-      [...Object.keys(USER_CONFIG_FIELD_BY_ENV), 'CLAUDE_PLUGIN_DATA'].sort(),
-    );
   });
 
   it('ships no Zendesk instance data: no ids, no view/group/form/field pre-configuration', () => {

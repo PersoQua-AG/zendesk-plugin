@@ -11,6 +11,7 @@ import type { RateLimiter } from '../client/rate-limiter.js';
 import type { IdentityAuthResolver } from '../auth/identity-resolver.js';
 import { WriteAuditLog, type AuditOutcome } from './audit-log.js';
 import { log } from './logger.js';
+import type { RunSecurity } from '../auth/store-key.js';
 
 // Mutating tools worth an audit trail (REQ-10). Reads are intentionally not audited.
 const WRITE_TOOL = /^zendesk_(update|create|apply|add|upsert|import|bulk|attach|delete|remove|set)/;
@@ -21,6 +22,13 @@ const TARGET_KEYS = [
 type ReqWithAuth = IncomingMessage & { auth?: AuthInfo; body?: unknown };
 
 export interface SessionDeps {
+  // How every session this manager opens reaches the macOS Keychain — and the only value the bridge ever
+  // passes is `noKeychain`. Required, not optional with a default: a default would be the real runner, and
+  // that is exactly the mistake this closes. buildRemoteApp opted its OWN resolution out and left this
+  // one on the default, so a session built with a remote env that carried a subdomain and a client id but
+  // no secret — allowed now that the secret is optional — read the operator's personal client secret out
+  // of their login keychain and served every remote user from it.
+  security: RunSecurity;
   resolver: IdentityAuthResolver;
   rateLimiter: RateLimiter;
   incrementalRateLimiter: RateLimiter;
@@ -145,6 +153,7 @@ export class SessionManager {
     const identity = identityOf(req);
     const cache = new ResponseCache(sessionCacheDir(this.deps.dataDir, identity));
     const { server } = createServer(this.env, {
+      security: this.deps.security,
       authManager: this.deps.resolver.forIdentity(identity),
       rateLimiter: this.deps.rateLimiter,
       incrementalRateLimiter: this.deps.incrementalRateLimiter,

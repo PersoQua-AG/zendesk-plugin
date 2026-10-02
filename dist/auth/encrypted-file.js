@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 // One AES-256-GCM record per file: iv | authTag | ciphertext, base64, mode 0600. This is the single
@@ -24,6 +24,10 @@ export class EncryptedFile {
         const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
         const payload = Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64');
         writeFileSync(this.filePath, payload, { mode: 0o600 });
+        // The mode argument only applies when writeFileSync CREATES the file. A file that was already
+        // there keeps whatever mode it had — including one a local attacker pre-created world-readable —
+        // so the mode is asserted on every write, not only on the first.
+        chmodSync(this.filePath, 0o600);
     }
     // null for a missing or empty file. A decrypt/integrity failure THROWS: a tampered or
     // wrong-key file must never be mistaken for "not there".
