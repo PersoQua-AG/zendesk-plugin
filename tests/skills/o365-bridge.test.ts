@@ -94,8 +94,41 @@ describe('o365-bridge: the Zendesk write set it names is pinned (SKILL.md "Side-
     const writes = new Set(
       [...read('tests/skills/probe.test.ts').matchAll(/^\s*'(zendesk_[a-z0-9_]+): [A-Z]+ /gm)].map((m) => m[1]),
     );
-    expect(writes.size).toBeGreaterThan(1); // the WRITES list was really found, so the filter below can bite
+    // `toBeGreaterThan(1)` alone lets the scrape rot: reformatting only SOME WRITES entries (prettier
+    // on a single line, double quotes) leaves two matches, passes the guard, and then a real
+    // zendesk_update_ticket in SKILL.md goes unnoticed. Naming the tool the negative scenario uses
+    // makes the scrape prove it resolved the entry that has to bite.
+    expect(writes).toContain('zendesk_update_ticket');
+    expect(writes.size).toBeGreaterThan(1);
     const named = toolsNamedIn(`${read('skills/o365-bridge/SKILL.md')}\n${read('commands/escalate.md')}`);
     expect(named.filter((n) => writes.has(n))).toEqual(['zendesk_add_comment']);
+  });
+});
+
+describe('o365-bridge: the read-safety claim stays qualified (SKILL.md:8, "Side-effect contract")', () => {
+  // #62 is a wording regression: the skill was *promised* read-safe while it writes a comment and
+  // fires M365 side effects. The write half is pinned above, but an unqualified claim could simply
+  // come back green. This is deliberately not a pin on the full paragraph — it only forbids the
+  // claim standing on its own, and requires the two facts the contract exists to state.
+  const QUALIFIED = /not read-only|read path only/i;
+
+  it('OB-3 failcheck: no line claims read-safety without restricting it', () => {
+    const unqualified: string[] = [];
+    for (const file of ['skills/o365-bridge/SKILL.md', 'commands/escalate.md']) {
+      read(file).split('\n').forEach((line, i) => {
+        if (/read-(safe|only)/i.test(line) && !QUALIFIED.test(line)) unqualified.push(`${file}:${i + 1} ${line.trim()}`);
+      });
+    }
+    expect(unqualified).toEqual([]);
+  });
+
+  it('OB-3 failcheck: the contract names the Zendesk comment write and the M365 side effects', () => {
+    const skill = read('skills/o365-bridge/SKILL.md');
+    const at = skill.indexOf('## Side-effect contract');
+    expect(at, 'SKILL.md has no "## Side-effect contract" section').toBeGreaterThan(-1);
+    const contract = skill.slice(at);
+    expect(contract).toMatch(/zendesk_add_comment/);
+    expect(contract).toMatch(/M365|Microsoft 365/);
+    for (const effect of [/Teams/, /Outlook|mail/i, /calendar/i]) expect(contract).toMatch(effect);
   });
 });
