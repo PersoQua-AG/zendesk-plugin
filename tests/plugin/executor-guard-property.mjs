@@ -23,7 +23,7 @@
 // The properties live in executor-guard-properties.test.ts; this module only generates, runs and
 // shrinks. Everything is seeded: `run(seed, n)` is reproducible, and a failure is reported as the
 // SHRUNK case so it reproduces as a fixed record without the generator.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -198,6 +198,35 @@ export function execute(argv, guard = process.env.EXECUTOR_GUARD || GUARD) {
 // Every `path:line:column` the run named, in either stream — the findings, independent of wording.
 export const locations = (out) => (out.match(/[\w./\\-]+\.(?:ts|tsx|mts|cts):\d+:\d+/g) ?? []).sort();
 
+// The same run, without blocking: one guard run costs ~200 ms of node startup and `typescript`
+// import, so a sequential pass over n trees costs n * 200 ms and nothing else. The cases are
+// independent, so the HOT PATH runs them in a pool and the sequential `execute` above stays for the
+// shrinker, which is inherently serial and only ever runs after a failure.
+export function executeAsync(argv, guard = process.env.EXECUTOR_GUARD || GUARD) {
+  return new Promise((done) => {
+    const child = spawn('node', [guard, ...argv], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (d) => (stdout += d));
+    child.stderr.setEncoding('utf8').on('data', (d) => (stderr += d));
+    child.on('close', (status, signal) => done({ status: status ?? -1, signal, stdout, stderr }));
+  });
+}
+
+export async function pool(items, worker, concurrency = 8) {
+  const out = new Array(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      out[i] = await worker(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, lane));
+  return out;
+}
+
 // SHRINKING. The case is a record, so shrinking is "try every smaller record, keep the first that
 // still fails". Candidates are ordered cheapest-first: drop a file, de-wedge a file, un-decorate the
 // path, move the marker towards a plain file, straighten the path kind. The loop runs until no
@@ -242,6 +271,46 @@ export function shrink(c, fails, budget = 400) {
     }
   }
   return best;
+}
+
+// The hot-path entry point: generates n cases, runs them all in a pool, then evaluates the property
+// in generation order so the FIRST failure is deterministic for a given seed. Shrinking the failure
+// falls back to the serial path, which costs nothing on a green run.
+export async function checkParallel(property, { seed = 1, n = 32, concurrency = 8 } = {}) {
+  const rnd = prng(seed);
+  const temps = [];
+  try {
+    const cases = Array.from({ length: n }, () => generate(rnd));
+    const built = cases.map((c) => materialise(c, temps));
+    const results = await pool(built, (m) => executeAsync(m.argv), concurrency);
+    for (const [i, c] of cases.entries()) {
+      try {
+        property(c, results[i], built[i]);
+      } catch (error) {
+        const fails = (candidate) => {
+          try {
+            const m = materialise(candidate, temps);
+            property(candidate, execute(m.argv), m);
+            return false;
+          } catch {
+            return true;
+          }
+        };
+        const minimal = shrink(c, fails);
+        let message = String(error?.message ?? error);
+        try {
+          const m = materialise(minimal, temps);
+          property(minimal, execute(m.argv), m);
+        } catch (err) {
+          message = String(err?.message ?? err);
+        }
+        return { seed, index: i, original: c, minimal, message };
+      }
+    }
+    return null;
+  } finally {
+    for (const d of temps) rmSync(d, { recursive: true, force: true });
+  }
 }
 
 // Runs `property(case, result, materialised)` over n generated cases. A property throws to fail.
