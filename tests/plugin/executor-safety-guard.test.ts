@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,25 +17,53 @@ afterEach(() => {
 
 type Run = { status: number; stdout: string; stderr: string };
 
+// Every fixture meant to BE a guarded tree carries its mark — a server.ts directly in the scanned
+// root, exactly as src/ carries the module the build bundles. An unmarked tree is still scanned and
+// its findings are still named, but it can never exit 0. See the script header.
 function fixtureDir(source: string, fileName: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'executor-guard-'));
   temps.push(dir);
   mkdirSync(join(dir, 'src'));
   writeFileSync(join(dir, 'src', fileName), source);
+  writeFileSync(join(dir, 'src', 'server.ts'), MARK);
   return join(dir, 'src');
 }
 
+// The four things that marked a tree while the mark was a mere existsSync() — none of them a
+// regular server.ts collected by the walk. Shared by the behaviour test and its ablation.
+const MARK = '// marks this tree as the one the build bundles\n';
+const MIS_MARKS = {
+  'a directory': (dir: string) => mkdirSync(join(dir, 'server.ts')),
+  'the wrong case': (dir: string) => writeFileSync(join(dir, 'Server.ts'), MARK),
+  'a symlink out of the tree': (dir: string) => {
+    const outside = mkdtempSync(join(tmpdir(), 'executor-guard-outside-'));
+    temps.push(outside);
+    writeFileSync(join(outside, 'server.ts'), MARK);
+    symlinkSync(join(outside, 'server.ts'), join(dir, 'server.ts'));
+  },
+  'a dangling symlink': (dir: string) => symlinkSync(join(dir, 'nope.ts'), join(dir, 'server.ts')),
+};
+
+function misMarked(build: (dir: string) => void): string {
+  const dir = mkdtempSync(join(tmpdir(), 'executor-guard-'));
+  temps.push(dir);
+  writeFileSync(join(dir, 'subject.ts'), 'export const x = 1;\n');
+  build(dir);
+  return dir;
+}
+
 // Every case below is a real run of the real script over a real tree on disk — the directory to
-// inspect is argv[2] — not an assertion about a string in a file.
+// inspect is argv[2] — not an assertion about a string in a file. With no source it runs over the
+// repo's own src/, which is the tree package.json points it at; there is no default any more.
 function runGuard(source?: string, fileName = 'subject.ts'): Run {
-  const args = source === undefined ? [GUARD] : [GUARD, fixtureDir(source, fileName)];
-  const run = spawnSync('node', args, { encoding: 'utf8' });
+  const target = source === undefined ? 'src' : fixtureDir(source, fileName);
+  const run = spawnSync('node', [GUARD, target], { encoding: 'utf8' });
   return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
 }
 
 // A mutant is the guard with one rule ablated. It has to live beside the real one so that its
 // `import ts from 'typescript'` resolves against the repo's node_modules.
-function runMutant(edits: Array<[string, string]>, source: string, fileName = 'subject.ts'): Run {
+function mutate(edits: Array<[string, string]>): string {
   let code = readFileSync(GUARD, 'utf8');
   for (const [find, replace] of edits) {
     expect(code, `mutation anchor missing: ${find.slice(0, 60)}`).toContain(find);
@@ -44,7 +72,13 @@ function runMutant(edits: Array<[string, string]>, source: string, fileName = 's
   const path = join(root, 'scripts', `.mutant-${Math.random().toString(36).slice(2)}.mjs`);
   mutants.push(path);
   writeFileSync(path, code);
-  const run = spawnSync('node', [path, fixtureDir(source, fileName)], { encoding: 'utf8' });
+  return path;
+}
+
+function runMutant(edits: Array<[string, string]>, source: string, fileName = 'subject.ts'): Run {
+  const run = spawnSync('node', [mutate(edits), fixtureDir(source, fileName)], {
+    encoding: 'utf8',
+  });
   return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
 }
 
@@ -392,6 +426,125 @@ export const f = (server: { listen: (p: number) => void }) =>
     });
   });
 
+  describe('the scan root the caller names', () => {
+    it('refuses to run without a scan root, and refuses more roots than it scans', () => {
+      const bare = spawnSync('node', [GUARD], { encoding: 'utf8' });
+      expect(bare.status).toBe(1);
+      expect(bare.stderr).toContain('Expected exactly one scan root');
+      // A second root would be dropped silently, so its executors would never be looked at.
+      const second = fixtureDir(WEDGE, 'subject.ts');
+      const two = spawnSync('node', [GUARD, 'src', second], { encoding: 'utf8' });
+      expect(two.status).toBe(1);
+      expect(two.stderr).toContain('Expected exactly one scan root');
+    });
+
+    // The defect this ticket exists for: before the mark, `tests/util` printed "0 executors,
+    // 0 inspected" and exited 0, so an empty tree was indistinguishable from a clean one.
+    it('refuses a tree that is not the one the build bundles, however clean it is', () => {
+      const run = spawnSync('node', [GUARD, 'tests/util'], { encoding: 'utf8' });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('Not the guarded tree');
+      expect(run.stdout).not.toContain('Promise executors in');
+    });
+
+    // The mark gates success, not the scan: an unmarked tree is still walked whole, and a wedge in
+    // it is still named by file and line — alongside the notice that the root is wrong.
+    it('still names every finding in an unmarked tree, and says the root is wrong too', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'executor-guard-'));
+      temps.push(dir);
+      writeFileSync(join(dir, 'subject.ts'), WEDGE);
+      const run = spawnSync('node', [GUARD, dir], { encoding: 'utf8' });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toMatch(/subject\.ts:\d+:\d+\s+server\.listen\(port\)/);
+      expect(run.stderr).toContain('Not the guarded tree');
+    });
+
+    // The mark is a FILE THE WALK COLLECTED. Each of these marked the tree while the check was
+    // `existsSync(join(target, ENTRY))`, and none of them is the module the build bundles. The
+    // wrong case matters most: existsSync case-folds on darwin, so that tree was green here and
+    // red on Linux CI. The dangling symlink was already refused and must stay refused.
+    it('is not marked by a directory, the wrong case, or a symlink called server.ts', () => {
+      for (const [what, build] of Object.entries(MIS_MARKS)) {
+        const run = spawnSync('node', [GUARD, misMarked(build)], { encoding: 'utf8' });
+        expect(run.status, what).toBe(1);
+        expect(run.stderr, what).toContain('Not the guarded tree');
+      }
+    });
+
+    // The stream is keyed on the MARK, not on the exit code — which is what the script now says,
+    // instead of promising an empty stdout for every red run. The inventory of the guarded tree is
+    // a true record of what was inspected whatever the verdict; only a summary of a tree that was
+    // never the subject must stay off stdout, and that is pinned by the test above.
+    it('keeps the guarded tree inventory on stdout even when the verdict is red', () => {
+      const { status, stdout, stderr } = runGuard(WEDGE);
+      expect(status).toBe(1);
+      expect(stdout).toContain('executors, 1 inspected');
+      expect(stderr).toMatch(/server\.listen\(port\)/);
+    });
+
+    it('reports a FILE named as the scan root as a message, not an ENOTDIR stack trace', () => {
+      const run = spawnSync('node', [GUARD, 'src/server.ts'], { encoding: 'utf8' });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('Nothing to inspect');
+      expect(run.stderr).not.toContain('at read (node:fs');
+    });
+
+    // The empty string passed the arity gate and resolved to the repo root, so the guard walked
+    // node_modules and reported zod's test files as its inventory.
+    it('refuses the empty string instead of walking the repo root', () => {
+      const run = spawnSync('node', [GUARD, ''], { encoding: 'utf8' });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('not the empty string');
+      expect(run.stderr).not.toContain('node_modules');
+    });
+
+    // ONE ABLATION PER RULE, as for the detection rules below: remove the rule from a copy of the
+    // guard and the fixture that pins it must change its verdict. A rule no fixture distinguishes
+    // fails here, now.
+    it('ablated: a mark that is not stat-ed accepts a directory and a symlink again', () => {
+      const ablated = mutate([[' && lstatSync(ENTRY_PATH).isFile()', '']]);
+      for (const what of ['a directory', 'a symlink out of the tree'] as const) {
+        const run = spawnSync('node', [ablated, misMarked(MIS_MARKS[what])], { encoding: 'utf8' });
+        expect(run.status, what).toBe(0);
+      }
+    });
+
+    it('ablated: a stream that ignores the mark reports a tree it was never pointed at', () => {
+      const ablated = mutate([
+        ['const report = marked ? console.log : console.error;', 'const report = console.log;'],
+      ]);
+      const run = spawnSync('node', [ablated, 'tests/util'], { encoding: 'utf8' });
+      expect(run.status).toBe(1);
+      expect(run.stdout).toContain('Promise executors in');
+    });
+
+    it('ablated: without the ENOTDIR catch, a file root dies as a stack trace', () => {
+      const ablated = mutate([['} catch (err) {', "} catch (err) {\n  if (err.code === 'ENOTDIR') throw err;"]]);
+      const run = spawnSync('node', [ablated, 'src/server.ts'], { encoding: 'utf8' });
+      expect(run.stderr).not.toContain('Nothing to inspect');
+      expect(run.stderr).toContain('node:fs');
+    });
+
+    it('ablated: without the empty-string check, the empty root walks the repo root', () => {
+      const ablated = mutate([['process.argv.length !== 3 || !process.argv[2]', 'process.argv.length !== 3']]);
+      const run = spawnSync('node', [ablated, ''], { encoding: 'utf8' });
+      expect(run.stderr).not.toContain('not the empty string');
+      // Both streams: which one the inventory lands on is the neighbouring rule's business.
+      expect(run.stdout + run.stderr).toContain('node_modules');
+    });
+
+    // THE HEADER'S COUNT, EXECUTED — the sibling guard's header claim was wrong three times in one
+    // PR while it lived on paper only. Run the documented command and the next drift is red here.
+    it('runs the counting command from the script header and gets src/server.ts, nothing else', () => {
+      const COUNT = String.raw`git ls-files '*/server.ts' 'server.ts'`;
+      // Read out of the header, not retyped: a header that drifts from the command actually run
+      // would put the claim back on paper only.
+      expect(readFileSync(GUARD, 'utf8')).toContain(COUNT);
+      const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8' });
+      expect(run.stdout.trim().split('\n')).toEqual(['src/server.ts']);
+    });
+  });
+
   describe('the tree it guards', () => {
     it('passes src/ and reports every executor it found, with its real parameter names', () => {
       const { status, stdout } = runGuard();
@@ -427,7 +580,7 @@ export const f = () =>
 
     it('is wired into npm and into CI, so a violation turns the build red', () => {
       const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-      expect(pkg.scripts['check:executors']).toBe('node scripts/assert-executor-safety.mjs');
+      expect(pkg.scripts['check:executors']).toBe('node scripts/assert-executor-safety.mjs src');
       expect(pkg.devDependencies.typescript).toBeDefined(); // the guard's only import, already there
       expect(readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8')).toContain(
         'npm run check:executors',
