@@ -77,16 +77,18 @@ const DIAGNOSTICS_ONLY = 'tools/diagnostics.ts';
 // mention in prose is not a read, which is why something has to be on the left.
 //
 // Out of reach, deliberately, because closing them costs a parser: a computed key (env[name]), a key
-// built by concatenation ('CLAUDE_PLUGIN' + '_DATA'), and anything outside src/. The first two are not
-// shapes anyone reaches for by accident, and the whole-list comparison below is what makes an
-// accidental reader visible at all.
+// built by concatenation ('CLAUDE_PLUGIN' + '_DATA'), a dot the formatter wrapped onto the next line
+// (rawEnv\n  .CLAUDE_PLUGIN_DATA — caught before the tight-dot fix below, missed since, and the fix is
+// still worth it), and anything outside src/. None of those is a shape anyone reaches for by accident,
+// and the whole-list comparison below is what makes an accidental reader visible at all.
 const READS_IT = new RegExp(
   [
     // No whitespace around the dot, or a sentence in a comment ending "…the host. CLAUDE_PLUGIN_DATA"
     // reads as a member access and every file that explains the rule fails the rule.
     String.raw`[\w$]\??\.CLAUDE_PLUGIN_DATA\b`, // env.X, process.env.X, rawEnv.X, env?.X, aliased e.X
     String.raw`\[\s*['"\`]CLAUDE_PLUGIN_DATA['"\`]\s*\]`, // env['X']
-    String.raw`\{[^}]*\bCLAUDE_PLUGIN_DATA\b[^}]*\}\s*=`, // const { X } = env
+    // Newline-bounded, so a stray `{` … prose … `} =` spanning lines cannot match.
+    String.raw`\{[^}\n]*\bCLAUDE_PLUGIN_DATA\b[^}\n]*\}\s*=`, // const { X } = env
   ].join('|'),
 );
 
