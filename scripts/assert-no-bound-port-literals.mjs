@@ -28,34 +28,33 @@ import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 // Catching the rest needs a parser or a runtime check, not a wider regex (out of scope, #74).
 const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|listen|rebind|config|deps)\(\s*(\d[\d_]*)\b/g;
 
-// THE MARK OF THE GUARDED TREE. "Holds .ts files" does not identify a tree: `tests` itself holds
-// four, so the most plausible misedit of all — naming the parent of the guarded directory — would
-// scan four files, miss all 42, and report success. A minimum file count cannot separate them
-// either: tests/tools has 76 .ts files, tests/auth has 42. What does separate them is the thing
-// the guarded tree is guarded FOR. Measured over all 27 directories in this repo that hold a
-// tracked .ts file — recount it with
+// THE MARK OF THE GUARDED TREE: the tree that DEFINES the port allocator, not one that mentions it.
+// "Holds .ts files" does not identify a tree: `tests` itself holds .ts files, so the most plausible
+// misedit of all — naming the parent of the guarded directory — would scan those, miss all of
+// tests/auth, and report success. A minimum file count cannot separate them either: tests/tools has
+// more .ts files than tests/auth. What does separate them is the thing the guarded tree is guarded
+// FOR — and the previous spelling of that, "some file here calls freePort()", did not survive one
+// day. PR #71 (dc2ae3e) added 53 test files that call freePort(), among them one directly in
+// `tests`, and three wrong roots (`tests`, `tests/tools`, plus the guarded tree) then exited 0.
+// A mention travels with every caller; the definition does not. Recount both over every directory
+// in this repo that holds a tracked .ts file with
 //   git ls-files '*.ts' | xargs -n1 dirname | sort -u | while read d; do \
-//     grep -lE '\bfreePort\(' "$d"/*.ts >/dev/null 2>&1 && echo "$d"; done
-// — two carry the mark. tests/auth, the guarded tree, is one (18 of its 42
-// files). The other is tests/plugin, which carries it for a reason this file created: the guard's
-// own test writes `const port = freePort();` into its fixtures as a string constant, so the word
-// is in that directory although nothing there acquires a port. So the honest claim is 25 of 27
-// roots refused, and the one false pass is the one this PR produced. It costs nothing: tests/plugin
-// is not clean — it holds literal ports in both guard tests — so pointing the guard there is loud
-// at the other end, exit 1 with findings. A marker tightened to ignore string literals would need
-// the parser this guard deliberately does not have (#74).
-// Note for anyone widening check:ports to several trees: tests/plugin can never be one of them.
-// The guard tests have to contain literal ports to test the guard, so that tree is dirty by
-// construction — it reports 10 findings today.
-// The one cost, named rather than discovered later: this hangs on a name. Renaming freePort()
-// makes the guard refuse its own tree. Loud, not silent, which is the whole reason it is
-// acceptable.
-// What the marker does NOT cost any more: it no longer decides whether a tree is scanned, only
-// whether a clean scan may report success (see the gate below), so a tree that slips it is still
-// scanned whole, and an unmarked tree holding a literal is named by file and line AND told it is
-// the wrong tree. Both notices, pinned in
-// tests/plugin/bound-port-literals-guard.test.ts, "names the literals of an unmarked tree".
-const ACQUIRES_PORTS = /\bfreePort\(/;
+//     grep -lE '\bexport (async )?function freePort\(' "$d"/*.ts >/dev/null 2>&1 && echo "$d"; done
+// Measured on this commit: 27 directories, of which **1** carries the definition (tests/auth, in
+// login-harness.ts) and **4** merely mention freePort. The mark is the first number.
+// The one cost, named rather than discovered later: this hangs on a name and a spelling. Renaming
+// freePort(), or rewriting it as `export const freePort = () =>`, makes the guard refuse its own
+// tree. Moving login-harness.ts moves the mark with it and refuses the tree left behind. Loud in
+// every case, never silent, which is the whole reason it is acceptable. An explicit sentinel line
+// in tests/auth would not hang on that name — but it would have to be written into
+// tests/auth/login-harness.ts, and it marks whatever file it is copied into; the definition can
+// only be in one place, because a second `export function freePort` would not compile into the
+// same module graph twice by accident.
+// What the marker does NOT cost: it does not decide whether a tree is scanned, only whether a
+// clean scan may report success (see the gate below), so a tree that slips it is still scanned
+// whole, and an unmarked tree holding a literal is named by file and line AND told it is the wrong
+// tree. Both notices, pinned in tests/plugin/bound-port-literals-guard.test.ts.
+const DEFINES_FREE_PORT = /\bexport (async )?function freePort\(/;
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -111,7 +110,7 @@ for (const file of files) {
 // nothing, but not what #73 scenario 3 asks for. Every tree is scanned now and every finding is
 // named; the marker only decides whether a clean result is allowed to mean anything. Scenario 2
 // is untouched by that: an unmarked tree still never exits 0, with findings or without.
-const marked = sources.some(([, source]) => ACQUIRES_PORTS.test(source));
+const marked = sources.some(([, source]) => DEFINES_FREE_PORT.test(source));
 
 const findings = sources.flatMap(([path, source]) =>
   [...source.matchAll(BIND_CALL)]
@@ -138,9 +137,9 @@ if (findings.length > 0) {
 // Both notices, never one: findings alone would make a run aimed at the wrong tree by accident
 // look like an ordinary hit, and the reader would fix the fixture instead of the argument.
 if (!marked) {
-  console.error(`Not the guarded tree: no file directly in ${show(target)} calls freePort().`);
-  console.error(`${files.length} .ts file(s) looked at. A tree that never acquires a port is not`);
-  console.error('the tree this guard is for, so a clean result here would mean nothing.');
+  console.error(`Not the guarded tree: no file directly in ${show(target)} defines freePort().`);
+  console.error(`${files.length} .ts file(s) looked at. A tree that does not own the port allocator is`);
+  console.error('not the tree this guard is for, so a clean result here would mean nothing.');
   console.error('Name the tree to scan, for example tests/auth.');
 }
 

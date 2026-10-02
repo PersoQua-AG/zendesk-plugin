@@ -17,11 +17,12 @@ afterEach(() => {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-// Every fixture meant to BE a guarded tree carries its mark — one freePort() call — exactly as
-// tests/auth does. An unmarked tree is still scanned and its findings are still named, but it can
-// never exit 0; keeping the mark here is what makes these cases exercise the guarded-tree path
-// rather than the wrong-tree one. See the script header.
-const ACQUIRES = 'const port = freePort();\n';
+// Every fixture meant to BE a guarded tree carries its mark — the DEFINITION of freePort(),
+// exactly as tests/auth/login-harness.ts carries it. A mere call is no longer the mark: PR #71
+// put freePort() calls in three more directories in a single merge and three wrong roots then
+// exited 0. An unmarked tree is still scanned and its findings are still named, but it can never
+// exit 0. See the script header.
+const ACQUIRES = 'export function freePort(): number { return 0; }\n';
 
 function fixture(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'port-guard-'));
@@ -53,18 +54,39 @@ describe('the bound-port guard as a script', () => {
     expect(runGuard('tests/auth', second).status).toBe(1);
   });
 
-  // Issue #73, scenario 2. "Holds .ts files" is not the cut: `tests` holds four of them and would
-  // have reported success while missing all 42 files of tests/auth below it.
-  // These roots are scanned now, not skipped, so some of them (tests/plugin) are refused WITH
-  // findings rather than only for the missing mark. The claim here is unchanged and is the only
-  // one scenario 2 makes: none of them exits 0, by whichever of the two reasons.
-  it('refuses every root that is not the tree it guards, instead of reporting it clean', () => {
-    for (const wrong of ['tests', 'tests/util', 'tests/tools', 'tests/plugin', 'src/auth']) {
-      const run = runGuard(wrong);
-      expect(run.status, `${wrong} reported success:\n${run.stdout}`).not.toBe(0);
-    }
-    expect(runGuard('tests').stderr).toContain('no file directly in tests calls freePort()');
-    // The empty and the vanished root are the same refusal, by the same rule.
+  // Issue #73, scenario 2 — swept, not listed. The predecessor drove a fixed list of five wrong
+  // roots. PR #71 turned two of them green (`tests`, `tests/tools`) and the list caught it — but
+  // only because both happened to be on it. The merge also created `tests/server-remote` and
+  // `tests/setup`, which were not; had the stray freePort() call landed in one of those, the list
+  // would have stayed green. A list cannot know which directory the next merge will create. This
+  // walks every directory in the repo that holds a tracked .ts file and demands that exactly ONE
+  // of them exits 0.
+  // Cost, measured: 27 roots, 27 real `node` runs, 1.3s wall on this machine
+  // (`time git ls-files '*.ts' | xargs -n1 dirname | sort -u | while read d; do \
+  //   node scripts/assert-no-bound-port-literals.mjs "$d" >/dev/null 2>&1; done`).
+  // That is affordable; if it stops being, the fallback is sampling, not a hand-kept list.
+  it('reports success for exactly one root in the whole repo, and it is tests/auth', () => {
+    const tracked = spawnSync('git', ['ls-files', '*.ts'], { cwd: root, encoding: 'utf8' });
+    expect(tracked.status, tracked.stderr).toBe(0);
+    const roots = [...new Set(tracked.stdout.trim().split('\n').map((f) => dirname(f)))].sort();
+    // A sweep that found nothing to sweep would pass every assertion below it.
+    expect(roots.length).toBeGreaterThan(20);
+
+    const clean = roots.filter((d) => runGuard(d).status === 0);
+    expect(clean).toEqual(['tests/auth']);
+  });
+
+  // The incident in one case: a foreign test file that merely CALLS freePort() lands in a wrong
+  // tree. Under the old marker ("some file here calls freePort()") that tree reported success.
+  it('is not marked by a tree that only calls freePort(), only by the one that defines it', () => {
+    const caller = fixture({ 'foreign.test.ts': 'const p = freePort();\nawait listen(p);\n' });
+    const run = runGuard(caller);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('Not the guarded tree');
+    expect(run.stdout).toBe('');
+  });
+
+  it('refuses a vanished or empty root, and says so without a stack trace', () => {
     expect(runGuard(fixture({})).status).toBe(1);
     const missing = runGuard(join(fixture({}), 'gone'));
     expect(missing.status).toBe(1);
@@ -141,11 +163,9 @@ describe('the bound-port guard as a script', () => {
 
     // The contrast that remains: a marked tree reports the same finding WITHOUT the wrong-tree
     // notice, so the two runs are still told apart by their message, not only by their exit code.
-    // The mark sits in a comment in a second file — nothing here acquires a port and the guard
-    // cannot tell, which is the false pass the header accounts for.
-    const pretending = runGuard(
-      fixture({ ...literal, 'helper.ts': '// freePort( — nothing in here acquires a port\n' }),
-    );
+    // The mark sits in a second file, as it does in tests/auth: login-harness.ts defines the
+    // allocator, the files that bind live beside it.
+    const pretending = runGuard(fixture({ ...literal, 'helper.ts': ACQUIRES }));
     expect(pretending.status).toBe(1);
     expect(pretending.stderr).toMatch(/p\.ts:3 deps\(18000\)/);
     expect(pretending.stderr).not.toContain('Not the guarded tree');
