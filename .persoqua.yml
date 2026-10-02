@@ -2,7 +2,7 @@
 # Verify these values; agents must never guess them. Adjust via /ops-init.
 ops_mode: central
 ops_path: ../ops                # shared submodule in the hub root
-integration_branch: main
+integration_branch: development
 github_repo: PersoQua-AG/zendesk-plugin
 zoho_portal_id: "20116092063"
 zoho_project_id: "339556000000139012"   # 8.1. Interne IT Entwicklung — shared, not exclusive to this repo
