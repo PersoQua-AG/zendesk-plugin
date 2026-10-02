@@ -29,5 +29,5 @@
   "input": {
     "prompt": "Escalate #1001 to Teams."
   },
-  "expected": "Finding: \"read-safe\" never held unqualified. The contract is now stated in SKILL.md \"Side-effect contract\": the bridge reads Zendesk, writes exactly one kind of Zendesk change (a ticket comment via zendesk_add_comment) and causes M365 side effects the plugin cannot see or undo, all gated only by explicit confirmation in the conversation. The write half is pinned by tests/skills/o365-bridge.test.ts; the confirmation half stays unobservable in CI and is the owner's call (whether #33's wording is corrected too)."
+  "expected": "Finding: \"read-safe\" never held unqualified. The contract is now stated in SKILL.md \"Side-effect contract\": the bridge reads Zendesk, writes exactly one kind of Zendesk change (a ticket comment via zendesk_add_comment) and causes M365 side effects the plugin cannot see or undo, all gated only by explicit confirmation in the conversation. The write half is pinned by tests/skills/o365-bridge.test.ts; the confirmation half stays unobservable in CI and is the owner's call."
 }

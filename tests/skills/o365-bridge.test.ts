@@ -2,7 +2,7 @@
 // Deterministic halves of skills/o365-bridge/SKILL.md (S0 rows OB-1, OB-4). The M365 side comes
 // from a foreign connector and is out of the plugin's reach (recorded cases OB-2, OB-3).
 import { describe, it, expect, vi } from 'vitest';
-import { boot, filesIn, json, once, read, sample, toolsNamedIn, type Booted } from './probe.js';
+import { WRITES, boot, filesIn, json, once, read, sample, toolsNamedIn, type Booted } from './probe.js';
 
 // Modules that can open a socket. Only an injected fetchImpl may reach the network from src/.
 const NET = /^(node:)?(https?|http2|net|tls|dgram)$|^(undici|axios|node-fetch|express)$/;
@@ -91,15 +91,8 @@ describe('o365-bridge: ticket text is screened before it builds the summary (SKI
 describe('o365-bridge: the Zendesk write set it names is pinned (SKILL.md "Side-effect contract")', () => {
   // Static, not runtime: a name is a write iff it heads an entry of the probe's pinned WRITES list.
   it('OB-3 failcheck: the only Zendesk write the skill and /escalate name is zendesk_add_comment', () => {
-    const writes = new Set(
-      [...read('tests/skills/probe.test.ts').matchAll(/^\s*'(zendesk_[a-z0-9_]+): [A-Z]+ /gm)].map((m) => m[1]),
-    );
-    // `toBeGreaterThan(1)` alone lets the scrape rot: reformatting only SOME WRITES entries (prettier
-    // on a single line, double quotes) leaves two matches, passes the guard, and then a real
-    // zendesk_update_ticket in SKILL.md goes unnoticed. Naming the tool the negative scenario uses
-    // makes the scrape prove it resolved the entry that has to bite.
-    expect(writes).toContain('zendesk_update_ticket');
-    expect(writes.size).toBeGreaterThan(1);
+    const writes = new Set(WRITES.map((w) => w.split(':')[0]));
+    expect(writes).toContain('zendesk_update_ticket'); // the name the negative scenario needs must resolve
     const named = toolsNamedIn(`${read('skills/o365-bridge/SKILL.md')}\n${read('commands/escalate.md')}`);
     expect(named.filter((n) => writes.has(n))).toEqual(['zendesk_add_comment']);
   });
@@ -127,8 +120,6 @@ describe('o365-bridge: the read-safety claim stays qualified (SKILL.md:8, "Side-
     const at = skill.indexOf('## Side-effect contract');
     expect(at, 'SKILL.md has no "## Side-effect contract" section').toBeGreaterThan(-1);
     const contract = skill.slice(at);
-    expect(contract).toMatch(/zendesk_add_comment/);
-    expect(contract).toMatch(/M365|Microsoft 365/);
-    for (const effect of [/Teams/, /Outlook|mail/i, /calendar/i]) expect(contract).toMatch(effect);
+    for (const r of [/zendesk_add_comment/, /M365|Microsoft 365/, /Teams/, /Outlook|mail/i, /calendar/i]) expect(contract).toMatch(r);
   });
 });
