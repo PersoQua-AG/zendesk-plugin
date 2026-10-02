@@ -273,9 +273,11 @@ export function shrink(c, fails, budget = 400) {
   return best;
 }
 
-// The hot-path entry point: generates n cases, runs them all in a pool, then evaluates the property
-// in generation order so the FIRST failure is deterministic for a given seed. Shrinking the failure
-// falls back to the serial path, which costs nothing on a green run.
+// The hot-path entry point, and the only one: runs `property(case, result, materialised)` over n
+// generated cases, where a property THROWS to fail. The first failure is shrunk and returned; null
+// means the whole batch held. It generates n cases, runs them all in a pool, then evaluates the
+// property in generation order so the FIRST failure is deterministic for a given seed. Shrinking
+// the failure falls back to the serial path, which costs nothing on a green run.
 export async function checkParallel(property, { seed = 1, n = 32, concurrency = 8 } = {}) {
   const rnd = prng(seed);
   const temps = [];
@@ -301,50 +303,6 @@ export async function checkParallel(property, { seed = 1, n = 32, concurrency = 
         try {
           const m = materialise(minimal, temps);
           property(minimal, execute(m.argv), m);
-        } catch (err) {
-          message = String(err?.message ?? err);
-        }
-        return { seed, index: i, original: c, minimal, message };
-      }
-    }
-    return null;
-  } finally {
-    for (const d of temps) rmSync(d, { recursive: true, force: true });
-  }
-}
-
-// Runs `property(case, result, materialised)` over n generated cases. A property throws to fail.
-// The first failure is shrunk and returned; null means the whole batch held.
-export function check(property, { seed = 1, n = 60 } = {}) {
-  const rnd = prng(seed);
-  const temps = [];
-  const attempt = (c) => {
-    const m = materialise(c, temps);
-    const result = execute(m.argv);
-    property(c, result, m);
-  };
-  const fails = (c) => {
-    try {
-      attempt(c);
-      return false;
-    } catch {
-      return true;
-    }
-  };
-  try {
-    for (let i = 0; i < n; i += 1) {
-      const c = generate(rnd);
-      let error;
-      try {
-        attempt(c);
-      } catch (err) {
-        error = err;
-      }
-      if (error) {
-        const minimal = shrink(c, fails);
-        let message = String(error?.message ?? error);
-        try {
-          attempt(minimal);
         } catch (err) {
           message = String(err?.message ?? err);
         }
