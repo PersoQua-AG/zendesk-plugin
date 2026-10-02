@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveAuthConfig, USER_CONFIG_FIELD_BY_ENV } from '../../src/auth/config.js';
+import { keychain } from './keychain.js';
 import { createServer } from '../../src/server.js';
 
 // The MCPB host substitutes ${user_config.x} only for values it actually has: an optional field the
@@ -32,7 +33,7 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
     const { config } = resolveAuthConfig({
       ...fullEnv(),
       ZENDESK_OAUTH_CALLBACK_PORT: '${user_config.oauth_callback_port}',
-    });
+    }, keychain());
     expect(config.callbackPort).toBe(8976);
     expect(Number.isNaN(config.callbackPort)).toBe(false);
   });
@@ -41,30 +42,41 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
     const { dataDir } = resolveAuthConfig({
       ...fullEnv(),
       CLAUDE_PLUGIN_DATA: '${user_config.data_dir}',
-    });
+    }, keychain());
     expect(dataDir).not.toContain('${');
   });
 
-  it.each(['ZENDESK_SUBDOMAIN', 'ZENDESK_OAUTH_CLIENT_ID', 'ZENDESK_OAUTH_CLIENT_SECRET'])(
+  it.each(['ZENDESK_SUBDOMAIN', 'ZENDESK_OAUTH_CLIENT_ID'])(
     'a required %s left as a placeholder fails loudly and names the config field',
     (name) => {
       const env = { ...fullEnv(), [name]: `\${user_config.${USER_CONFIG_FIELD_BY_ENV[name]}}` };
-      expect(() => resolveAuthConfig(env)).toThrow(USER_CONFIG_FIELD_BY_ENV[name]);
+      expect(() => resolveAuthConfig(env, keychain())).toThrow(USER_CONFIG_FIELD_BY_ENV[name]);
     },
   );
+
+  // The client secret is no longer required (#68), so the placeholder it may arrive as must read as
+  // "absent" — not as a secret literally called "${user_config.oauth_client_secret}", which Zendesk
+  // would refuse with a 401 nobody could explain.
+  it('a placeholder client secret reads as absent rather than as a secret', () => {
+    const { config } = resolveAuthConfig(
+      { ...fullEnv(), ZENDESK_OAUTH_CLIENT_SECRET: '${user_config.oauth_client_secret}' },
+      keychain(),
+    );
+    expect(config.clientSecret).toBeUndefined();
+  });
 
   it('a placeholder security level and markdown flag fall back to the shipped defaults', () => {
     const { ctx } = createServer({
       ...serverEnv(),
       ZENDESK_SECURITY_LEVEL: '${user_config.security_level}',
       ZENDESK_MARKDOWN_CONVERSION: '${user_config.markdown_conversion}',
-    });
+    }, { security: keychain() });
     expect(ctx.securityLevel).toBe('standard');
     expect(ctx.markdownDefault).toBe(true);
   });
 
   it('a stringified boolean "false" still disables markdown conversion', () => {
-    const { ctx } = createServer({ ...serverEnv(), ZENDESK_MARKDOWN_CONVERSION: 'false' });
+    const { ctx } = createServer({ ...serverEnv(), ZENDESK_MARKDOWN_CONVERSION: 'false' }, { security: keychain() });
     expect(ctx.markdownDefault).toBe(false);
   });
 });
@@ -79,7 +91,7 @@ describe('markdown conversion — an unreadable value is never read as a silent 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const env = serverEnv();
     if (value !== undefined) env.ZENDESK_MARKDOWN_CONVERSION = value;
-    const { ctx } = createServer(env);
+    const { ctx } = createServer(env, { security: keychain() });
     const warnings = warn.mock.calls.map((c) => String(c[0]));
     warn.mockRestore();
     return { markdownDefault: ctx.markdownDefault, warnings };

@@ -15,6 +15,10 @@ const config: OAuthConfig = {
   scopes: ['read', 'write'],
 };
 
+// The CLI encrypts with the Keychain key, not with the client secret any more, so the key is its own
+// fixture here — and the case below that re-reads the file reads it with THIS value.
+const STORE_KEY = 'store-key-for-the-cli-0123456789';
+
 let dataDir: string;
 
 function baseDeps(overrides: Partial<AuthorizeDeps> = {}): { deps: AuthorizeDeps; lines: string[] } {
@@ -22,6 +26,7 @@ function baseDeps(overrides: Partial<AuthorizeDeps> = {}): { deps: AuthorizeDeps
   const deps: AuthorizeDeps = {
     config,
     tokensPath: `${dataDir}/tokens.enc`,
+    tokenStoreKey: STORE_KEY,
     generateVerifier: () => 'fixed-verifier',
     generateState: () => 'fixed-state',
     now: () => 1_000_000,
@@ -44,7 +49,7 @@ describe('authorize', () => {
   it('saves tokens the server can load with matching key/path', () => {
     const { deps } = baseDeps();
     return authorize(deps).then(() => {
-      const stored = new TokenStore(`${dataDir}/tokens.enc`, config.clientSecret).load();
+      const stored = new TokenStore(`${dataDir}/tokens.enc`, STORE_KEY).load();
       expect(stored).toEqual({ accessToken: 'access-1', refreshToken: 'refresh-1', expiresAt: 1_000_000 + 3600 * 1000 });
     });
   });
@@ -98,6 +103,7 @@ describe('authorize', () => {
       await authorize({
         config,
         tokensPath: `${dataDir}/tokens.enc`,
+        tokenStoreKey: STORE_KEY,
         generateVerifier: () => 'fixed-verifier',
         now: () => 1_000_000,
         waitForCode: async (_port, state) => {

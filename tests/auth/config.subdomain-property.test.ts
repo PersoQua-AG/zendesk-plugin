@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { resolveAuthConfig } from '../../src/auth/config.js';
 import { buildAuthorizationUrl } from '../../src/auth/oauth-flow.js';
+import { keychain } from './keychain.js';
 
 // The subdomain guard has exactly ONE property worth having, and a list of example values cannot
 // state it: whatever resolveAuthConfig accepts must be unable to move a plugin URL off the
@@ -73,7 +74,7 @@ describe('subdomain guard — the property, over a generated input space', () =>
       const value = candidate(rnd);
       let resolved: string | undefined;
       try {
-        resolved = resolveAuthConfig(env(value)).config.subdomain;
+        resolved = resolveAuthConfig(env(value), keychain()).config.subdomain;
       } catch {
         rejected += 1;
         continue;
@@ -122,7 +123,7 @@ describe('subdomain guard — the property, over a generated input space', () =>
     ['a very long value', 'a'.repeat(10_000)],
     ['a very long value made of legal characters and one dot', `${'a'.repeat(200)}.evil.example.com`],
   ])('rejects %s', (_label, value) => {
-    expect(() => resolveAuthConfig(env(value))).toThrow(/ZENDESK_SUBDOMAIN/);
+    expect(() => resolveAuthConfig(env(value), keychain())).toThrow(/ZENDESK_SUBDOMAIN/);
   });
 
   // The residual the character set leaves open, now closed: an "xn--" prefix is letters and dashes,
@@ -139,15 +140,15 @@ describe('subdomain guard — the property, over a generated input space', () =>
   ])('rejects an xn-- value that is not a host name at all: %s', (_label, value) => {
     // Still not an origin defect — asserted before the rejection, so the two claims stay separate.
     expect(staysOnTheAccountHost(value)).toBe(true);
-    expect(() => resolveAuthConfig(env(value))).toThrow(/ZENDESK_SUBDOMAIN/);
-    expect(() => resolveAuthConfig(env(value))).toThrow(/"zendesk_subdomain"/);
+    expect(() => resolveAuthConfig(env(value), keychain())).toThrow(/ZENDESK_SUBDOMAIN/);
+    expect(() => resolveAuthConfig(env(value), keychain())).toThrow(/"zendesk_subdomain"/);
   });
 
   // The other half of that choice, and the reason the prefix itself is not refused: a REAL punycode
   // subdomain decodes, and a customer may hold one. "xn--bcher-kva" is "bücher". Rejecting the
   // prefix would have locked them out; forming the URL states the property instead.
   it('keeps a valid punycode subdomain working', () => {
-    const { config } = resolveAuthConfig(env('xn--bcher-kva'));
+    const { config } = resolveAuthConfig(env('xn--bcher-kva'), keychain());
     expect(config.subdomain).toBe('xn--bcher-kva');
     expect(new URL(buildAuthorizationUrl(config, 'challenge', 'state')).hostname).toBe(
       'xn--bcher-kva.zendesk.com',
@@ -158,7 +159,7 @@ describe('subdomain guard — the property, over a generated input space', () =>
   // documents as legal — the guard is worthless if it is enforced somewhere the URL is not built.
   it('holds through buildAuthorizationUrl for every documented-legal shape', () => {
     for (const value of ['a', 'ab', 'acme', 'ACME', '2acme', 'a-b-c', '-acme', 'acme-', 'a'.repeat(63)]) {
-      const { config } = resolveAuthConfig(env(value));
+      const { config } = resolveAuthConfig(env(value), keychain());
       const url = new URL(buildAuthorizationUrl(config, 'challenge', 'state'));
       expect(url.hostname).toBe(`${value.toLowerCase()}.zendesk.com`);
       expect(url.username).toBe('');

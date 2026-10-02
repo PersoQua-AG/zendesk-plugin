@@ -7,6 +7,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer, type ServerDeps } from '../../src/server.js';
 import { RateLimiter } from '../../src/client/rate-limiter.js';
 import { ResponseCache } from '../../src/client/cache.js';
+import { keychain } from '../auth/keychain.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -26,7 +27,7 @@ function fixtureEnv(): NodeJS.ProcessEnv {
 
 // Build a server the given way, list its tools over an in-memory transport pair.
 async function listTools(env: NodeJS.ProcessEnv, deps?: ServerDeps) {
-  const { server } = createServer(env, deps);
+  const { server } = createServer(env, { security: keychain(), ...deps });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'parity', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);
@@ -49,13 +50,17 @@ function remoteDeps(): ServerDeps {
 }
 
 describe('tool-surface parity (remote vs stdio)', () => {
-  // Parity holds for all 64 Zendesk tools. The single deliberate exception is zendesk_login: it
-  // binds a LOCALHOST OAuth callback listener, which only the local (stdio / Desktop Extension)
-  // path can receive — the remote bridge authorizes through its own public callback and would offer
-  // a tool that can never complete. Any OTHER divergence is still a parity break.
+  // Parity holds for all 64 Zendesk tools. There are two deliberate exceptions, both local-only.
+  // zendesk_login binds a LOCALHOST OAuth callback listener, which only the local (stdio / Desktop
+  // Extension) path can receive — the remote bridge authorizes through its own public callback and
+  // would offer a tool that can never complete. zendesk_diagnostics reports the machine the server
+  // runs on, which on the remote path is the operator's and none of a remote user's business. Any
+  // OTHER divergence is still a parity break.
+  const LOCAL_ONLY = ['zendesk_login', 'zendesk_diagnostics'];
+
   it('exposes an identical set of 64 Zendesk tool names + input schemas on both transports', async () => {
     const env = fixtureEnv();
-    const stdio = (await listTools(env)).filter((t) => t.name !== 'zendesk_login');
+    const stdio = (await listTools(env)).filter((t) => !LOCAL_ONLY.includes(t.name));
     const remote = await listTools(fixtureEnv(), remoteDeps());
 
     expect(stdio).toHaveLength(64);
@@ -65,10 +70,10 @@ describe('tool-surface parity (remote vs stdio)', () => {
     expect(remote).toEqual(stdio);
   });
 
-  it('zendesk_login is the only tool the local path adds over the remote path', async () => {
+  it('zendesk_login and zendesk_diagnostics are the only tools the local path adds', async () => {
     const stdio = (await listTools(fixtureEnv())).map((t) => t.name);
     const remote = (await listTools(fixtureEnv(), remoteDeps())).map((t) => t.name);
-    expect(stdio.filter((n) => !remote.includes(n))).toEqual(['zendesk_login']);
+    expect(stdio.filter((n) => !remote.includes(n)).sort()).toEqual([...LOCAL_ONLY].sort());
     expect(remote.filter((n) => !stdio.includes(n))).toEqual([]);
   });
 });

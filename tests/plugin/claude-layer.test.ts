@@ -55,10 +55,11 @@ const EXPECTED = [
 ];
 
 describe('M7 Claude layer', () => {
-  // 64 Zendesk data/action tools + zendesk_login. The stdio tool surface is deliberately extended
-  // by exactly one tool so a Desktop user, who has no terminal for `npm run authorize`, can log in.
-  it('registers exactly 65 zendesk tools', () => {
-    expect(registeredTools().size).toBe(65);
+  // 64 Zendesk data/action tools + zendesk_login + zendesk_diagnostics. The stdio tool surface is
+  // deliberately extended by exactly two tools: a Desktop user has no terminal for
+  // `npm run authorize`, and no way to measure the host they are on either (#68).
+  it('registers exactly 66 zendesk tools', () => {
+    expect(registeredTools().size).toBe(66);
   });
 
   it('every expected skill/command/agent file exists', () => {

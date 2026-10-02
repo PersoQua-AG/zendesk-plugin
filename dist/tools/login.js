@@ -15,8 +15,10 @@ import { dirname } from 'node:path';
 import { generateCodeChallenge, generateCodeVerifier } from '../auth/pkce.js';
 import { buildAuthorizationUrl, exchangeCodeForTokens, startCallbackListener, DEFAULT_CALLBACK_TIMEOUT_MS, } from '../auth/oauth-flow.js';
 import { TokenStore } from '../auth/token-store.js';
+import { createSetupRoute, newSetupToken, setupUrl, SETUP_TIMEOUT_MS } from './setup.js';
 const RETRY_RESOLVED = 'Run zendesk_login again once that is resolved.';
-const RETRY_FRESH = 'Run zendesk_login again to start a new authorization.';
+const RETRY_FRESH = 'Run zendesk_login again to start a new authorization. If the stored subdomain, client id or client ' +
+    'secret is the problem, run zendesk_login with setup=true to enter them again.';
 const UNREADABLE_STORE = 'Stored credentials could not be read (encryption secret changed or file corrupt) — starting a new authorization.';
 let activeFlow = null;
 // Ends any authorization in progress: closes the callback listener (freeing the port) and forgets
@@ -37,7 +39,7 @@ export function abortLoginFlow() {
 // so, because silently discarding stored credentials is exactly what a user wants explained.
 function readExistingTokens(deps) {
     try {
-        const tokens = new TokenStore(deps.tokensPath, deps.config.clientSecret).load();
+        const tokens = new TokenStore(deps.tokensPath, deps.tokenStoreKey).load();
         return { tokens: tokens?.refreshToken ? tokens : null, unreadable: false };
     }
     catch {
@@ -95,9 +97,86 @@ async function beginFlow(deps, listen, timeoutMs) {
         `Then run zendesk_login a second time to finish — this call does not wait for you. The authorization stays open for ${Math.round(timeoutMs / 60_000)} minute(s); after that, run zendesk_login to start over.`,
     ].join('\n');
 }
+// Call 1 on a machine that has no configuration at all: bind the listener, serve the page, and answer
+// with nothing but its URL. The authorization URL does not exist yet and no value does either, so
+// there is nothing else this answer could carry. The verifier and the `state` are generated HERE
+// because neither depends on the configuration — which is what lets one listener and one flow span
+// setup AND the authorization that follows it, with no second port and no rebind.
+async function beginSetup(deps, setup, listen, 
+// What to say when nothing could be bound: the degraded wording the server already produced, which
+// names what is missing. Absent on a CONFIGURED install reaching setup=true — there is nothing missing
+// there — and then the bind failure speaks for itself, port and field included.
+fallback) {
+    const verifier = generateCodeVerifier();
+    const state = randomBytes(16).toString('base64url');
+    const token = newSetupToken();
+    const timeoutMs = setup.timeoutMs ?? SETUP_TIMEOUT_MS;
+    const port = deps.config.callbackPort;
+    // Assigned once the listener is up, the way oauth-flow.ts assigns its own forward references: there
+    // is no such thing as a flow whose listener failed to bind, and a placeholder close() would be a
+    // function nothing ever calls. The submit closure below reaches it lazily, which it may: the page's
+    // URL — and with it the only token that opens the route — is published after the bind.
+    let flow;
+    const route = createSetupRoute({
+        port,
+        token,
+        submit: (values) => {
+            setup.writeConfig(values);
+            const config = {
+                ...deps.config,
+                subdomain: values.ZENDESK_SUBDOMAIN,
+                clientId: values.ZENDESK_OAUTH_CLIENT_ID,
+                clientSecret: values.ZENDESK_OAUTH_CLIENT_SECRET,
+            };
+            flow.config = config;
+            flow.url = buildAuthorizationUrl(config, generateCodeChallenge(verifier), state);
+            // Stored, so the session that is already running may have it — before the redirect, because the
+            // very next tool call can arrive while the person is still at Zendesk.
+            setup.onConfigured?.(config);
+            return flow.url;
+        },
+    });
+    let listener;
+    try {
+        listener = await listen(port, state, timeoutMs, route);
+    }
+    catch (err) {
+        // Nothing was bound, so there is no page to send anyone to — and the bind failure is reported even
+        // when there is a degraded reason to report first. It used to lose to it, so a first-run install whose
+        // port was taken was told about its missing subdomain and nothing about the port it could not have.
+        const failure = `${failureText(err, deps)} ${RETRY_RESOLVED}`;
+        return fallback ? `${fallback} ${failure}` : failure;
+    }
+    // The URL names an address the listener REPORTED binding. 127.0.0.1 when it is there, because that is
+    // the one a browser reaches without a DNS answer; [::1] when only that family came up. Never a family
+    // that failed to bind — that URL would point at whatever else holds the port (#68 B2).
+    // 127.0.0.1 when it is there, because that is the one a browser reaches without asking a resolver;
+    // otherwise the family that did come up — in brackets, which is how an IPv6 literal is spelled in a URL.
+    const bound = listener.addresses;
+    const page = setupUrl(bound.includes('127.0.0.1') ? '127.0.0.1' : `[${bound[0]}]`, port, token);
+    flow = { verifier, url: '', outcome: { kind: 'pending' }, close: listener.close, setupUrl: page };
+    void listener.promise.then((result) => {
+        flow.outcome = { kind: 'received', result };
+    }, (err) => {
+        flow.outcome = { kind: 'failed', text: failureText(err, deps) };
+    });
+    activeFlow = flow;
+    return [
+        'Zendesk is not set up on this machine yet. Open this page in your browser \u2014 it runs locally, it explains how to create the OAuth client in your Zendesk, and it collects the three values:',
+        page,
+        `Nothing has to be typed into the chat, and the client secret never reaches it. The page continues into the Zendesk login by itself; afterwards run zendesk_login once more. It stays open for ${Math.round(timeoutMs / 60_000)} minute(s).`,
+    ].join('\n');
+}
 // Call 2: whatever the running flow has become by now.
 async function collectFlow(flow, deps, exchange) {
     const outcome = flow.outcome;
+    if (outcome.kind === 'pending' && flow.setupUrl && !flow.config) {
+        return [
+            'Zendesk setup is still open. Open this page in your browser and enter the three values from your Zendesk OAuth client:',
+            flow.setupUrl,
+            'The page continues into the Zendesk login by itself. Then run zendesk_login again.',
+        ].join('\n');
+    }
     if (outcome.kind === 'pending') {
         // The URL is repeated on purpose: by now the user may well have lost the first message, and
         // the state inside it is still the one this listener validates against.
@@ -113,8 +192,9 @@ async function collectFlow(flow, deps, exchange) {
     if (outcome.kind === 'failed')
         return `${outcome.text} ${RETRY_FRESH}`;
     try {
-        const tokens = await exchange(deps.config, outcome.result.code, flow.verifier, outcome.result.redirectUri);
-        new TokenStore(deps.tokensPath, deps.config.clientSecret).save({
+        const config = flow.config ?? deps.config;
+        const tokens = await exchange(config, outcome.result.code, flow.verifier, outcome.result.redirectUri);
+        new TokenStore(deps.tokensPath, deps.tokenStoreKey).save({
             accessToken: tokens.accessToken,
             refreshToken: tokens.refreshToken,
             expiresAt: Date.now() + tokens.expiresIn * 1000,
@@ -123,7 +203,12 @@ async function collectFlow(flow, deps, exchange) {
     catch (err) {
         return `${failureText(err, deps)} ${RETRY_FRESH}`;
     }
-    return 'Authorization complete — the Zendesk credentials are stored encrypted and are refreshed automatically. Verify with zendesk_get_me.';
+    // A flow that came through setup configured the plugin mid-session, and this process resolved its
+    // configuration at startup: the Zendesk client it holds is still the empty one. Saying so is the
+    // honest end of that path — see the note in src/server.ts on why it does not re-resolve itself.
+    return flow.config
+        ? 'Authorization complete — the configuration is in the Keychain, the Zendesk credentials are stored encrypted, and this session is using both already. Verify with zendesk_get_me.'
+        : 'Authorization complete — the Zendesk credentials are stored encrypted and are refreshed automatically. Verify with zendesk_get_me.';
 }
 // Two zendesk_login calls can OVERLAP: the tool asks to be called twice, and a model that emits
 // both tool_use blocks in one turn produces exactly that interleaving. Every call is therefore
@@ -143,17 +228,30 @@ export function runLogin(deps, options = {}) {
     return next;
 }
 async function runQueuedLogin(deps, options) {
-    if (deps.configError)
-        return deps.configError;
     const timeoutMs = deps.callbackTimeoutMs ?? DEFAULT_CALLBACK_TIMEOUT_MS;
     const listen = deps.listen ?? startCallbackListener;
     const exchange = deps.exchange ?? exchangeCodeForTokens;
     // force means "start over": abandon a flow in progress instead of collecting it, so a user who
-    // lost the browser tab is not stuck until the listener times out.
-    if (options.force)
+    // lost the browser tab is not stuck until the listener times out. It is also how setup is reached a
+    // SECOND time — a subdomain typed wrong, a client replaced, an account switched — because the
+    // branch below runs again from scratch, on the same single-flight lock as every other login.
+    if (options.force || options.setup)
         abortLoginFlow();
     if (activeFlow)
         return collectFlow(activeFlow, deps, exchange);
+    // No usable configuration — or one the user says is the wrong one. The first-run page is the answer,
+    // not an error, but only where one can actually be stored: otherwise the degraded wording stands,
+    // because it is the one that says WHY (a locked Keychain, another platform, an unusable data directory).
+    //
+    // There is deliberately no third message for "setup=true and nowhere to store one and nothing to
+    // report": the server cannot build that pair — a configuration that resolves proves the Keychain
+    // answered, and one that does not always carries a reason — and a message for an unreachable state is a
+    // message no test can earn.
+    if (deps.setup && (deps.configError || options.setup)) {
+        return beginSetup(deps, deps.setup, listen, deps.configError ?? undefined);
+    }
+    if (deps.configError)
+        return deps.configError;
     const existing = readExistingTokens(deps);
     if (!options.force && existing.tokens) {
         return 'Already authorized with Zendesk — the stored credentials are usable and are refreshed automatically. Verify with zendesk_get_me, or call zendesk_login with force=true to authorize again.';

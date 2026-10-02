@@ -109,3 +109,32 @@ describe('ZendeskHttpClient', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 });
+
+// The host is not always known when the client is built: the first-run setup page supplies the subdomain
+// mid-session (#68), and a base URL frozen in the constructor sent every later request to
+// https://.zendesk.com. So the option takes a function, read per request.
+describe('a subdomain that arrives later', () => {
+  it('is read per request, not once at construction', async () => {
+    const urls: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL) => {
+      urls.push(String(input));
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    let subdomain = '';
+    const client = new ZendeskHttpClient({
+      subdomain: () => subdomain,
+      authManager: fakeAuthManager('tok'),
+      rateLimiter: fakeRateLimiter(),
+      fetchImpl,
+    });
+
+    await client.request('/users/me.json');
+    subdomain = 'acme';
+    await client.request('/users/me.json');
+
+    expect(urls).toEqual([
+      'https://.zendesk.com/api/v2/users/me.json',
+      'https://acme.zendesk.com/api/v2/users/me.json',
+    ]);
+  });
+});

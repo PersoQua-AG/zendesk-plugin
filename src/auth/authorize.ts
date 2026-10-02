@@ -14,6 +14,8 @@ export interface AuthorizeDeps {
   // The resolved token file path from resolveAuthConfig — the single source of truth the server
   // also reads, so the two never derive divergent locations.
   tokensPath: string;
+  // Likewise resolved once, so the CLI encrypts with the same key the server decrypts with.
+  tokenStoreKey: string;
   waitForCode?: (port: number, state: string) => Promise<AuthorizationResult>;
   exchange?: typeof exchangeCodeForTokens;
   generateVerifier?: () => string;
@@ -29,6 +31,7 @@ export async function authorize(deps: AuthorizeDeps): Promise<void> {
   const {
     config,
     tokensPath,
+    tokenStoreKey,
     waitForCode = waitForAuthorizationCode,
     exchange = exchangeCodeForTokens,
     generateVerifier = generateCodeVerifier,
@@ -49,7 +52,7 @@ export async function authorize(deps: AuthorizeDeps): Promise<void> {
   const result = await waitForCode(config.callbackPort, state);
   const tokens = await exchange(config, result.code, verifier, result.redirectUri);
 
-  const store = new TokenStore(tokensPath, config.clientSecret);
+  const store = new TokenStore(tokensPath, tokenStoreKey);
   store.save({
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,

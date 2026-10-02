@@ -105,6 +105,7 @@ describe('token request timeout', () => {
     const arrived: NonNullable<LoginDeps['listen']> = async (): Promise<CallbackListener> => ({
       promise: Promise.resolve({ code: 'c', redirectUri: `http://localhost:${port}/callback` }),
       close: () => {},
+      addresses: ['127.0.0.1', '::1'],
     });
     const d = deps(port, {
       listen: arrived,

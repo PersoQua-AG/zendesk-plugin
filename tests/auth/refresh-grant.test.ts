@@ -56,7 +56,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const config: OAuthConfig = {
+// `clientSecret` became optional on OAuthConfig when a public client was still on the table (#68); the
+// remote path this fixture drives has always required one, so the fixture pins it rather than making
+// forty-seven uses assert it.
+const config: OAuthConfig & { clientSecret: string } = {
   subdomain: 'acme',
   clientId: 'cid',
   clientSecret: 'server-secret-that-is-long-enough',

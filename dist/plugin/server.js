@@ -21111,7 +21111,118 @@ import { createServer } from "node:http";
 
 // src/auth/config.ts
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+
+// src/auth/store-key.ts
+import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+var SECURITY_BIN = "/usr/bin/security";
+var SERVICE = "zendesk-plugin";
+var ACCOUNT = "token-store-key";
+var KEYCHAIN_ABSENT = 44;
+var KEYCHAIN_UNAVAILABLE = -1;
+var SPAWN_FAILED = -2;
+var MIN_ENC_KEY_BYTES = 32;
+function encKeyStrengthBytes(key) {
+  if (/^[0-9a-fA-F]+$/.test(key) && key.length % 2 === 0) return key.length / 2;
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(key)) return Buffer.from(key, "base64").length;
+  return Buffer.byteLength(key, "utf8");
+}
+function runSecurity(args, input, bin = SECURITY_BIN) {
+  try {
+    const output = execFileSync(bin, args, {
+      input: input ?? "",
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"]
+    });
+    return { status: 0, output };
+  } catch (err) {
+    const { code, status } = err;
+    if (code === "ENOENT") return { status: KEYCHAIN_UNAVAILABLE, output: "" };
+    return { status: typeof status === "number" ? status : SPAWN_FAILED, output: "" };
+  }
+}
+var UNSUPPORTED_PLATFORM = "The Zendesk configuration and the token-store key live in the macOS Keychain, and this is not macOS. A Windows or Linux key source is issue #69 (github.com/PersoQua-AG/zendesk-plugin/issues/69); until then pass ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID and ZENDESK_OAUTH_CLIENT_SECRET in the environment. There is deliberately no weaker fallback.";
+function unreadable(status) {
+  return new Error(
+    `The macOS Keychain could not be read (security exited ${status}). Unlock the login keychain, allow access when asked, then try again.`
+  );
+}
+function writeItem(run, account, value) {
+  return run(["add-generic-password", "-s", SERVICE, "-a", account, "-U", "-w"], `${value}
+${value}
+`);
+}
+function resolveTokenStoreKey(run = runSecurity) {
+  const found = run(["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"]);
+  if (found.status === 0) {
+    const key2 = found.output.trim();
+    if (encKeyStrengthBytes(key2) < MIN_ENC_KEY_BYTES) {
+      throw new Error(
+        `The Keychain item "${SERVICE}/${ACCOUNT}" carries fewer than ${MIN_ENC_KEY_BYTES} bytes of entropy. Delete it in Keychain Access and run the login again to have a fresh key created.`
+      );
+    }
+    return key2;
+  }
+  if (found.status === KEYCHAIN_UNAVAILABLE) throw new Error(UNSUPPORTED_PLATFORM);
+  if (found.status !== KEYCHAIN_ABSENT) throw unreadable(found.status);
+  const key = randomBytes(MIN_ENC_KEY_BYTES).toString("base64");
+  const added = writeItem(run, ACCOUNT, key);
+  if (added.status !== 0) {
+    throw new Error(
+      `The token-store key could not be written to the macOS Keychain (security exited ${added.status}).`
+    );
+  }
+  return key;
+}
+var CONFIG_ACCOUNTS = {
+  ZENDESK_SUBDOMAIN: "oauth-subdomain",
+  ZENDESK_OAUTH_CLIENT_ID: "oauth-client-id",
+  ZENDESK_OAUTH_CLIENT_SECRET: "oauth-client-secret"
+};
+var configEntries = Object.entries(CONFIG_ACCOUNTS);
+function readKeychainConfig(run = runSecurity) {
+  const stored = {};
+  for (const [name, account] of configEntries) {
+    const found = run(["find-generic-password", "-s", SERVICE, "-a", account, "-w"]);
+    if (found.status === KEYCHAIN_UNAVAILABLE) return {};
+    if (found.status === KEYCHAIN_ABSENT) continue;
+    if (found.status !== 0) throw unreadable(found.status);
+    const value = found.output.trim();
+    if (value) stored[name] = value;
+  }
+  return stored;
+}
+function writeKeychainConfig(values, run = runSecurity) {
+  const written = [];
+  for (const [name, account] of configEntries) {
+    const added = writeItem(run, account, values[name]);
+    if (added.status === 0) {
+      written.push(account);
+      continue;
+    }
+    const platform = added.status === KEYCHAIN_UNAVAILABLE ? ` ${UNSUPPORTED_PLATFORM}` : "";
+    throw new Error(
+      `"${account}" could not be written to the macOS Keychain (security exited ${added.status}).${rollback(run, written)}${platform}`
+    );
+  }
+  const stored = readKeychainConfig(run);
+  const wrong = configEntries.filter(([name]) => stored[name] !== values[name]).map(([, account]) => account);
+  if (wrong.length > 0) {
+    throw new Error(
+      `the macOS Keychain did not keep ${wrong.map((account) => `"${account}"`).join(", ")} as written.` + rollback(run, written)
+    );
+  }
+}
+function rollback(run, written) {
+  const left = written.filter(
+    (account) => run(["delete-generic-password", "-s", SERVICE, "-a", account]).status !== 0
+  );
+  if (left.length === 0) return " Nothing was left behind.";
+  return ` ${left.map((account) => `"${account}"`).join(", ")} could not be removed again \u2014 delete ${left.length === 1 ? "it" : "them"} under the service "${SERVICE}" in Keychain Access before trying again.`;
+}
+
+// src/auth/config.ts
 var DEFAULT_CALLBACK_PORT = 8976;
 var DATA_DIR_NAME = "zendesk-plugin";
 var DEFAULT_SCOPES = ["read", "write"];
@@ -21137,12 +21248,19 @@ var USER_CONFIG_FIELDS = {
 };
 var USER_CONFIG_FIELD_BY_ENV = USER_CONFIG_FIELDS;
 var PLACEHOLDER = /^\$\{[^}]*\}$/;
+function isPlaceholder(value) {
+  return typeof value === "string" && PLACEHOLDER.test(value);
+}
 function stripPlaceholders(env) {
   const out = { ...env };
   for (const [key, value] of Object.entries(out)) {
-    if (typeof value === "string" && PLACEHOLDER.test(value)) delete out[key];
+    if (isPlaceholder(value)) delete out[key];
   }
   return out;
+}
+function dataDirOf(env) {
+  const raw = env.CLAUDE_PLUGIN_DATA;
+  return raw && isAbsolute(raw) ? raw : defaultDataDir(env);
 }
 var MIN_CALLBACK_PORT = 1024;
 var MAX_CALLBACK_PORT = 65535;
@@ -21156,12 +21274,26 @@ function callbackPort(env) {
   }
   return port;
 }
+function callbackPortOrDefault(env) {
+  try {
+    return { port: callbackPort(env) };
+  } catch (err) {
+    const problem = err.message.split("\n")[0];
+    return {
+      port: DEFAULT_CALLBACK_PORT,
+      problem: `${problem} Port ${DEFAULT_CALLBACK_PORT} is being used until that is corrected \u2014 register the redirect URL for the port you finally keep.`
+    };
+  }
+}
 var MAX_SUBDOMAIN_LENGTH = 63;
 var SUBDOMAIN_PATTERN = /^[a-z0-9-]+$/i;
 var SUBDOMAIN_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" must be the subdomain by itself \u2014 letters, digits and dashes, at most ${MAX_SUBDOMAIN_LENGTH} characters; for acme.zendesk.com the value is "acme"`;
 var SUBDOMAIN_NOT_A_HOST_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" is not a usable host name \u2014 a value starting with "xn--" is an internationalized-domain prefix and this one does not decode; for acme.zendesk.com the value is "acme"`;
 function subdomain(env) {
-  const raw = required2(env, "ZENDESK_SUBDOMAIN").trim();
+  return validateSubdomain(required2(env, "ZENDESK_SUBDOMAIN"));
+}
+function validateSubdomain(value) {
+  const raw = value.trim();
   if (!SUBDOMAIN_PATTERN.test(raw) || raw.length > MAX_SUBDOMAIN_LENGTH) {
     throw new Error(`Invalid environment variable: ZENDESK_SUBDOMAIN="${raw}" (${SUBDOMAIN_RULE}).`);
   }
@@ -21172,6 +21304,26 @@ function subdomain(env) {
   }
   return raw;
 }
+function withKeychainConfig(env, security) {
+  const missing = Object.keys(CONFIG_ACCOUNTS).filter((name) => !env[name]);
+  if (missing.length === 0) return env;
+  const stored = readKeychainConfig(security);
+  const filled = { ...env };
+  for (const name of missing) {
+    const value = stored[name];
+    if (!value || name === "ZENDESK_SUBDOMAIN" && !isUsableSubdomain(value)) continue;
+    filled[name] = value;
+  }
+  return filled;
+}
+function isUsableSubdomain(value) {
+  try {
+    validateSubdomain(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function required2(env, name) {
   const value = env[name];
   if (!value) {
@@ -21181,25 +21333,44 @@ function required2(env, name) {
   }
   return value;
 }
-function resolveAuthConfig(rawEnv) {
-  const env = stripPlaceholders(rawEnv);
-  const dataDir = env.CLAUDE_PLUGIN_DATA || defaultDataDir(env);
+function resolveAuthConfig(rawEnv, security = runSecurity) {
+  const env = withKeychainConfig(stripPlaceholders(rawEnv), security);
+  const raw = env.CLAUDE_PLUGIN_DATA;
+  if (raw && !isAbsolute(raw)) {
+    throw new Error(
+      `Invalid environment variable: CLAUDE_PLUGIN_DATA="${raw}" (must be an absolute path \u2014 a relative one places tokens.enc under whatever working directory the host started the server in).`
+    );
+  }
+  const dataDir = raw || defaultDataDir(env);
+  let storeKey;
   return {
     config: {
       subdomain: subdomain(env),
       clientId: required2(env, "ZENDESK_OAUTH_CLIENT_ID"),
-      clientSecret: required2(env, "ZENDESK_OAUTH_CLIENT_SECRET"),
+      // Optional since #68: a public OAuth client has no secret, and PKCE is what authenticates the
+      // exchange. Sent when configured (every existing install and the CLI), omitted when not.
+      clientSecret: env.ZENDESK_OAUTH_CLIENT_SECRET || void 0,
       callbackPort: callbackPort(env),
       scopes: DEFAULT_SCOPES
     },
     dataDir,
+    // Memoized: one `security` invocation per process, however many readers there are.
+    get tokenStoreKey() {
+      return storeKey ??= resolveTokenStoreKey(security);
+    },
     // Single source of the token file location so server + authorize bin never drift. join(), not
     // a template literal: the manifest declares win32, where '/' would mix separators.
     tokensPath: join(dataDir, "tokens.enc")
   };
 }
 
+// src/util/warn-config.ts
+function warnConfig(message) {
+  console.warn(`[zendesk-plugin] ${message}`);
+}
+
 // src/auth/oauth-flow.ts
+var LOOPBACK_ADDRESSES = ["127.0.0.1", "::1"];
 var DEFAULT_CALLBACK_TIMEOUT_MS = 3e5;
 var tokenResponseSchema = external_exports.object({
   access_token: external_exports.string().min(1),
@@ -21228,21 +21399,33 @@ function sanitizeErrorCode(raw) {
   return cleaned.length > MAX_ERROR_CODE_CHARS ? `${cleaned.slice(0, MAX_ERROR_CODE_CHARS)}\u2026 (truncated)` : cleaned;
 }
 var STRAY_STATE_NOTE = "; a callback with an unexpected state was received and ignored";
-function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
+function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS, setup) {
   return new Promise((bound, bindFailed) => {
     let close;
-    let server;
+    let bindings;
     const promise = new Promise((resolve2, reject) => {
       try {
         let settled2 = false;
         let ignoredStrayState = false;
-        server = createServer((req, res) => {
+        const handler = (req, res) => {
           const rawUrl = req.url ?? "/";
           let url;
           try {
             url = new URL(rawUrl, `http://localhost:${port}`);
           } catch {
             res.writeHead(400, { "Content-Type": "text/plain" }).end("Bad request target");
+            return;
+          }
+          if (setup && url.pathname === "/setup") {
+            const write = (answer2) => void res.writeHead(answer2.status, answer2.headers).end(answer2.body);
+            void setup(req, url).then(
+              write,
+              () => write({
+                status: 500,
+                headers: { "Content-Type": "text/plain; charset=utf-8" },
+                body: "Setup failed. Call the Zendesk tool again to start over."
+              })
+            );
             return;
           }
           if (url.pathname !== "/callback") {
@@ -21269,7 +21452,8 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
           }
           res.writeHead(200, { "Content-Type": "text/plain" }).end("Authorized. You can close this tab.");
           finish(() => resolve2({ code, redirectUri: redirectUri(port) }));
-        });
+        };
+        bindings = LOOPBACK_ADDRESSES.map((address) => ({ address, server: createServer(handler) }));
         const timer = setTimeout(() => {
           const stray = ignoredStrayState ? STRAY_STATE_NOTE : "";
           finish(() => reject(new Error(`OAuth callback timed out after ${timeoutMs}ms${stray}`)));
@@ -21279,16 +21463,38 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
           if (settled2) return;
           settled2 = true;
           clearTimeout(timer);
-          server.close();
+          for (const binding of bindings) binding.server.close();
           settle();
         };
         close = () => finish(() => reject(new Error("OAuth callback listener closed")));
-        server.on("error", (err) => {
-          const bindError = new Error(`OAuth callback server error: ${err.message}`);
+        let pending = bindings.length;
+        const listening = [];
+        let decided = false;
+        const bindErrors = [];
+        const decide = () => {
+          if (decided || pending > 0) return;
+          decided = true;
+          if (listening.length > 0) return bound({ promise, close, addresses: listening });
+          const bindError = new Error(`OAuth callback server error: ${bindErrors.join("; ")}`);
           finish(() => reject(bindError));
           bindFailed(bindError);
-        });
-        server.on("listening", () => bound({ promise, close }));
+        };
+        for (const binding of bindings) {
+          binding.server.on("error", (err) => {
+            if (decided) return finish(() => reject(new Error(`OAuth callback server error: ${err.message}`)));
+            pending -= 1;
+            bindErrors.push(`${binding.address}: ${err.message}`);
+            warnConfig(
+              `the OAuth callback listener could not bind ${binding.address}:${port} (${err.code}) \u2014 continuing on the other address family if it bound.`
+            );
+            decide();
+          });
+          binding.server.on("listening", () => {
+            pending -= 1;
+            listening.push(binding.address);
+            decide();
+          });
+        }
       } catch (err) {
         bindFailed(err instanceof Error ? err : new Error(String(err)));
       }
@@ -21296,7 +21502,7 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
     promise.catch(() => {
     });
     try {
-      server.listen(port);
+      for (const binding of bindings) binding.server.listen(port, binding.address);
     } catch {
       close();
       throw new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`);
@@ -21344,6 +21550,9 @@ async function postToken(subdomain2, body, fetchImpl, errorLabel) {
     );
   }
 }
+function clientSecretField(config2) {
+  return config2.clientSecret ? { client_secret: config2.clientSecret } : {};
+}
 function exchangeCodeForTokens(config2, code, codeVerifier, redirectUriValue, fetchImpl = fetch) {
   return postToken(
     config2.subdomain,
@@ -21351,10 +21560,10 @@ function exchangeCodeForTokens(config2, code, codeVerifier, redirectUriValue, fe
       grant_type: "authorization_code",
       code,
       client_id: config2.clientId,
-      client_secret: config2.clientSecret,
       redirect_uri: redirectUriValue,
       code_verifier: codeVerifier,
-      scope: config2.scopes.join(" ")
+      scope: config2.scopes.join(" "),
+      ...clientSecretField(config2)
     },
     fetchImpl,
     "Token exchange failed"
@@ -21367,7 +21576,7 @@ function refreshAccessToken(config2, refreshToken, fetchImpl = fetch) {
       grant_type: "refresh_token",
       refresh_token: refreshToken,
       client_id: config2.clientId,
-      client_secret: config2.clientSecret
+      ...clientSecretField(config2)
     },
     fetchImpl,
     "Token refresh failed"
@@ -21376,40 +21585,39 @@ function refreshAccessToken(config2, refreshToken, fetchImpl = fetch) {
 
 // src/auth/auth-manager.ts
 var EXPIRY_SKEW_MS = 6e4;
+var NO_AUTHORIZATION = "No Zendesk authorization found. Run the zendesk_login tool to authorize (from a terminal: `npm run authorize`).";
+var UNREADABLE_STORE = "Stored Zendesk credentials could not be read (encryption secret changed or file corrupt). Run the zendesk_login tool to re-authorize.";
 var AuthManager = class {
-  constructor(store, config2, refresh = refreshAccessToken) {
+  constructor(store, config2, refresh = refreshAccessToken, startLogin) {
     this.store = store;
     this.config = config2;
     this.refresh = refresh;
+    this.startLogin = startLogin;
   }
   store;
   config;
   refresh;
+  startLogin;
   cached = null;
   inFlightRefresh = null;
   async getAccessToken() {
-    const tokens = this.cached ?? (this.cached = this.loadFromStore());
+    const tokens = this.cached ?? (this.cached = await this.loadFromStore());
     if (Date.now() < tokens.expiresAt - EXPIRY_SKEW_MS) {
       return tokens.accessToken;
     }
     const refreshed = await this.refreshOnce(tokens.refreshToken);
     return refreshed.accessToken;
   }
-  loadFromStore() {
-    let tokens;
+  async loadFromStore() {
+    let tokens = null;
+    let withoutLogin = NO_AUTHORIZATION;
     try {
       tokens = this.store.load();
     } catch {
-      throw new Error(
-        "Stored Zendesk credentials could not be read (encryption secret changed or file corrupt). Run the zendesk_login tool to re-authorize."
-      );
+      withoutLogin = UNREADABLE_STORE;
     }
-    if (!tokens) {
-      throw new Error(
-        "No Zendesk authorization found. Run the zendesk_login tool to authorize (from a terminal: `npm run authorize`)."
-      );
-    }
-    return tokens;
+    if (tokens) return tokens;
+    throw new Error(this.startLogin ? await this.startLogin() : withoutLogin);
   }
   // Single-flight: concurrent callers near expiry share one refresh so the
   // rotating refresh token is spent exactly once.
@@ -21437,9 +21645,9 @@ var AuthManager = class {
 };
 
 // src/auth/encrypted-file.ts
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes as randomBytes2 } from "node:crypto";
 var EncryptedFile = class {
   constructor(filePath, encryptionSecret) {
     this.filePath = filePath;
@@ -21450,12 +21658,13 @@ var EncryptedFile = class {
   save(record2) {
     const dir = dirname(this.filePath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const iv = randomBytes(12);
+    const iv = randomBytes2(12);
     const cipher = createCipheriv("aes-256-gcm", this.key, iv);
     const plaintext = Buffer.from(JSON.stringify(record2), "utf8");
     const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
     const payload = Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString("base64");
     writeFileSync(this.filePath, payload, { mode: 384 });
+    chmodSync(this.filePath, 384);
   }
   // null for a missing or empty file. A decrypt/integrity failure THROWS: a tampered or
   // wrong-key file must never be mistaken for "not there".
@@ -21490,11 +21699,6 @@ var TokenStore = class {
     this.file.clear();
   }
 };
-
-// src/util/warn-config.ts
-function warnConfig(message) {
-  console.warn(`[zendesk-plugin] ${message}`);
-}
 
 // src/client/rate-limiter.ts
 var MAX_RETRY_AFTER_SECONDS = 300;
@@ -21595,14 +21799,19 @@ var MAX_RATE_LIMIT_RETRIES = 3;
 var ZendeskHttpClient = class {
   constructor(options) {
     this.options = options;
-    this.baseUrl = `https://${options.subdomain}.zendesk.com/api/v2`;
+    const { subdomain: subdomain2 } = options;
+    this.subdomain = typeof subdomain2 === "function" ? subdomain2 : () => subdomain2;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.maxRateLimitRetries = options.maxRateLimitRetries ?? MAX_RATE_LIMIT_RETRIES;
   }
   options;
-  baseUrl;
+  subdomain;
   fetchImpl;
   maxRateLimitRetries;
+  // Read per request, not cached: see the `subdomain` option.
+  get baseUrl() {
+    return `https://${this.subdomain()}.zendesk.com/api/v2`;
+  }
   // Pick the bucket for this request. 'incremental' selects the 10/min limiter when configured,
   // otherwise falls back to the default so the client is usable without the second limiter.
   limiterFor(opts) {
@@ -21616,10 +21825,11 @@ var ZendeskHttpClient = class {
   // paginators and bulk tools don't each reimplement it.
   async request(path, init = {}, opts = {}) {
     const limiter = this.limiterFor(opts);
+    const url = `${this.baseUrl}${path}`;
     for (let attempt = 0; ; attempt++) {
       await limiter.acquire();
       const token = await this.options.authManager.getAccessToken();
-      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      const response = await this.fetchImpl(url, {
         ...init,
         headers: {
           ...init.headers,
@@ -21669,7 +21879,7 @@ var ZendeskHttpClient = class {
 // src/client/cache.ts
 import { writeFileSync as writeFileSync2, readFileSync as readFileSync2, mkdirSync as mkdirSync2, existsSync as existsSync2, readdirSync, statSync, rmSync } from "node:fs";
 import { join as join2, resolve, sep } from "node:path";
-import { randomBytes as randomBytes2 } from "node:crypto";
+import { randomBytes as randomBytes3 } from "node:crypto";
 var HANDLE_PATTERN = /^[A-Za-z0-9_-]+$/;
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
@@ -21686,7 +21896,7 @@ var ResponseCache = class {
   ttlMs;
   maxBytes;
   save(toolName, data) {
-    const handle = `${toolName}-${randomBytes2(6).toString("hex")}`;
+    const handle = `${toolName}-${randomBytes3(6).toString("hex")}`;
     const path = join2(this.cacheDir, `${handle}.json`);
     writeFileSync2(path, JSON.stringify(data));
     this.sweep();
@@ -21748,22 +21958,170 @@ function okWithHandle(r) {
 }
 
 // src/tools/login.ts
-import { randomBytes as randomBytes4 } from "node:crypto";
+import { randomBytes as randomBytes6 } from "node:crypto";
 import { dirname as dirname2 } from "node:path";
 
 // src/auth/pkce.ts
-import { randomBytes as randomBytes3, createHash as createHash2 } from "node:crypto";
+import { randomBytes as randomBytes4, createHash as createHash2 } from "node:crypto";
 function generateCodeVerifier() {
-  return randomBytes3(32).toString("base64url");
+  return randomBytes4(32).toString("base64url");
 }
 function generateCodeChallenge(verifier) {
   return createHash2("sha256").update(verifier).digest("base64url");
 }
 
+// src/tools/setup.ts
+import { randomBytes as randomBytes5, timingSafeEqual } from "node:crypto";
+var SETUP_TIMEOUT_MS = 9e5;
+var MAX_BODY_BYTES = 4096;
+var HTML = { "Content-Type": "text/html; charset=utf-8" };
+function newSetupToken() {
+  return randomBytes5(32).toString("base64url");
+}
+function setupUrl(host, port, token) {
+  return `http://${host}:${port}/setup?t=${token}`;
+}
+function tokenMatches(given, expected) {
+  if (!given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+function originAllowed(req, port) {
+  const origin = req.headers.origin;
+  if (typeof origin !== "string") return true;
+  return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`].includes(origin);
+}
+async function readBody(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) {
+      req.destroy();
+      throw new Error("setup form too large");
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+var FIELD_PROBLEM = {
+  ZENDESK_SUBDOMAIN: `Die Subdomain besteht nur aus Buchstaben, Zahlen und Bindestrichen \u2014 f\xFCr acme.zendesk.com ist der Wert \u201Eacme" (h\xF6chstens ${MAX_SUBDOMAIN_LENGTH} Zeichen).`,
+  ZENDESK_OAUTH_CLIENT_ID: "Die Client-ID fehlt oder enth\xE4lt Zeichen, die dort nicht vorkommen.",
+  ZENDESK_OAUTH_CLIENT_SECRET: "Das Client-Secret fehlt oder enth\xE4lt Zeichen, die dort nicht vorkommen."
+};
+var MAX_FIELD_CHARS = 512;
+var PRINTABLE_ASCII = /^[\x20-\x7E]+$/;
+function plainField(raw) {
+  if (raw === null) return null;
+  const value = raw.trim();
+  if (!value || value.length > MAX_FIELD_CHARS || !PRINTABLE_ASCII.test(value)) return null;
+  return value;
+}
+function parseSetupForm(body) {
+  const form = new URLSearchParams(body);
+  const clientId = plainField(form.get("client_id"));
+  const clientSecret = plainField(form.get("client_secret"));
+  const rawSubdomain = plainField(form.get("subdomain"));
+  let subdomain2;
+  try {
+    subdomain2 = validateSubdomain(rawSubdomain ?? "");
+  } catch {
+    return { problem: "ZENDESK_SUBDOMAIN" };
+  }
+  if (!clientId) return { problem: "ZENDESK_OAUTH_CLIENT_ID" };
+  if (!clientSecret) return { problem: "ZENDESK_OAUTH_CLIENT_SECRET" };
+  return {
+    values: {
+      ZENDESK_SUBDOMAIN: subdomain2,
+      ZENDESK_OAUTH_CLIENT_ID: clientId,
+      ZENDESK_OAUTH_CLIENT_SECRET: clientSecret
+    }
+  };
+}
+function setupPage(port, token, problem) {
+  const redirectUri2 = `http://localhost:${port}/callback`;
+  const error2 = problem ? `<p class="error">${FIELD_PROBLEM[problem]} Bitte korrigieren und erneut absenden.</p>` : "";
+  return `<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zendesk-Plugin einrichten</title>
+<style>
+:root { color-scheme: light dark; }
+body { margin: 0 auto; max-width: 42rem; padding: 1rem; }
+label { display: block; margin-top: 1rem; }
+.error { border-left: .25rem solid #c82828; padding-left: .75rem; }
+</style>
+</head>
+<body>
+<h1>Zendesk-Plugin einrichten</h1>
+<p>Einmalig pro Zendesk-Instanz. Diese Seite l\xE4uft lokal auf diesem Rechner; die Werte verlassen ihn nicht und gehen nicht durch den Chat.</p>
+${error2}
+<h2>1. OAuth-Client in Ihrem Zendesk anlegen</h2>
+<p>Im Zendesk Admin Center: <strong>Apps und Integrationen \u2192 APIs \u2192 OAuth-Clients \u2192 \u201EOAuth-Client hinzuf\xFCgen"</strong>. Tragen Sie dort ein:</p>
+<ul>
+<li><strong>Weiterleitungs-URL:</strong> <code>${redirectUri2}</code> \u2014 genau so, sonst weist Zendesk die Anmeldung ab.</li>
+<li><strong>Art von Client:</strong> vertraulich (confidential).</li>
+<li><strong>Zugriffsart:</strong> leer lassen. Leer bedeutet, dass alle Berechtigungen erlaubt sind; das Plugin fordert <code>read write</code> an.</li>
+</ul>
+<p class="note">Nach dem Speichern zeigt Zendesk das Client-Secret <strong>einmal</strong> an. Kopieren Sie es jetzt.</p>
+<h2>2. Werte hier eintragen</h2>
+<form method="post" action="/setup?t=${token}" autocomplete="off">
+<label>Subdomain
+<input name="subdomain" placeholder="acme" required autofocus spellcheck="false" autocapitalize="off">
+</label>
+<label>Eindeutige Kennung (Client-ID)
+<input name="client_id" required spellcheck="false" autocapitalize="off">
+</label>
+<label>Client-Secret
+<input name="client_secret" type="password" required spellcheck="false">
+</label>
+<button type="submit">Speichern und anmelden</button>
+</form>
+<p class="note">Beim Speichern geht es direkt weiter zur Zendesk-Anmeldung. Danach kann dieses Fenster geschlossen werden.</p>
+</body>
+</html>
+`;
+}
+var answer = (status, body, headers = HTML) => ({
+  status,
+  headers,
+  body
+});
+var notFound = () => answer(404, "Not found", { "Content-Type": "text/plain; charset=utf-8" });
+function createSetupRoute(deps) {
+  let spent = false;
+  return async (req, url) => {
+    if (spent || !tokenMatches(url.searchParams.get("t"), deps.token)) return notFound();
+    if (req.method === "GET") return answer(200, setupPage(deps.port, deps.token));
+    if (req.method !== "POST") {
+      return answer(405, "Use POST to submit the setup form.", {
+        "Content-Type": "text/plain; charset=utf-8",
+        Allow: "GET, POST"
+      });
+    }
+    if (!originAllowed(req, deps.port)) {
+      return answer(403, "Diese Anfrage kam nicht von der Einrichtungsseite.");
+    }
+    const body = await readBody(req);
+    if (spent) return notFound();
+    const parsed = parseSetupForm(body);
+    if ("problem" in parsed) return answer(400, setupPage(deps.port, deps.token, parsed.problem));
+    const authorizationUrl = deps.submit(parsed.values);
+    spent = true;
+    return answer(303, "Weiter zur Zendesk-Anmeldung \u2026", {
+      "Content-Type": "text/plain; charset=utf-8",
+      Location: authorizationUrl
+    });
+  };
+}
+
 // src/tools/login.ts
 var RETRY_RESOLVED = "Run zendesk_login again once that is resolved.";
-var RETRY_FRESH = "Run zendesk_login again to start a new authorization.";
-var UNREADABLE_STORE = "Stored credentials could not be read (encryption secret changed or file corrupt) \u2014 starting a new authorization.";
+var RETRY_FRESH = "Run zendesk_login again to start a new authorization. If the stored subdomain, client id or client secret is the problem, run zendesk_login with setup=true to enter them again.";
+var UNREADABLE_STORE2 = "Stored credentials could not be read (encryption secret changed or file corrupt) \u2014 starting a new authorization.";
 var activeFlow = null;
 function abortLoginFlow() {
   if (!activeFlow) return;
@@ -21773,7 +22131,7 @@ function abortLoginFlow() {
 }
 function readExistingTokens(deps) {
   try {
-    const tokens = new TokenStore(deps.tokensPath, deps.config.clientSecret).load();
+    const tokens = new TokenStore(deps.tokensPath, deps.tokenStoreKey).load();
     return { tokens: tokens?.refreshToken ? tokens : null, unreadable: false };
   } catch {
     return { tokens: null, unreadable: true };
@@ -21787,7 +22145,7 @@ function failureText(err, deps) {
 }
 async function beginFlow(deps, listen, timeoutMs) {
   const verifier = generateCodeVerifier();
-  const state = randomBytes4(16).toString("base64url");
+  const state = randomBytes6(16).toString("base64url");
   let url;
   let listener;
   try {
@@ -21812,8 +22170,64 @@ async function beginFlow(deps, listen, timeoutMs) {
     `Then run zendesk_login a second time to finish \u2014 this call does not wait for you. The authorization stays open for ${Math.round(timeoutMs / 6e4)} minute(s); after that, run zendesk_login to start over.`
   ].join("\n");
 }
+async function beginSetup(deps, setup, listen, fallback) {
+  const verifier = generateCodeVerifier();
+  const state = randomBytes6(16).toString("base64url");
+  const token = newSetupToken();
+  const timeoutMs = setup.timeoutMs ?? SETUP_TIMEOUT_MS;
+  const port = deps.config.callbackPort;
+  let flow;
+  const route = createSetupRoute({
+    port,
+    token,
+    submit: (values) => {
+      setup.writeConfig(values);
+      const config2 = {
+        ...deps.config,
+        subdomain: values.ZENDESK_SUBDOMAIN,
+        clientId: values.ZENDESK_OAUTH_CLIENT_ID,
+        clientSecret: values.ZENDESK_OAUTH_CLIENT_SECRET
+      };
+      flow.config = config2;
+      flow.url = buildAuthorizationUrl(config2, generateCodeChallenge(verifier), state);
+      setup.onConfigured?.(config2);
+      return flow.url;
+    }
+  });
+  let listener;
+  try {
+    listener = await listen(port, state, timeoutMs, route);
+  } catch (err) {
+    const failure = `${failureText(err, deps)} ${RETRY_RESOLVED}`;
+    return fallback ? `${fallback} ${failure}` : failure;
+  }
+  const bound = listener.addresses;
+  const page = setupUrl(bound.includes("127.0.0.1") ? "127.0.0.1" : `[${bound[0]}]`, port, token);
+  flow = { verifier, url: "", outcome: { kind: "pending" }, close: listener.close, setupUrl: page };
+  void listener.promise.then(
+    (result) => {
+      flow.outcome = { kind: "received", result };
+    },
+    (err) => {
+      flow.outcome = { kind: "failed", text: failureText(err, deps) };
+    }
+  );
+  activeFlow = flow;
+  return [
+    "Zendesk is not set up on this machine yet. Open this page in your browser \u2014 it runs locally, it explains how to create the OAuth client in your Zendesk, and it collects the three values:",
+    page,
+    `Nothing has to be typed into the chat, and the client secret never reaches it. The page continues into the Zendesk login by itself; afterwards run zendesk_login once more. It stays open for ${Math.round(timeoutMs / 6e4)} minute(s).`
+  ].join("\n");
+}
 async function collectFlow(flow, deps, exchange) {
   const outcome = flow.outcome;
+  if (outcome.kind === "pending" && flow.setupUrl && !flow.config) {
+    return [
+      "Zendesk setup is still open. Open this page in your browser and enter the three values from your Zendesk OAuth client:",
+      flow.setupUrl,
+      "The page continues into the Zendesk login by itself. Then run zendesk_login again."
+    ].join("\n");
+  }
   if (outcome.kind === "pending") {
     return [
       `Still waiting for the Zendesk authorization callback on port ${deps.config.callbackPort}. Open this URL in your browser and approve access:`,
@@ -21824,8 +22238,9 @@ async function collectFlow(flow, deps, exchange) {
   abortLoginFlow();
   if (outcome.kind === "failed") return `${outcome.text} ${RETRY_FRESH}`;
   try {
-    const tokens = await exchange(deps.config, outcome.result.code, flow.verifier, outcome.result.redirectUri);
-    new TokenStore(deps.tokensPath, deps.config.clientSecret).save({
+    const config2 = flow.config ?? deps.config;
+    const tokens = await exchange(config2, outcome.result.code, flow.verifier, outcome.result.redirectUri);
+    new TokenStore(deps.tokensPath, deps.tokenStoreKey).save({
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresAt: Date.now() + tokens.expiresIn * 1e3
@@ -21833,7 +22248,7 @@ async function collectFlow(flow, deps, exchange) {
   } catch (err) {
     return `${failureText(err, deps)} ${RETRY_FRESH}`;
   }
-  return "Authorization complete \u2014 the Zendesk credentials are stored encrypted and are refreshed automatically. Verify with zendesk_get_me.";
+  return flow.config ? "Authorization complete \u2014 the configuration is in the Keychain, the Zendesk credentials are stored encrypted, and this session is using both already. Verify with zendesk_get_me." : "Authorization complete \u2014 the Zendesk credentials are stored encrypted and are refreshed automatically. Verify with zendesk_get_me.";
 }
 var queue = Promise.resolve();
 var settled = () => {
@@ -21844,17 +22259,20 @@ function runLogin(deps, options = {}) {
   return next;
 }
 async function runQueuedLogin(deps, options) {
-  if (deps.configError) return deps.configError;
   const timeoutMs = deps.callbackTimeoutMs ?? DEFAULT_CALLBACK_TIMEOUT_MS;
   const listen = deps.listen ?? startCallbackListener;
   const exchange = deps.exchange ?? exchangeCodeForTokens;
-  if (options.force) abortLoginFlow();
+  if (options.force || options.setup) abortLoginFlow();
   if (activeFlow) return collectFlow(activeFlow, deps, exchange);
+  if (deps.setup && (deps.configError || options.setup)) {
+    return beginSetup(deps, deps.setup, listen, deps.configError ?? void 0);
+  }
+  if (deps.configError) return deps.configError;
   const existing = readExistingTokens(deps);
   if (!options.force && existing.tokens) {
     return "Already authorized with Zendesk \u2014 the stored credentials are usable and are refreshed automatically. Verify with zendesk_get_me, or call zendesk_login with force=true to authorize again.";
   }
-  const notice = existing.unreadable ? `${UNREADABLE_STORE}
+  const notice = existing.unreadable ? `${UNREADABLE_STORE2}
 ` : "";
   return notice + await beginFlow(deps, listen, timeoutMs);
 }
@@ -21865,15 +22283,64 @@ function registerAuthTools(server, login) {
   server.registerTool(
     "zendesk_login",
     {
-      description: 'Authorize this Zendesk extension. It takes two calls, one after the other \u2014 never both in the same turn. Call 1 returns a Zendesk authorization URL: show it to the user and wait until they have approved it. Call 2 then finishes and stores the credentials. Reports "already authorized" when usable credentials exist; force=true authorizes again, or restarts an authorization already in progress.',
-      inputSchema: { force: external_exports.boolean().optional() }
+      description: 'Authorize this Zendesk extension. It takes two calls, one after the other \u2014 never both in the same turn. Call 1 returns a URL: show it to the user and wait. On a machine that is not set up yet that is a LOCAL setup page which collects the Zendesk subdomain, OAuth client id and client secret (never ask for those in the chat \u2014 the page exists so the secret does not pass through here) and then continues into the Zendesk login by itself. Otherwise it is the Zendesk authorization URL. Call 2 finishes and stores the credentials. Reports "already authorized" when usable credentials exist; force=true authorizes again, or restarts an authorization already in progress; setup=true re-opens the setup page when the stored subdomain, client id or secret is wrong.',
+      inputSchema: { force: external_exports.boolean().optional(), setup: external_exports.boolean().optional() }
     },
-    async ({ force }) => toText(await runLogin(login, { force }))
+    async ({ force, setup }) => toText(await runLogin(login, { force, setup }))
+  );
+}
+
+// src/tools/diagnostics.ts
+import { hostname as hostname2, release } from "node:os";
+import { createServer as createServer2 } from "node:http";
+var LOOPBACK_ADDRESSES2 = ["127.0.0.1", "::1"];
+function substitutionState(raw) {
+  if (!raw) return "unset";
+  return isPlaceholder(raw) ? "literal-placeholder" : "substituted";
+}
+function probeBind(port, address) {
+  return new Promise((done) => {
+    const server = createServer2();
+    server.on("error", (err) => done(`${address}:${port} unavailable (${err.code})`));
+    server.listen(port, address, () => server.close(() => done(`${address}:${port} binds`)));
+  });
+}
+async function diagnosticsReport(input) {
+  const binds = await Promise.all(LOOPBACK_ADDRESSES2.map((address) => probeBind(input.callbackPort, address)));
+  return [
+    `hostname: ${hostname2()}`,
+    `platform: ${process.platform}`,
+    `os release: ${release()}`,
+    `node: ${process.version}`,
+    `CLAUDE_PLUGIN_ROOT: ${substitutionState(input.rawEnv.CLAUDE_PLUGIN_ROOT)}`,
+    `CLAUDE_PLUGIN_DATA: ${substitutionState(input.rawEnv.CLAUDE_PLUGIN_DATA)}`,
+    "client capabilities from initialize (verbatim):",
+    JSON.stringify(input.clientCapabilities ?? null, null, 2),
+    "callback port:",
+    ...binds.map((line) => `  ${line}`)
+  ].join("\n");
+}
+
+// src/register/diagnostics.ts
+function registerDiagnosticsTool(server, deps) {
+  server.registerTool(
+    "zendesk_diagnostics",
+    {
+      description: "Report how this host loaded the plugin: hostname, platform, OS release, whether CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA were substituted (never their values), the client capabilities announced in initialize, and whether the OAuth callback port binds per address family. Carries no configuration value and no credential."
+    },
+    async () => toText(
+      await diagnosticsReport({
+        ...deps,
+        // Read at CALL time, not at registration: the client announces its capabilities during
+        // initialize, which happens after every tool is registered.
+        clientCapabilities: server.server.getClientCapabilities()
+      })
+    )
   );
 }
 
 // src/security/screen.ts
-import { randomBytes as randomBytes5 } from "node:crypto";
+import { randomBytes as randomBytes7 } from "node:crypto";
 var INJECTION_PATTERNS = [
   /ignore\s+(all\s+)?(previous|prior|above)\s+instructions/i,
   /disregard\s+(all\s+)?(previous|prior|above)/i,
@@ -21899,7 +22366,7 @@ function screenContent(text, sourceLabel, securityLevel = "standard") {
   if (securityLevel === "strict" && attemptedBreakout) {
     matched.push("delimiter-breakout-attempt");
   }
-  const nonce = randomBytes5(6).toString("hex");
+  const nonce = randomBytes7(6).toString("hex");
   const marker = `zendesk-content-${sourceLabel}-${nonce}`;
   const wrapped = `<${marker}>
 ${neutralized}
@@ -24624,15 +25091,20 @@ function parseMarkdownDefault(raw) {
   );
   return true;
 }
-function resolveOrDegrade(env) {
+function resolveOrDegrade(env, security) {
   try {
-    return { ok: true, ...resolveAuthConfig(env) };
+    return { ok: true, ...resolveAuthConfig(env, security) };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    const dataDir = env.CLAUDE_PLUGIN_DATA || defaultDataDir(env);
+    const { problem } = callbackPortOrDefault(env);
+    const dataDir = dataDirOf(env);
     return {
       ok: false,
-      reason: `${reason} Open Settings \u2192 Extensions \u2192 Zendesk, complete the configuration, then reload the extension.`,
+      // Points at the setup page, which is what exists now: the Claude Code plugin has no settings
+      // dialog any more (#68 removed its user_config, the host bridge does not support one), and on a
+      // platform without a Keychain the environment is the only way in (#69). The MCPB extension still
+      // HAS the dialog, so it is named last rather than first.
+      reason: `${reason}${problem ? ` ${problem}` : ""} Call the zendesk_login tool: on macOS it answers with a local setup page that collects the subdomain, client id and client secret. Otherwise pass them in the environment (ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET), or, in the Desktop Extension, fill the configuration dialog under Settings \u2192 Extensions \u2192 Zendesk.`,
       dataDir,
       tokensPath: join3(dataDir, "tokens.enc")
     };
@@ -24653,24 +25125,56 @@ function openCacheOrDegrade(auth) {
     return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
   }
 }
-var NO_OAUTH_CONFIG = { subdomain: "", clientId: "", clientSecret: "", callbackPort: 0, scopes: [] };
-function createServer2(rawEnv = process.env, deps = {}) {
+var noOAuthConfig = (callbackPort2) => ({ subdomain: "", clientId: "", callbackPort: callbackPort2, scopes: DEFAULT_SCOPES });
+function createServer3(rawEnv = process.env, deps = {}) {
   const env = stripPlaceholders(rawEnv);
-  const resolved = resolveOrDegrade(env);
+  const security = deps.security ?? runSecurity;
+  const resolved = resolveOrDegrade(env, security);
   const { auth, cache, cacheOk } = deps.cache ? { auth: resolved, cache: deps.cache, cacheOk: true } : openCacheOrDegrade(resolved);
   const { tokensPath } = auth;
   const securityLevel = parseSecurityLevel(env.ZENDESK_SECURITY_LEVEL);
   const markdownDefault = parseMarkdownDefault(env.ZENDESK_MARKDOWN_CONVERSION);
-  const authManager = (cacheOk ? deps.authManager : void 0) ?? (auth.ok ? new AuthManager(new TokenStore(tokensPath, auth.config.clientSecret), auth.config) : (
-    // Stands in for AuthManager while the configuration is incomplete: every Zendesk request
-    // fails at the token boundary with the actionable message instead of reaching the network.
-    { getAccessToken: () => Promise.reject(new Error(auth.reason)) }
+  const callbackPort2 = auth.ok ? auth.config.callbackPort : callbackPortOrDefault(env).port;
+  let setupKey;
+  if (auth.ok) {
+    setupKey = auth.tokenStoreKey;
+  } else if (cacheOk) {
+    try {
+      readKeychainConfig(security);
+      setupKey = resolveTokenStoreKey(security);
+    } catch {
+    }
+  }
+  const setup = setupKey ? { writeConfig: (values) => writeKeychainConfig(values, security) } : void 0;
+  const login = deps.authManager ? void 0 : auth.ok ? { config: auth.config, tokensPath, tokenStoreKey: auth.tokenStoreKey, setup } : {
+    config: noOAuthConfig(callbackPort2),
+    tokensPath,
+    tokenStoreKey: setupKey ?? "",
+    configError: auth.reason,
+    setup
+  };
+  const startLogin = login && (() => runLogin(login));
+  let healed;
+  let healedSubdomain = "";
+  if (login && setup && setupKey) {
+    setup.onConfigured = (config2) => {
+      healedSubdomain = config2.subdomain;
+      healed = new AuthManager(new TokenStore(tokensPath, setupKey), config2, void 0, startLogin);
+      login.config = config2;
+      login.configError = null;
+    };
+  }
+  const authManager = (cacheOk ? deps.authManager : void 0) ?? (auth.ok ? new AuthManager(new TokenStore(tokensPath, auth.tokenStoreKey), auth.config, void 0, startLogin) : (
+    // Stands in for AuthManager while the configuration is incomplete: every Zendesk request fails
+    // at the token boundary with the actionable message instead of reaching the network — until the
+    // setup page supplies one, from which moment this delegates to the real thing.
+    { getAccessToken: () => healed ? healed.getAccessToken() : Promise.reject(new Error(auth.reason)) }
   ));
   const rateLimiter = deps.rateLimiter ?? new RateLimiter({ requestsPerMinute: DEFAULT_RATE_LIMIT_RPM });
   const incrementalRateLimiter = deps.incrementalRateLimiter ?? new RateLimiter({ requestsPerMinute: INCREMENTAL_RATE_LIMIT_RPM });
-  const subdomain2 = auth.ok ? auth.config.subdomain : "";
+  const subdomain2 = auth.ok ? auth.config.subdomain : () => healedSubdomain;
   const httpClient = new ZendeskHttpClient({ subdomain: subdomain2, authManager, rateLimiter, incrementalRateLimiter, fetchImpl: deps.fetchImpl });
-  const server = new McpServer({ name: "zendesk", version: "1.0.1" });
+  const server = new McpServer({ name: "zendesk", version: "1.1.0" });
   const ctx = {
     httpClient,
     cache,
@@ -24678,10 +25182,10 @@ function createServer2(rawEnv = process.env, deps = {}) {
     markdownDefault,
     reportConfig: parseReportConfig(env)
   };
-  registerAuthTools(
-    server,
-    deps.authManager ? void 0 : auth.ok ? { config: auth.config, tokensPath } : { config: NO_OAUTH_CONFIG, tokensPath, configError: auth.reason }
-  );
+  registerAuthTools(server, login);
+  if (login) {
+    registerDiagnosticsTool(server, { rawEnv, callbackPort: callbackPort2 });
+  }
   registerCoreTools(server, ctx);
   registerTicketTools(server, ctx);
   registerSearchTools(server, ctx);
@@ -24693,12 +25197,12 @@ function createServer2(rawEnv = process.env, deps = {}) {
   return { server, ctx, rateLimiter, incrementalRateLimiter };
 }
 if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) {
-  const { server } = createServer2();
+  const { server } = createServer3();
   await server.connect(new StdioServerTransport());
 }
 export {
   DEFAULT_RATE_LIMIT_RPM,
   INCREMENTAL_RATE_LIMIT_RPM,
   SECURITY_LEVELS,
-  createServer2 as createServer
+  createServer3 as createServer
 };

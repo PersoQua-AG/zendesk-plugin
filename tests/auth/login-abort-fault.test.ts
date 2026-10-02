@@ -15,6 +15,7 @@ function listenerWhoseCloseThrowsOnce(): (port: number, state: string, timeoutMs
     const faulty = calls === 1;
     return {
       promise: new Promise<never>(() => {}),
+      addresses: ['127.0.0.1', '::1'],
       close: () => {
         if (faulty) throw new Error('injected close fault');
       },

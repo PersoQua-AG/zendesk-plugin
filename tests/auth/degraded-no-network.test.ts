@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from '../../src/server.js';
+import { keychain } from './keychain.js';
 
 // resolveOrDegrade (src/server.ts:50) keeps the server alive with an EMPTY subdomain, so the http
 // client's base URL is literally "https://.zendesk.com/api/v2". Nothing may ever reach that host.
@@ -29,14 +30,14 @@ function spyFetch() {
 describe('an incompletely configured server never reaches the network', () => {
   it('rejects a JSON request at the token boundary, naming the empty field, without fetching', async () => {
     const fetchImpl = spyFetch();
-    const { ctx } = createServer(degradedEnv(), { fetchImpl });
+    const { ctx } = createServer(degradedEnv(), { fetchImpl, security: keychain() });
     await expect(ctx.httpClient.request('/users/me.json')).rejects.toThrow(/zendesk_subdomain/);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('rejects the binary upload path the same way, without fetching', async () => {
     const fetchImpl = spyFetch();
-    const { ctx } = createServer(degradedEnv(), { fetchImpl });
+    const { ctx } = createServer(degradedEnv(), { fetchImpl, security: keychain() });
     await expect(
       ctx.httpClient.requestUpload('/uploads.json', new Uint8Array([1, 2, 3]), 'text/plain'),
     ).rejects.toThrow(/zendesk_subdomain/);
@@ -44,7 +45,7 @@ describe('an incompletely configured server never reaches the network', () => {
   });
 
   it('never puts the degraded empty-subdomain host into the failure message', async () => {
-    const { ctx } = createServer(degradedEnv(), { fetchImpl: spyFetch() });
+    const { ctx } = createServer(degradedEnv(), { fetchImpl: spyFetch(), security: keychain() });
     const err = (await ctx.httpClient.request('/users/me.json').catch((e: unknown) => e)) as Error;
     expect(err.message).not.toContain('.zendesk.com');
   });
@@ -54,7 +55,7 @@ describe('an incompletely configured server never reaches the network', () => {
   // configured data dir is silently abandoned for the per-user default the moment a field is empty.
   it('still honors CLAUDE_PLUGIN_DATA for the response cache', () => {
     const env = degradedEnv();
-    const { ctx } = createServer(env, { fetchImpl: spyFetch() });
+    const { ctx } = createServer(env, { fetchImpl: spyFetch(), security: keychain() });
     const entry = ctx.cache.save('zendesk_get_me', { id: 1 });
     expect(existsSync(join(env.CLAUDE_PLUGIN_DATA as string, 'cache'))).toBe(true);
     expect(ctx.cache.load(entry.handle)).toMatchObject({ id: 1 });

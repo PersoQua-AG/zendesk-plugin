@@ -3,7 +3,8 @@ import { createServer, type Server } from 'node:http';
 import { startCallbackListener, waitForAuthorizationCode } from '../../src/auth/oauth-flow.js';
 import { resolveAuthConfig } from '../../src/auth/config.js';
 import { runLogin } from '../../src/tools/login.js';
-import { deps, freePort, settlesWithin, setupLoginHarness } from './login-harness.js';
+import { deps, freePort, occupyPort, settlesWithin, setupLoginHarness } from './login-harness.js';
+import { keychain } from './keychain.js';
 
 setupLoginHarness('login-bind-liveness-');
 
@@ -80,13 +81,16 @@ describe('startCallbackListener settles for every port listen() refuses', () => 
     };
     // Producer 1 — resolveAuthConfig (src/auth/config.ts:161), used by the stdio server, the CLI
     // (src/auth/authorize.ts:49) and the remote bridge (src/remote/remote-server.ts:72).
-    expect(() => resolveAuthConfig({ ...base, ZENDESK_OAUTH_CALLBACK_PORT: '0' })).toThrow(/oauth_callback_port/);
-    // Producer 2 — NO_OAUTH_CONFIG (src/server.ts:101) DOES carry callbackPort 0, but it always
-    // travels with configError, which runLogin answers before it reads the port at all
-    // (src/tools/login.ts:213). Asserted rather than trusted to the comment beside it.
+    expect(() => resolveAuthConfig({ ...base, ZENDESK_OAUTH_CALLBACK_PORT: '0' }, keychain())).toThrow(/oauth_callback_port/);
+    // Producer 2 — the incomplete config src/server.ts carries DOES hold a callbackPort, and since #68 it
+    // is the one the environment asked for rather than 0. It still travels with configError, and where
+    // nothing can be stored (`setup: undefined`) runLogin answers that before it reads the port at all.
+    // Asserted rather than trusted to the comment beside it.
     const text = await settlesWithin(
-      'runLogin(NO_OAUTH_CONFIG)',
-      runLogin(deps(0, { configError: 'Missing required environment variable: ZENDESK_SUBDOMAIN' })),
+      'runLogin(an incomplete configuration)',
+      runLogin(
+        deps(0, { configError: 'Missing required environment variable: ZENDESK_SUBDOMAIN', setup: undefined }),
+      ),
     );
     expect(text).toBe('Missing required environment variable: ZENDESK_SUBDOMAIN');
   });
@@ -115,18 +119,17 @@ describe('finish() is not a second way to lose the outcome', () => {
 
   // An asynchronous bind failure (EADDRINUSE) runs finish() from the 'error' handler instead, and
   // there the server DID reach a handle. Both routes through finish() have to settle.
+  // BOTH loopback families have to be taken for the bind to fail at all: one family left free is a
+  // listener that comes up, which is the point of the dual bind (#68).
   it('settles when the OS refuses the bind asynchronously', async () => {
-    const taken: Server = await new Promise((resolve) => {
-      const s = createServer(() => {});
-      s.listen(0, () => resolve(s));
-    });
-    const port = (taken.address() as { port: number }).port;
+    const port = freePort();
+    const release = await occupyPort(port);
     try {
       await expect(
         settlesWithin(`startCallbackListener(${port})`, startCallbackListener(port, 'state', 5_000)),
       ).rejects.toThrow(/EADDRINUSE|address already in use/i);
     } finally {
-      await new Promise<void>((r) => taken.close(() => r()));
+      await release();
     }
   });
 });

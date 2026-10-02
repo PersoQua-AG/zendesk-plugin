@@ -8,6 +8,10 @@ export default defineConfig({
     // run without an `exchange` stub, and on a regression they would POST to the real
     // acme.zendesk.com instead of turning red. The guard rejects every non-loopback fetch.
     setupFiles: ['tests/setup/no-network.ts'],
+    // Runs once, after every file: the only place that can see what a SPAWNED child did to the machine.
+    // A suite that creates a real Keychain item fails the run there — see the file for why it compares
+    // before with after instead of demanding an empty keychain.
+    globalSetup: ['tests/setup/no-real-keychain.ts'],
     coverage: {
       provider: 'v8',
       // Every shipped source file counts, not just the ones a test happened to import — otherwise a

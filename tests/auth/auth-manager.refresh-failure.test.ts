@@ -55,8 +55,12 @@ describe('AuthManager refresh failure path', () => {
     );
     const manager = new AuthManager(store, config, refresh as unknown as typeof import('../../src/auth/oauth-flow.js').refreshAccessToken);
 
-    // Fire five overlapping calls before any refresh resolves.
+    // Fire five overlapping calls before any refresh resolves. The wait is what makes "overlapping"
+    // true rather than assumed: reading the store is awaited since #68 (it may start a login), so the
+    // refresh is reached a microtask later than the call, and resolving it before it exists would
+    // resolve nothing.
     const pending = Promise.all(Array.from({ length: 5 }, () => manager.getAccessToken()));
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalled());
     resolveRefresh({ accessToken: 'at-new', refreshToken: 'rt-new', expiresIn: 3600 });
     const tokens = await pending;
 
