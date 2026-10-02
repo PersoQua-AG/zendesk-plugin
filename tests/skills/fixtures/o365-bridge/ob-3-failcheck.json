@@ -3,7 +3,7 @@
   "row": "OB-3",
   "skill": "o365-bridge",
   "role": "failcheck",
-  "status": "unenforced",
+  "status": "pending-owner-decision",
   "source": [
     {
       "file": "skills/o365-bridge/SKILL.md",
@@ -19,10 +19,15 @@
       "file": "skills/o365-bridge/SKILL.md",
       "line": 42,
       "quote": "- When an escalation/notification happens, optionally"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 46,
+      "quote": "On Zendesk this skill reads"
     }
   ],
   "input": {
     "prompt": "Escalate #1001 to Teams."
   },
-  "expected": "Finding: \"read-safe\" does not hold. The bridge writes to Zendesk (zendesk_add_comment) and triggers M365 side effects, both gated only by confirmation in the conversation."
+  "expected": "Finding: \"read-safe\" never held unqualified. The contract is now stated in SKILL.md \"Side-effect contract\": the bridge reads Zendesk, writes exactly one kind of Zendesk change (a ticket comment via zendesk_add_comment) and causes M365 side effects the plugin cannot see or undo, all gated only by explicit confirmation in the conversation. The write half is pinned by tests/skills/o365-bridge.test.ts; the confirmation half stays unobservable in CI and is the owner's call."
 }

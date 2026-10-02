@@ -2,7 +2,7 @@
 // Deterministic halves of skills/o365-bridge/SKILL.md (S0 rows OB-1, OB-4). The M365 side comes
 // from a foreign connector and is out of the plugin's reach (recorded cases OB-2, OB-3).
 import { describe, it, expect, vi } from 'vitest';
-import { boot, filesIn, json, once, read, sample, type Booted } from './probe.js';
+import { WRITES, boot, filesIn, json, once, read, sample, toolsNamedIn, type Booted } from './probe.js';
 
 // Modules that can open a socket. Only an injected fetchImpl may reach the network from src/.
 const NET = /^(node:)?(https?|http2|net|tls|dgram)$|^(undici|axios|node-fetch|express)$/;
@@ -85,5 +85,41 @@ describe('o365-bridge: ticket text is screened before it builds the summary (SKI
     expect(r.text).toMatch(/^Subject: <zendesk-content-ticket-5-subject-[0-9a-f]+>$/m);
     expect(r.text).toMatch(/^Description: <zendesk-content-ticket-5-description-[0-9a-f]+>$/m);
     expect(r.text).toContain('WARNING: prompt-injection patterns detected');
+  });
+});
+
+describe('o365-bridge: the Zendesk write set it names is pinned (SKILL.md "Side-effect contract")', () => {
+  // Static, not runtime: a name is a write iff it heads an entry of the probe's pinned WRITES list.
+  it('OB-3 failcheck: the only Zendesk write the skill and /escalate name is zendesk_add_comment', () => {
+    const writes = new Set(WRITES.map((w) => w.split(':')[0]));
+    expect(writes).toContain('zendesk_update_ticket'); // the name the negative scenario needs must resolve
+    const named = toolsNamedIn(`${read('skills/o365-bridge/SKILL.md')}\n${read('commands/escalate.md')}`);
+    expect(named.filter((n) => writes.has(n))).toEqual(['zendesk_add_comment']);
+  });
+});
+
+describe('o365-bridge: the read-safety claim stays qualified (SKILL.md:8, "Side-effect contract")', () => {
+  // #62 is a wording regression: the skill was *promised* read-safe while it writes a comment and
+  // fires M365 side effects. The write half is pinned above, but an unqualified claim could simply
+  // come back green. This is deliberately not a pin on the full paragraph — it only forbids the
+  // claim standing on its own, and requires the two facts the contract exists to state.
+  const QUALIFIED = /not read-only|read path only/i;
+
+  it('OB-3 failcheck: no line claims read-safety without restricting it', () => {
+    const unqualified: string[] = [];
+    for (const file of ['skills/o365-bridge/SKILL.md', 'commands/escalate.md']) {
+      read(file).split('\n').forEach((line, i) => {
+        if (/read-(safe|only)/i.test(line) && !QUALIFIED.test(line)) unqualified.push(`${file}:${i + 1} ${line.trim()}`);
+      });
+    }
+    expect(unqualified).toEqual([]);
+  });
+
+  it('OB-3 failcheck: the contract names the Zendesk comment write and the M365 side effects', () => {
+    const skill = read('skills/o365-bridge/SKILL.md');
+    const at = skill.indexOf('## Side-effect contract');
+    expect(at, 'SKILL.md has no "## Side-effect contract" section').toBeGreaterThan(-1);
+    const contract = skill.slice(at);
+    for (const r of [/zendesk_add_comment/, /M365|Microsoft 365/, /Teams/, /Outlook|mail/i, /calendar/i]) expect(contract).toMatch(r);
   });
 });
