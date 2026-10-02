@@ -76,7 +76,7 @@
 // The one cost, named rather than discovered later: this hangs on a filename. Move or rename
 // src/server.ts and the guard refuses its own tree — loudly, and in the same commit that breaks
 // `npm run build`, which names that exact path, so it cannot drift silently.
-import { existsSync, readdirSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import ts from 'typescript';
@@ -87,8 +87,14 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Exactly one, not "at least one": a second root would be dropped without a word, so
 // `check:executors src src/bin` would have guarded half of what it named and said nothing.
-if (process.argv.length !== 3) {
-  console.error('Expected exactly one scan root: node scripts/assert-executor-safety.mjs <dir>');
+// The empty string is not a root: it resolves to the repo root and walks node_modules. Measured on
+// 3ee1d43 with `node scripts/assert-executor-safety.mjs ""`: 49 executors, 1 inspected, among them
+// node_modules/zod/src/v4/classic/tests/async-parsing.test.ts:337:29.
+if (process.argv.length !== 3 || !process.argv[2]) {
+  console.error(
+    'Expected exactly one scan root, and not the empty string:' +
+      ' node scripts/assert-executor-safety.mjs <dir>',
+  );
   process.exit(1);
 }
 // Resolved against the repo root, so a relative argument is convenient and an absolute one (the
@@ -97,13 +103,30 @@ const target = resolvePath(root, process.argv[2]);
 
 const SOURCE = /\.(ts|tsx|mts|cts)$/;
 const DECLARATION = /\.d\.(ts|mts|cts)$/;
-// node's own recursive walk (>=20, pinned in package.json) does not descend into symlinked
-// directories, so a symlink cycle cannot turn this into an ELOOP stack trace.
-if (!existsSync(target)) {
-  console.error(`Nothing to inspect: ${target} does not exist.`);
+
+// SYMLINKED DIRECTORIES ARE FOLLOWED, and a cycle is survived rather than broken. The previous
+// claim here — "does not descend into symlinked directories, so a symlink cycle cannot turn this
+// into an ELOOP stack trace" — is false on the pinned runtime. Measured on 3ee1d43, node v22.23.1,
+// on a tree holding one nested-executor file plus `src/sub/loop -> src`:
+//   node -e 'console.log(require("node:fs").readdirSync(process.argv[1],{recursive:true}).length)' <tree>
+// → 64 entries, including sub/loop, sub/loop/sub, sub/loop/sub/loop. It descends. What saves it is
+// not the walk: the OS refuses the open once the symlink chain is too long, and node drops that
+// branch silently, so the listing TERMINATES and no ELOOP reaches the caller. The cost is the
+// counts, not the findings: the same file is collected once per level, so that tree reports
+// 32 executors, 16 inspected for the 2 executors, 1 inspected it holds, and the wedge in it is
+// reported 16 times. Nothing is hidden and the exit code is right; the inventory just repeats.
+let entries;
+try {
+  entries = readdirSync(target, { recursive: true });
+} catch (err) {
+  // A message, not a stack trace, and one sentence for both ways of naming a root that cannot be
+  // walked: a missing directory (ENOENT) and a FILE named as the root (ENOTDIR — measured on
+  // 3ee1d43: `node scripts/assert-executor-safety.mjs src/server.ts` printed a node:fs source
+  // excerpt and 5 stack frames). The sibling guard is held to the same bar.
+  console.error(`Nothing to inspect: ${target} (${err.code ?? err.message}).`);
   process.exit(1);
 }
-const files = readdirSync(target, { recursive: true })
+const files = entries
   .filter((f) => SOURCE.test(f) && !DECLARATION.test(f))
   .sort()
   .map((f) => join(target, f));
@@ -294,11 +317,28 @@ for (const file of files) {
 }
 
 const show = relative(root, target) || target;
-const marked = existsSync(join(target, ENTRY));
+
+// THE MARK IS A FILE THIS WALK COLLECTED, not a path that merely exists. `existsSync(join(target,
+// ENTRY))` said yes to three things that are not the module the build bundles, each measured on
+// 3ee1d43 at exit 0 over an otherwise empty tree: a DIRECTORY named server.ts; a `Server.ts`,
+// because existsSync case-folds on darwin — one tree, two verdicts by platform, green locally and
+// red on Linux CI, which disqualifies that form on its own; and a server.ts symlinked to a file
+// outside the scanned tree. Asking the collected list instead fixes the spelling for free, because
+// the entries carry the real on-disk name, and lstat — not stat — refuses the symlink without
+// following it. A DANGLING symlink was already refused and still is: lstat succeeds, isFile() is
+// false. Costs nothing extra: `files` is built above either way.
+const ENTRY_PATH = join(target, ENTRY);
+const marked = files.includes(ENTRY_PATH) && lstatSync(ENTRY_PATH).isFile();
 
 // Printed in EVERY outcome, pass or fail: a gate that only speaks when it is happy leaves a red
-// build with no record of what was actually looked at. On stderr when the tree is not the guarded
-// one: a run that ends in 1 must leave nothing on stdout that reads like a report.
+// build with no record of what was actually looked at. THE STREAM IS KEYED ON THE MARK, NOT ON THE
+// EXIT CODE, and that is the whole claim: the inventory of the guarded tree is a true record of what
+// was inspected whether the verdict is green or red, while a summary of a tree that was never the
+// subject must not sit on stdout reading like one. Keying it on the verdict instead was tried and
+// dropped: it merges the inventory into the findings on one stream, where a reader — and three
+// assertions in tests/plugin/executor-safety-guard.test.ts that count `file:line:col` occurrences —
+// can no longer tell a finding from an inspected-executor entry (measured on 3ee1d43 + this fix:
+// the w8 'reports a call chain once' count went from 1 to 3).
 const report = marked ? console.log : console.error;
 report(`Promise executors in ${show}/: ${inventory.length} executors, ${inspectedCount} inspected.`);
 for (const entry of inventory) report(`  - ${entry}`);
