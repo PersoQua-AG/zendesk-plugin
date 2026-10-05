@@ -32,10 +32,13 @@ jobs:
       # caller awaits never settles. Pure syntax walk over src/ with the TypeScript compiler API
       # (already a devDependency), so it needs no build and runs before one. See the script header.
       - run: npm run check:executors
-      # Bound-port guard (#73): no fixed port on a bind call in tests/auth, or a concurrent
-      # `vitest run` collides on it (#23). The tree to scan is named by the caller, in
-      # package.json, never by the script — a guard that picks its own directory reports
-      # the wrong tree and a clean tree the same way. See the script header.
+      # Bound-port guard (#73, widened in #82): no fixed port on a bind call anywhere under
+      # tests/, or a concurrent `vitest run` collides on it (#23). The root was tests/auth and
+      # the scan was one directory deep, which left 142 of 190 test files unchecked; it is now
+      # recursive over the whole test tree. The tree to scan is still named by the caller, in
+      # package.json, never by the script — a guard that picks its own directory reports the
+      # wrong tree and a clean tree the same way. src/ is deliberately NOT scanned, because the
+      # rule is about test parallelism; the script header says so.
       - run: npm run check:ports
       - run: npm run build
       # Dist-drift guard: the just-run build must leave committed dist/ byte-identical.

@@ -6,7 +6,23 @@
 // directory still reported success — "scanned the wrong tree" and "found nothing" produced the
 // same green. Here there is no directory constant to bend, and a root that is not the guarded
 // tree is refused instead of reported clean.
-
+//
+// THE TREE IS EVERY TEST (#82). The root was tests/auth and the scan was one directory deep, so
+// 142 of 190 test files were never looked at — among them every test added by #68 and #80. The
+// gap is closed by widening what ONE root means, not by naming more roots: the scan is recursive
+// and `package.json` names `tests`. That keeps #73 literally intact — still exactly one argument,
+// still no default, nothing to bend — where `… tests/auth && … tests/tools && … tests/plugin`
+// would have needed the arity rule rewritten AND would have gone stale on the next directory, which
+// is precisely how this gap appeared. A hand-kept list cannot know what the next merge creates.
+//
+// TEST-ONLY, DECIDED RATHER THAN ASSUMED (#82). src/ is NOT scanned and must not be. The rule here
+// is "a bind call must not name a fixed port, because a concurrent `vitest run` collides on it
+// (#23)" — a statement about test parallelism, which production code is not subject to. src/
+// legitimately carries a default to fall back on: src/auth/config.ts:5,
+// `DEFAULT_CALLBACK_PORT = 8976`. It is a value, not a bind call, so today's BIND_CALL would not
+// match it — but the regex not firing is luck, not a decision, and `config(8976)` in src/ would be
+// correct code this guard would refuse. Production ports belong to a configuration review, not to
+// this script.
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
@@ -20,39 +36,53 @@ import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 //     as 17_000. The file and line are right, the number is not. Requiring the literal to be
 //     followed by , or ) would trade that loud wrong number for silence here, and for new
 //     misses on a cast such as `18000 as Port`, so the call site keeps winning over the number;
-//   - a mention in a comment or a string counts. That no longer forces anyone to write a sample
-//     split as `'deps' + '(18000)'`: the guard's own test lives in tests/plugin and its samples
-//     live in temp directories, neither of which is tests/auth. Point this script AT tests/plugin
-//     and it does report the literals in that test file — correctly, they are written there;
-//   - only files directly in the given root are scanned, not its subfolders.
+//   - a mention in a comment or a string counts, and #82 put the guard's own test file INSIDE the
+//     scanned tree, so the sample literals there are written split again — once, in a constant,
+//     exactly as the predecessor in tests/auth had to. That cost was dropped while the root was
+//     tests/auth and is taken back deliberately: it is the price of scanning every test instead
+//     of one directory, and it is paid by two files (measured, both named in PR #82);
+//   - the scan is recursive (#82): every .ts under the given root, at any depth. A .d.ts is NOT
+//     excluded, because a declaration file carrying `listen(18000)` in a doc comment is a literal
+//     someone will copy.
 // Catching the rest needs a parser or a runtime check, not a wider regex (out of scope, #74).
 const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|listen|rebind|config|deps)\(\s*(\d[\d_]*)\b/g;
 
-// THE MARK OF THE GUARDED TREE: the tree that DEFINES the port allocator, not one that mentions it.
-// "Holds .ts files" does not identify a tree: `tests` itself holds .ts files, so the most plausible
-// misedit of all — naming the parent of the guarded directory — would scan those, miss all of
-// tests/auth, and report success. A minimum file count cannot separate them either: tests/tools has
-// more .ts files than tests/auth. What does separate them is the thing the guarded tree is guarded
-// FOR — and the previous spelling of that, "some file here calls freePort()", did not survive one
-// day. PR #71 (dc2ae3e) added 53 test files that call freePort(), among them one directly in
-// `tests`, and three wrong roots (`tests`, `tests/tools`, plus the guarded tree) then exited 0.
-// A mention travels with every caller; the definition does not. Recount both over every directory
-// in this repo that holds a tracked .ts file with
-//   git ls-files '*.ts' | xargs -n1 dirname | sort -u | while read d; do \
-//     grep -lE '\bexport (async )?function freePort\(' "$d"/*.ts >/dev/null 2>&1 && echo "$d"; done
-// Measured on this commit by running exactly that command: 27 directories, **1** of which carries
-// the definition (tests/auth, in login-harness.ts), against **4** that match the old `\bfreePort\(`
-// mention. The mark is the first number. That claim is not left on paper: the counting command is
-// executed by tests/plugin/bound-port-literals-guard.test.ts, "runs the counting command from the
-// script header", which demands tests/auth and nothing else. It is pinned because it was wrong
-// three times in this PR — every time because the guard's own test file wrote the marker whole
-// into a fixture constant and thereby marked tests/plugin. That constant is split on purpose now.
+// THE MARK OF THE GUARDED TREE: the tree that CONTAINS the definition of the port allocator, not
+// one that merely mentions it. The mark survives #82 unchanged in intent and in regex; only its
+// reach follows the scan, from "directly in the root" to "anywhere under the root", because a
+// recursive scan whose mark was not recursive would refuse `tests` — the very root it now needs.
+//
+// WHY A MARK AT ALL, once the root is the whole test tree. The direction of danger flipped, and the
+// mark answers the new direction as well as the old. While the scan was one directory deep the
+// dangerous misedit was the WIDE one: naming `tests` scanned the four files sitting directly in it,
+// missed all 50 of tests/auth, and reported success. Recursion kills that class outright — a root
+// too wide now scans MORE, and can hide nothing. What is left is the NARROW misedit, and narrow is
+// silent without a mark: measured on b9f0615, `tests/plugin` holds 12 .ts files and `tests/tools`
+// holds 78, and a clean scan of either would read exactly like a clean scan of all 197. The mark
+// refuses both (neither contains the definition), and that is the same reasoning the sibling guard
+// records for #76/PR #87, reached from the opposite starting point.
+//
+// "Holds .ts files" still does not identify a tree, and a minimum file count still cannot: both are
+// properties every candidate shares. What separates them is the thing the guarded tree is guarded
+// FOR. The previous spelling of that — "some file here CALLS freePort()" — did not survive one day:
+// PR #71 (dc2ae3e) added 53 test files that call it, and three wrong roots then exited 0. A mention
+// travels with every caller; the definition does not. Count the directories carrying the definition
+// over every tracked .ts file in the repo with
+//   git ls-files '*.ts' | xargs grep -lE '\bexport (async )?function freePort\(' \
+//     | xargs -n1 dirname | sort -u
+// Measured on b9f0615 by running exactly that command: **1** directory, tests/auth, in
+// login-harness.ts — against 4 that match the weaker `\bfreePort\(` mention. The marked ROOTS are
+// therefore that directory and its ancestors, measured as `.`, `tests` and `tests/auth`, out of the
+// 27 directories that hold a tracked .ts file. That claim is not left on paper: the counting command
+// is executed by tests/plugin/bound-port-literals-guard.test.ts, "runs the counting command from the
+// script header", and the marked set is swept there rather than listed by hand. It is pinned because
+// it was wrong three times in #73 — every time because the guard's own test file wrote the marker
+// whole into a fixture constant and thereby marked tests/plugin. That constant is split on purpose.
 // The one cost, named rather than discovered later: this hangs on a name and a spelling. Renaming
 // freePort(), or rewriting it as `export const freePort = () =>`, makes the guard refuse its own
-// tree. Moving login-harness.ts moves the mark with it and refuses the tree left behind. Loud in
-// every case, never silent, which is the whole reason it is acceptable. An explicit sentinel line
-// in tests/auth would not hang on that name — but it would have to be written into
-// tests/auth/login-harness.ts, and it marks whatever file it is copied into; the definition can
+// tree. Moving login-harness.ts out of the test tree refuses the tree left behind. Loud in every
+// case, never silent, which is the whole reason it is acceptable. An explicit sentinel line would
+// not hang on that name — but it marks whatever file it is copied into, whereas the definition can
 // only be in one place, because a second `export function freePort` would not compile into the
 // same module graph twice by accident.
 // What the marker does NOT cost: it does not decide whether a tree is scanned, only whether a
@@ -65,8 +95,19 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Exactly one, not "at least one": a second root used to be dropped without a word, so
 // `check:ports tests/auth tests/plugin` would have guarded half of what it named and said nothing.
-if (process.argv.length !== 3) {
-  console.error('Expected exactly one scan root: node scripts/assert-no-bound-port-literals.mjs <dir>');
+// The empty string is not a root either, and #82 is what makes that worth a clause: `resolve(root,
+// '')` is the repository root, which was harmless while the scan was one directory deep — measured
+// on b9f0615, `node scripts/assert-no-bound-port-literals.mjs ""` scanned 0 .ts files. Recursive,
+// the same argument walks the whole checkout: measured on b9f0615 with dependencies installed,
+// 1909 .ts files, 1634 of them under node_modules, and 21 findings there — the first is
+// `node_modules/@types/node/async_hooks.d.ts:97 listen(3000)`, somebody else's documentation. And
+// `.` IS a marked root, so such a run reads like a report about this repository's tests.
+// The sibling guard refuses it for the same reason (#76, PR #87).
+if (process.argv.length !== 3 || !process.argv[2]) {
+  console.error(
+    'Expected exactly one scan root, and not the empty string:' +
+      ' node scripts/assert-no-bound-port-literals.mjs <dir>',
+  );
   process.exit(1);
 }
 // Resolved against the repo root, so a relative argument is convenient and an absolute one (the
@@ -83,9 +124,15 @@ function isBindablePort(literal) {
 // TMPDIR happens to sit: `tests/auth/login-harness.ts:12` in a CI log is what has to be clickable.
 const show = (file) => relative(root, file) || '.';
 
+// RECURSIVE SINCE #82. The entries come back as paths relative to the root, at every depth, so a
+// literal in tests/tools or tests/plugin is seen; before this, 142 of 190 test files were not.
+// Symlinked directories are followed by node's own walk on the pinned runtime (>=20) — the sibling
+// guard measured that for #76 — and a cycle is survived rather than broken, because the OS refuses
+// the open once the chain is too long and node drops that branch silently. The cost of a cycle is a
+// repeated inventory, never a missed finding.
 let entries;
 try {
-  entries = readdirSync(target);
+  entries = readdirSync(target, { recursive: true });
 } catch (err) {
   // A message, not a stack trace. Ablated, this prints 17 lines: a node:fs source excerpt, the
   // Error, five stack frames, the errno object and the node banner. The sibling guard is held to

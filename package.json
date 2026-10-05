@@ -13,7 +13,7 @@
     "prepare": "npm run build",
     "test": "vitest run",
     "check:executors": "node scripts/assert-executor-safety.mjs",
-    "check:ports": "node scripts/assert-no-bound-port-literals.mjs tests/auth",
+    "check:ports": "node scripts/assert-no-bound-port-literals.mjs tests",
     "test:coverage": "vitest run --coverage",
     "test:skills": "vitest run tests/skills",
     "test:watch": "vitest",
