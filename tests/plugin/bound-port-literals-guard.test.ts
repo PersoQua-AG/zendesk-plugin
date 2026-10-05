@@ -100,9 +100,14 @@ describe('the bound-port guard as a script', () => {
     expect(missing.status).toBe(1);
     expect(missing.stderr).toContain('ENOENT');
     // Positive, not negative. `not.toContain('at Object.readdirSync')` was asserted here and was
-    // empty: that frame is the CommonJS spelling, and this guard is ESM with a named import, so
+    // empty: `at Object.x` is the frame of a call through a module NAMESPACE object, not the
+    // CommonJS spelling as first claimed, and every guard here imports named and calls direct, so
     // the string cannot occur whether or not readdirSync is guarded. Measured: with the try/catch
     // ablated the whole file still passed. This line is red against that ablation.
+    // The rule, after sweeping tests/ for the same mistake and finding three more (#77:
+    // executor-safety-guard :416, bundle-audit :394 and :407, all repaired): a negative assertion
+    // earns its line only if the string IS produced once the guard it protects is ablated. Ablate
+    // first, read the frames the crash really prints, and paste one of those.
     expect(missing.stderr).toContain('Cannot scan');
   });
 

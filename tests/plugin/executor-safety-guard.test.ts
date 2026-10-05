@@ -413,7 +413,7 @@ export const f = (server: { listen: (p: number) => void }) =>
       const run = spawnSync('node', [GUARD, join(root, 'no-such-directory')], { encoding: 'utf8' });
       expect(run.status).toBe(1);
       expect(run.stderr).toContain('Nothing to inspect');
-      expect(run.stderr).not.toContain('at Object.readdirSync');
+      expect(run.stderr).not.toContain('at read (node:fs');
     });
   });
 
