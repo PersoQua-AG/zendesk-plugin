@@ -106,7 +106,8 @@ const DECLARATION = /\.d\.(ts|mts|cts)$/;
 
 // SYMLINKED DIRECTORIES ARE FOLLOWED, and a cycle is survived rather than broken. The previous
 // claim here — "does not descend into symlinked directories, so a symlink cycle cannot turn this
-// into an ELOOP stack trace" — is false on the pinned runtime. Measured on 3ee1d43, node v22.23.1,
+// into an ELOOP stack trace" — is false, and no runtime is "pinned": package.json allows node
+// >=20 and CI runs 20 (.github/workflows/ci.yml:20). Re-measured on node 20.20.2 and 26.5.0 alike,
 // on a tree holding one nested-executor file plus `src/sub/loop -> src`:
 //   node -e 'console.log(require("node:fs").readdirSync(process.argv[1],{recursive:true}).length)' <tree>
 // → 64 entries, including sub/loop, sub/loop/sub, sub/loop/sub/loop. It descends. What saves it is
@@ -122,7 +123,8 @@ try {
   // A message, not a stack trace, and one sentence for both ways of naming a root that cannot be
   // walked: a missing directory (ENOENT) and a FILE named as the root (ENOTDIR — measured on
   // 3ee1d43: `node scripts/assert-executor-safety.mjs src/server.ts` printed a node:fs source
-  // excerpt and 5 stack frames). The sibling guard is held to the same bar.
+  // excerpt and a stack trace — 8 frames on node 20, 10 on 26, which is why no count is pinned
+  // here). The sibling guard is held to the same bar.
   console.error(`Nothing to inspect: ${target} (${err.code ?? err.message}).`);
   process.exit(1);
 }
