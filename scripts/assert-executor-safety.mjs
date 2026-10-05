@@ -53,25 +53,80 @@
 //     on a path where something has already gone wrong. Everywhere ELSE a settle call is merely not
 //     a foreign call itself — its arguments are still walked, so `reject(load())` on the ordinary
 //     path is reported, because `load()` throwing there settles nothing.
-import { existsSync, readdirSync } from 'node:fs';
+// THE CALLER NAMES THE TREE (#76). The scan root is argv[2] and there is no default. While the
+// default was 'src', a run aimed anywhere else still reported success: measured on 3ee1d43,
+// `node scripts/assert-executor-safety.mjs tests/util` printed "0 executors, 0 inspected" and
+// exited 0 — "scanned the wrong tree" and "found nothing" produced the same green.
+//
+// THE MARK OF THE GUARDED TREE: the root must DIRECTLY contain server.ts, the module `npm run
+// build` bundles. That is the tree this guard is for — the code that ships — and it is nothing
+// else here: measured on 3ee1d43 by running
+//   git ls-files '*/server.ts' 'server.ts'
+// → src/server.ts, 1 directory, out of the 27 that hold a tracked .ts file
+// (`git ls-files '*.ts' | xargs -n1 dirname | sort -u | wc -l` → measured on 3ee1d43: 27).
+// Why a mark at all, when this walk is RECURSIVE and a too-WIDE root therefore still inspects the
+// guarded file (measured on 3ee1d43: `node scripts/assert-executor-safety.mjs .` reports
+// `src/auth/oauth-flow.ts:149:54  (resolve, reject)  nested, inspected`)? Because the misedit that
+// hides something is the NARROW one, and narrow is silent: measured on 3ee1d43, `src/auth` → 2
+// executors and `tests/util` → 0 executors, both exited 0 before this mark existed. The counts are
+// printed in every outcome, but a count only reports; it cannot refuse, and a floor under it would
+// mean writing down a number that rots on the next merge.
+// AS IN THE SIBLING GUARD, THE MARK GATES SUCCESS, NOT THE SCAN: an unmarked tree is still walked
+// whole and every finding in it is still named by file and line — it just can never exit 0.
+// The one cost, named rather than discovered later: this hangs on a filename. Move or rename
+// src/server.ts and the guard refuses its own tree — loudly, and in the same commit that breaks
+// `npm run build`, which names that exact path, so it cannot drift silently.
+import { lstatSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import ts from 'typescript';
 
+const ENTRY = 'server.ts';
+
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+// Exactly one, not "at least one": a second root would be dropped without a word, so
+// `check:executors src src/bin` would have guarded half of what it named and said nothing.
+// The empty string is not a root: it resolves to the repo root and walks node_modules. Measured on
+// 3ee1d43 with `node scripts/assert-executor-safety.mjs ""`: 49 executors, 1 inspected, among them
+// node_modules/zod/src/v4/classic/tests/async-parsing.test.ts:337:29.
+if (process.argv.length !== 3 || !process.argv[2]) {
+  console.error(
+    'Expected exactly one scan root, and not the empty string:' +
+      ' node scripts/assert-executor-safety.mjs <dir>',
+  );
+  process.exit(1);
+}
 // Resolved against the repo root, so a relative argument is convenient and an absolute one (the
 // tests hand it temp trees) is honoured rather than silently appended to the root.
-const target = resolvePath(root, process.argv[2] ?? 'src');
+const target = resolvePath(root, process.argv[2]);
 
 const SOURCE = /\.(ts|tsx|mts|cts)$/;
 const DECLARATION = /\.d\.(ts|mts|cts)$/;
-// node's own recursive walk (>=20, pinned in package.json) does not descend into symlinked
-// directories, so a symlink cycle cannot turn this into an ELOOP stack trace.
-if (!existsSync(target)) {
-  console.error(`Nothing to inspect: ${target} does not exist.`);
+
+// SYMLINKED DIRECTORIES ARE FOLLOWED, and a cycle is survived rather than broken. The previous
+// claim here — "does not descend into symlinked directories, so a symlink cycle cannot turn this
+// into an ELOOP stack trace" — is false on the pinned runtime. Measured on 3ee1d43, node v22.23.1,
+// on a tree holding one nested-executor file plus `src/sub/loop -> src`:
+//   node -e 'console.log(require("node:fs").readdirSync(process.argv[1],{recursive:true}).length)' <tree>
+// → 64 entries, including sub/loop, sub/loop/sub, sub/loop/sub/loop. It descends. What saves it is
+// not the walk: the OS refuses the open once the symlink chain is too long, and node drops that
+// branch silently, so the listing TERMINATES and no ELOOP reaches the caller. The cost is the
+// counts, not the findings: the same file is collected once per level, so that tree reports
+// 32 executors, 16 inspected for the 2 executors, 1 inspected it holds, and the wedge in it is
+// reported 16 times. Nothing is hidden and the exit code is right; the inventory just repeats.
+let entries;
+try {
+  entries = readdirSync(target, { recursive: true });
+} catch (err) {
+  // A message, not a stack trace, and one sentence for both ways of naming a root that cannot be
+  // walked: a missing directory (ENOENT) and a FILE named as the root (ENOTDIR — measured on
+  // 3ee1d43: `node scripts/assert-executor-safety.mjs src/server.ts` printed a node:fs source
+  // excerpt and 5 stack frames). The sibling guard is held to the same bar.
+  console.error(`Nothing to inspect: ${target} (${err.code ?? err.message}).`);
   process.exit(1);
 }
-const files = readdirSync(target, { recursive: true })
+const files = entries
   .filter((f) => SOURCE.test(f) && !DECLARATION.test(f))
   .sort()
   .map((f) => join(target, f));
@@ -261,12 +316,32 @@ for (const file of files) {
   findRoots(source);
 }
 
+const show = relative(root, target) || target;
+
+// THE MARK IS A FILE THIS WALK COLLECTED, not a path that merely exists. `existsSync(join(target,
+// ENTRY))` said yes to three things that are not the module the build bundles, each measured on
+// 3ee1d43 at exit 0 over an otherwise empty tree: a DIRECTORY named server.ts; a `Server.ts`,
+// because existsSync case-folds on darwin — one tree, two verdicts by platform, green locally and
+// red on Linux CI, which disqualifies that form on its own; and a server.ts symlinked to a file
+// outside the scanned tree. Asking the collected list instead fixes the spelling for free, because
+// the entries carry the real on-disk name, and lstat — not stat — refuses the symlink without
+// following it. A DANGLING symlink was already refused and still is: lstat succeeds, isFile() is
+// false. Costs nothing extra: `files` is built above either way.
+const ENTRY_PATH = join(target, ENTRY);
+const marked = files.includes(ENTRY_PATH) && lstatSync(ENTRY_PATH).isFile();
+
 // Printed in EVERY outcome, pass or fail: a gate that only speaks when it is happy leaves a red
-// build with no record of what was actually looked at.
-console.log(
-  `Promise executors in ${relative(root, target) || target}/: ${inventory.length} executors, ${inspectedCount} inspected.`,
-);
-for (const entry of inventory) console.log(`  - ${entry}`);
+// build with no record of what was actually looked at. THE STREAM IS KEYED ON THE MARK, NOT ON THE
+// EXIT CODE, and that is the whole claim: the inventory of the guarded tree is a true record of what
+// was inspected whether the verdict is green or red, while a summary of a tree that was never the
+// subject must not sit on stdout reading like one. Keying it on the verdict instead was tried and
+// dropped: it merges the inventory into the findings on one stream, where a reader — and three
+// assertions in tests/plugin/executor-safety-guard.test.ts that count `file:line:col` occurrences —
+// can no longer tell a finding from an inspected-executor entry (measured on 3ee1d43 + this fix:
+// the w8 'reports a call chain once' count went from 1 to 3).
+const report = marked ? console.log : console.error;
+report(`Promise executors in ${show}/: ${inventory.length} executors, ${inspectedCount} inspected.`);
+for (const entry of inventory) report(`  - ${entry}`);
 
 if (problems.length > 0) {
   console.error('\nRefusing the tree: an inspected promise executor calls out unguarded.');
@@ -303,7 +378,17 @@ if (problems.length > 0) {
           'call in the body at once. There is no per-call exemption on purpose: the calls nobody\n' +
           'thought of are the ones that bite.',
   );
-  process.exit(1);
 }
+
+// Both notices, never one: findings alone would make a run aimed at the wrong tree by accident
+// look like an ordinary hit, and the reader would fix the fixture instead of the argument.
+if (!marked) {
+  console.error(`\nNot the guarded tree: ${show}/ does not directly contain ${ENTRY}.`);
+  console.error(`${files.length} file(s) looked at. A tree that is not the one the build bundles is`);
+  console.error('not the tree this guard is for, so a clean result here would mean nothing.');
+  console.error('Name the tree to scan, for example src.');
+}
+
+if (problems.length > 0 || !marked) process.exit(1);
 
 console.log('Every call on an inspected executor path is on a settling path.');
