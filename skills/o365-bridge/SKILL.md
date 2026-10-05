@@ -5,7 +5,7 @@ description: Bridge Zendesk with Microsoft 365 — escalate a ticket to Teams, e
 
 # Zendesk × Microsoft 365 Bridge
 
-Compose this plugin's Zendesk tools with the Microsoft 365 MCP. This skill adds **no** Zendesk endpoints — it orchestrates existing ones.
+Compose this plugin's Zendesk tools with the Microsoft 365 MCP. This skill adds **no** Zendesk endpoints — it orchestrates existing ones. It is not read-only: see **Side-effect contract** below.
 
 ## Step 0 — detect the Microsoft 365 MCP (always first)
 
@@ -40,3 +40,7 @@ The `outlook_*` / `teams_*` / `sharepoint_*` / `find_meeting_availability` names
 
 - Every outbound action (Teams post, email send, calendar invite, ticket comment) is a side effect — propose it and get explicit confirmation first. Prefer drafts over direct sends for customer-facing content.
 - When an escalation/notification happens, optionally record it on the ticket with an internal `zendesk_add_comment` so there is an audit trail in Zendesk.
+
+## Side-effect contract
+
+On Zendesk this skill reads (`zendesk_get_ticket`, `zendesk_list_comments`, `zendesk_query`) and writes exactly one kind of change: a ticket comment via `zendesk_add_comment`, normally internal. It names no other Zendesk write — adding one turns CI red (`tests/skills/o365-bridge.test.ts`). Outside Zendesk it causes real M365 side effects that the plugin can neither see nor undo: a Teams post, an Outlook send, a calendar event. The comment and every M365 side effect happen only after the user explicitly confirms it. "Read-safe" therefore holds for the Zendesk read path only, not for this skill as a whole.
