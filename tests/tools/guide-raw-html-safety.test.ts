@@ -220,3 +220,23 @@ describe('a stray quote in an unquoted value does not open a value for the token
     expect(client.request).not.toHaveBeenCalled();
   });
 });
+
+// parseFragment parses in the FRAGMENT case, where "in body" ignores an <html>/<body> start tag
+// outright: no element, no attributes, parseTags returns []. A Help Center page is a DOCUMENT parse,
+// and there the same token MERGES its attributes onto the page's real <html>/<body> element. That
+// divergence is the premise raw-html.ts:84-87 already relies on for the eof-* rule — the body is
+// inserted into a page, not rendered alone — applied to the end of the string but not here.
+describe('tags the fragment parser drops but a page merges onto its own elements', () => {
+  it.each([
+    ['body onclick', '<body onclick=alert(1)>', /onclick/i],
+    ['body onclick after real content', '<p>Harmless looking article.</p><body onclick="alert(1)">', /onclick/i],
+    ['html onmouseover', '<html onmouseover=alert(1)>', /onmouseover/i],
+    ['frameset onload', '<frameset onload=alert(1)>', /<frameset>|onload/i],
+  ])('refuses %s', async (_label, body, named) => {
+    const client = { request: vi.fn().mockResolvedValue({ article: { id: 66 } }) } as unknown as ZendeskHttpClient;
+    await expect(
+      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false }))(),
+    ).rejects.toThrow(named);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});
