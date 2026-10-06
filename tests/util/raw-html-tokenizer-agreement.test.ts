@@ -6,7 +6,7 @@
 // from the WHATWG tokenizer rules, case by case. If the parser's view ever drifts from the spec
 // reading written out here, these fail; that is the thing the previous two rounds could not detect.
 import { describe, it, expect } from 'vitest';
-import { parseTags, documentElements } from '../../src/util/raw-html.js';
+import { parseTags } from '../../src/util/raw-html.js';
 
 describe('the parsed view matches the HTML tokenizer, case by case', () => {
   it.each([
@@ -95,45 +95,31 @@ describe('the parsed view matches the HTML tokenizer, case by case', () => {
   });
 });
 
-// The fragment-vs-document contrast itself, which neither of the earlier rounds measured. An article
-// body is not rendered as a fragment; it is inserted into a page. Where the two modes disagree, the
-// DOCUMENT mode is the one that describes the delivered context — and the token stream is what
-// survives both. These assert the disagreement rather than assuming it away.
-describe('the two parse modes are compared, not assumed equal', () => {
-  it('the document parse adds the tbody the token stream does not have', () => {
-    const html = '<table><tr><td>a</td></tr></table>';
-    expect(parseTags(html).map((t) => t.tag)).toEqual(['table', 'tr', 'td']);
-    expect(documentElements(html).map((t) => t.tag)).toEqual(['table', 'tbody', 'tr', 'td']);
+// Why the check reads tokens and not a tree, stated as the three ways the two disagree. A tree view
+// was carried alongside for one round and removed as redundant; the REASON must stay pinned, or the
+// next person builds a parseFragment check and brings round 3 back.
+//
+// 1. the tree builder IMPLIES a tag the token stream lacks (tbody) — benign, it is on the allowlist
+// 2. an insertion mode MERGES attributes onto an element that already exists (html, body)
+// 3. an insertion mode DROPS the tag outright, so NO tree shows it at all
+//
+// Only the token stream survives all three, and 2 and 3 are the dangerous ones.
+describe('the token stream is what survives every insertion mode', () => {
+  it('an implied tbody is the only thing a tree adds, and it is allowed anyway', () => {
+    expect(parseTags('<table><tr><td>a</td></tr></table>').map((t) => t.tag)).toEqual(['table', 'tr', 'td']);
   });
 
-  it('a <body> start tag is a token, and the document parse shows it merging onto the page body', () => {
-    const html = '<body onclick=alert(1)>';
-    expect(parseTags(html)).toEqual([{ tag: 'body', attrs: [['onclick', 'alert(1)']] }]);
-    // Not "an attribute on <body>": the scaffold contributes a bare <body>, so an attribute found
-    // there is one the host page would adopt onto its own element.
-    expect(() => documentElements(html)).toThrow(/merges onto its own <body>/i);
-  });
-
-  it('both modes agree that plain text contains nothing', () => {
-    expect(parseTags('just words, no markup')).toEqual([]);
-    expect(documentElements('just words, no markup')).toEqual([]);
-  });
-});
-
-// The third way the two modes can disagree. The block above covers "the tree builder IMPLIES a tag
-// the token stream lacks" (tbody) and "an insertion mode MERGES attributes onto an element that
-// already exists" (body). This is the one `frameset` was the argument for: an insertion mode DROPS
-// the tag outright, so the document parse is empty and only the token stream still has it. Asserting
-// the class, not just the one witness that motivated it.
-describe('tags an insertion mode drops entirely survive in the token stream', () => {
   it.each([
-    ['frameset', '<frameset onload=alert(1)>'],
-    ['head', '<head onclick=alert(1)>'],
-    ['frame', '<frame src="https://evil.test">'],
-    ['col outside a table', '<col onclick=alert(1)>'],
-    ['caption outside a table', '<caption onclick=alert(1)>x</caption>'],
-  ])('%s is a token the document parse does not build', (_label, html) => {
-    expect(documentElements(html)).toEqual([]);
-    expect(parseTags(html).length).toBe(1);
+    ['frameset', '<frameset onload=alert(1)>', 'frameset'],
+    ['head', '<head onclick=alert(1)>', 'head'],
+    ['frame', '<frame src="https://evil.test">', 'frame'],
+    ['col outside a table', '<col onclick=alert(1)>', 'col'],
+    ['caption outside a table', '<caption onclick=alert(1)>x</caption>', 'caption'],
+  ])('%s is a token no tree mode builds, and the token stream still has it', (_label, html, tag) => {
+    expect(parseTags(html as string).map((t) => t.tag)).toEqual([tag]);
+  });
+
+  it('plain text contains nothing, and nothing is the right answer there', () => {
+    expect(parseTags('just words, no markup')).toEqual([]);
   });
 });

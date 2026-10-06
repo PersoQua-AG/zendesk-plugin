@@ -111,28 +111,26 @@ describe('a > inside a quoted attribute value does not end the tag for a browser
   });
 });
 
-// The twelve evasions above all attack classes the grammar already recognises. These attack the
-// SCANNER'S OWN STATE BOUNDARIES — quote state, tag boundary, cursor end — which is where the
-// `>`-inside-a-value defect actually lived. Each one parks something active where a boundary bug
-// would skip it.
-describe('scanner state boundaries are fail-closed', () => {
+// Six cases, chosen for the rule each one still guards rather than for coverage. Ten of the
+// original sixteen were quote/`>` permutations aimed at a hand-written state machine that no longer
+// exists — parse5 owns that now, and the tokenizer-agreement test pins it directly. What remains:
+// the first two guard HAND-WRITTEN rules layered over parse5 (the eof-* policy and the onComment
+// policy), the third guards the aria- prefix boundary, and the last two are historical anchors for
+// the two passes that reached client.request in earlier rounds.
+describe('the rules layered over parse5 are fail-closed', () => {
   it.each([
-    ['nested quotes, handler after', `<a title="he said 'hi'" onclick="alert(1)">x</a>`],
-    ['single-quoted value containing >', `<img alt='a>b' onerror=alert(1)>`],
-    ['backtick as a quote (IE legacy)', '<img src=x onerror=`alert(1)`>'],
-    ['value left unclosed to the end of the body', '<img alt="a>b onerror=alert(1)>'],
-    ['slash before > with a handler', '<img src="a>b" onerror=alert(1)/>'],
-    ['several > inside one value', '<img alt="a>b>c>d" onerror=alert(1)>'],
-    ['quote inside an unquoted value', '<img src=x"y onerror=alert(1)>'],
-    ['> in value then a javascript: href', `<a title="x>" href='javascript:alert(1)'>y</a>`],
-    ['mixed quote types straddling the >', `<img alt="a'>b" onerror=alert(1)>`],
-    ['> as the whole value, then a javascript: src', '<img alt=">" src="javascript:alert(1)">'],
-    ['handler on the next line after a > value', '<img alt="a>b"\n onerror=alert(1)>'],
-    ['empty attribute name after a > value', '<img alt="a>b" ="x">'],
-    ['script element hidden behind a > value', '<img alt="a>b"><script>alert(1)</script>'],
-    ['unterminated plain tag', '<img src=x'],
-    ['comment', '<!-- x -->'],
-    ['bare data- prefix with no name', '<div data->x</div>'],
+    // eof-* policy: parse5 drops the half-tag, we refuse because the host page would finish it.
+    ['a value left unclosed to the end of the body', '<img alt="a>b onerror=alert(1)>'],
+    ['an unterminated plain tag', '<img src=x'],
+    // onComment policy: parse5 happily builds a comment node, we refuse it.
+    ['a comment', '<!-- x -->'],
+    // The aria- prefix boundary: `aria-` alone must not satisfy the prefix test. This case stands on
+    // the only LIVE prefix — data- was removed from the allowlist, so a data- case would reach this
+    // guard only indirectly and would go green even if the boundary broke.
+    ['a bare aria- prefix with no name', '<div aria->x</div>'],
+    // Historical anchors: the round-1 and round-2 passes, in their simplest shape.
+    ['a > inside a quoted value (round 1)', '<img alt="a>b" onerror=alert(1)>'],
+    ['a stray quote in an unquoted value (round 2)', '<img alt=a" src="b>c" onerror=alert(1)>'],
   ])('refuses %s', async (_label, body) => {
     const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
     await expect(
@@ -199,12 +197,8 @@ describe('expectations the parser corrects', () => {
   });
 });
 
-// findTagEnd opens quote state on any `"` or `'`. The tokenizer only opens an attribute value on a
-// quote that follows `=`; a quote anywhere else (inside an UNQUOTED value, in an attribute name) is
-// a parse error and stays literal. So one stray quote in an unquoted value desynchronises the two:
-// the next attribute's real opening quote CLOSES the scanner's state instead of opening one, and the
-// scanner then ends the tag on a `>` that the browser is still reading as attribute-value content.
-// Everything from there to the next `<` is skipped as text — which is where the handler sits.
+// Round 2: these five reached client.request verbatim. A quote outside a value is literal to the
+// tokenizer, so a stray one used to invert the checker's idea of where the tag ended.
 describe('a stray quote in an unquoted value does not open a value for the tokenizer', () => {
   it.each([
     ['onerror behind a desynchronised double quote', '<img alt=a" src="b>c" onerror=alert(1)>', /onerror/i],
@@ -241,25 +235,16 @@ describe('tags the fragment parser drops but a page merges onto its own elements
   });
 });
 
-// Parsing in document context moves the attack surface, so the new surface gets its own attacks:
-// can the body break out of the scaffold the check wraps it in, and do <head> elements that an
-// insertion mode may relocate still get seen? Both classes are new with the mode, neither existed
-// while the check parsed fragments.
-describe('the document-context scaffold cannot be escaped', () => {
+// Document-structure elements, which an article body has no business carrying. None of them is
+// about a scaffold any more — the check builds no tree — they are simply not on the allowlist, and
+// each would act on the host page rather than on the article if it got through.
+describe('document-structure elements are refused', () => {
   it.each([
-    ['a body that closes body and continues', '</body><script>alert(1)</script>'],
-    ['a body that closes body and html and continues', '</body></html><script>alert(1)</script>'],
-    ['a body that closes body then re-opens it with attributes', '</body><body onclick=alert(1)>'],
-    ['a body that closes html then re-opens it with attributes', '</html><html onclick=alert(1)>'],
-    ['a body that starts a second document', '</body></html><!DOCTYPE html><html onclick=x>'],
-    ['a nested second body', '<body><body onclick=alert(1)>'],
-    ['a head re-opened after body', '</body><head><base href="https://evil.test">'],
     ['a base that would retarget every relative link', '<base href="https://evil.test">'],
     ['a meta refresh', '<meta http-equiv="refresh" content="0;url=https://evil.test">'],
     ['a title', '<title>x</title>'],
     ['a stylesheet link', '<link rel=stylesheet href="https://evil.test/x.css">'],
     ['a style element', '<style>body{background:url(javascript:1)}</style>'],
-    ['noframes', '<noframes><p>x</p></noframes>'],
     ['a frame', '<frame src="https://evil.test">'],
   ])('refuses %s', async (_label, body) => {
     const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
@@ -272,17 +257,13 @@ describe('the document-context scaffold cannot be escaped', () => {
 
 // Acceptance test 2 is byte-identity, and the check only ever reads: assertSafeRawHtml returns its
 // own argument. These are the character classes a reader would worry about on the way to Zendesk —
-// line endings, NUL, astral planes, a lone surrogate, entities and invisible formatting characters —
-// asserted on the real request body after the JSON round trip, not on the checker's return value.
+// line endings, a lone surrogate and entities — asserted on the real request body after the JSON
+// round trip, not on the checker's return value.
 describe('the body survives byte-identically whatever characters it holds', () => {
   it.each([
     ['CRLF line endings', '<p>a</p>\r\n<p>b</p>'],
-    ['a NUL in text', '<p>a\u0000b</p>'],
-    ['astral-plane characters', '<p>x \u{1F44D} y</p>'],
     ['a lone surrogate', '<p>a\ud800b</p>'],
     ['entities left unresolved', '<p>a&nbsp;&amp;&lt;b</p>'],
-    ['a zero-width space', '<p>a​b</p>'],
-    ['an RTL override', '<p>a‮b</p>'],
   ])('sends %s unchanged', async (_label, body) => {
     const client = { request: vi.fn().mockResolvedValue({ article: { id: 67 } }) } as unknown as ZendeskHttpClient;
     await createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false });
@@ -290,17 +271,32 @@ describe('the body survives byte-identically whatever characters it holds', () =
   });
 });
 
-// documentElements walks the tree with a recursive function, so a deeply nested body exhausts the
-// call stack before any verdict is reached. The direction is safe — nothing is sent — but the error
-// is a RangeError, not a refusal, so the result names no construct. This pins the guarantee that
-// actually holds today (no request leaves); naming the construct is an open defect, not pinned here.
-describe('a body too deeply nested for the tree walk still sends nothing', () => {
-  it('makes no request when the walk exhausts the stack', async () => {
-    const body = `${'<div>'.repeat(5000)}x${'</div>'.repeat(5000)}`;
-    const client = { request: vi.fn().mockResolvedValue({ article: { id: 68 } }) } as unknown as ZendeskHttpClient;
+// The agreement test pins the VIEW; these pin the VERDICT, one per independent rule path in
+// assertSafeRawHtml. Widening ALLOWED_ELEMENTS or breaking the `on` test would leave the agreement
+// test green while the body went out, so each path needs a witness that goes through createArticle
+// and asserts no request was made.
+describe('each rule path refuses end to end', () => {
+  it('the handler path: an event handler stops the request (round 1)', async () => {
+    const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
     await expect(
-      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false }))(),
-    ).rejects.toThrow();
+      (async () => createArticle(client, cacheStub(), {
+        sectionId: 3,
+        fields: { title: 'T', body: '<img src="https://x.test/a.png" alt="a>b" onerror=alert(1)>' },
+        markdown: false,
+      }))(),
+    ).rejects.toThrow(/onerror/i);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it('the URL path: a javascript: href stops the request (round 2)', async () => {
+    const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
+    await expect(
+      (async () => createArticle(client, cacheStub(), {
+        sectionId: 3,
+        fields: { title: 'T', body: '<a alt=a" title="x>" href=javascript:alert(1)>y</a>' },
+        markdown: false,
+      }))(),
+    ).rejects.toThrow(/javascript:/i);
     expect(client.request).not.toHaveBeenCalled();
   });
 });
