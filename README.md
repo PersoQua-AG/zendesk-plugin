@@ -79,7 +79,7 @@ Build the bundle yourself:
 
 ```bash
 npm ci && npm run build             # dist/ is what the bundle runs
-npm ci --omit=dev --ignore-scripts  # bundle only the four runtime dependencies
+npm ci --omit=dev --ignore-scripts  # bundle only the five runtime dependencies
 npm run pack                        # → zendesk.mcpb (via npx @anthropic-ai/mcpb)
 npm ci                              # restore the dev toolchain
 ```
@@ -89,7 +89,7 @@ ships whatever is in `node_modules`, and the test/build toolchain has no busines
 inside a shipped extension. `npm run pack` refuses to run until the tree is a
 production tree, so forgetting the step fails loudly instead of shipping 17 MB.
 `.mcpbignore` drops the sources, tests, the Claude Code plugin layer and the
-local data directory (`tokens.enc` must never enter a bundle); the four runtime
+local data directory (`tokens.enc` must never enter a bundle); the five runtime
 dependencies stay in on purpose, so the extension is self-contained. Packaging
 adds **no** dependency of its own — the MCPB CLI is fetched through `npx`.
 

@@ -45,7 +45,7 @@ const ALLOWED = [
   // The extension runs dist/server.js. Declaration maps and .d.ts are dropped by the packer, so
   // anything in dist/ that is not JavaScript is unexpected and gets refused.
   { rule: 'compiled-server', match: (p) => p.startsWith('dist/') && p.endsWith('.js') },
-  // The bundle is self-contained; the four frozen runtime dependencies ship inside it. Keeping the
+  // The bundle is self-contained; the five frozen runtime dependencies ship inside it. Keeping the
   // dev toolchain out is scripts/assert-prod-tree.mjs's job, not this one.
   { rule: 'runtime-dependencies', match: (p) => p.startsWith('node_modules/') },
 ];

@@ -1,7 +1,8 @@
 // src/tools/guide/articles.ts
 // M5 Guide — articles + article translations. Read + create/update only (NO delete, per PRD §N1).
 // Article/translation `body` is HTML in Zendesk; write tools convert Markdown→HTML (markdown flag,
-// default from markdown_conversion) unless markdown:false (raw HTML passthrough). Creates reuse the
+// default from markdown_conversion) unless markdown:false (raw HTML, refused if it carries active
+// content — see util/raw-html.ts). Creates reuse the
 // neutral generic createEntity (admin-gated via withAdminGuard); updates reuse updateEntity. Every inbound
 // record is screened at ingest by construction (title/body fenced; the rest passes through the
 // field-agnostic deep screen).
@@ -9,6 +10,7 @@ import { z } from 'zod';
 import { makeScreener, screenRecordDeep, summariseScreened, makeDescribe, screenNote } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP, MAX_PAGE_SIZE } from '../cbp-list.js';
 import { markdownToHtml } from '../../util/markdown.js';
+import { assertSafeRawHtml } from '../../util/raw-html.js';
 import { stripUndefined } from '../../util/object.js';
 import { createEntity, updateEntity, withAdminGuard } from '../write-helpers.js';
 // EN + DE are the confirmed first-class Guide locales (PRD §12 item 6). DEFAULT_LOCALE is applied
@@ -39,9 +41,11 @@ const ArticleSchema = z.object({
 // renders from the SAFE copy so no raw payload leaks into the summary.
 const describeArticle = makeDescribe('article', (a) => `#${a.id} ${a.title ?? '(untitled)'}${a.draft ? ' (draft)' : ''} [${a.locale ?? '?'}]`);
 // Article/translation body is HTML in Zendesk. Convert Markdown→HTML when markdown is on (per-call
-// flag defaulting to the global markdown_conversion). markdown:false → raw HTML passthrough.
+// flag defaulting to the global markdown_conversion). markdown:false still passes the author's HTML
+// through byte-identically, but only once assertSafeRawHtml has refused active content (#60); all
+// four write paths route through here, so the one check covers create/update × article/translation.
 function renderBody(body, useMarkdown) {
-    return useMarkdown ? markdownToHtml(body) : body;
+    return useMarkdown ? markdownToHtml(body) : assertSafeRawHtml(body);
 }
 // A whitespace-only body still renders to structurally-non-empty HTML (markdownToHtml('# ') →
 // '<h1></h1>'), so the raw-string required-`body` guard would let it through. Strip tags and check
