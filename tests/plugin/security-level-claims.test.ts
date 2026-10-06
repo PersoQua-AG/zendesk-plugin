@@ -17,27 +17,30 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
 
-const manifest = JSON.parse(read('manifest.json'));
+const manifestRaw = read('manifest.json');
 const readme = read('README.md');
+const lineWith = (haystack: string, needle: string) => haystack.split('\n').find((l) => l.includes(needle)) ?? '';
 // Backticks are README markup, not substance; the manifest description is plain dialog text.
 const plain = (s: string) => s.replace(/`/g, '');
 
 // The four shipped places the owner decision names, each located by a stable anchor rather than by
-// line number, with the exact wording that promised a choice and must not come back.
+// line number, with the exact wording that promised a choice and must not come back. Every `text()`
+// returns the RAW shipped excerpt, never a parsed value: the manifest's old promise is recognisable
+// only by the closing JSON quote that used to follow it, which parsing would throw away.
 const CLAIM_SITES = [
   {
     where: 'manifest.json security_level description',
-    text: () => manifest.user_config.security_level.description as string,
+    text: () => lineWith(manifestRaw, '"description": "strict | standard | off'),
     withdrawn: 'screened for prompt injection."',
   },
   {
     where: 'README.md Desktop-Extension dialog table row',
-    text: () => readme.split('\n').find((l) => l.includes('| Injection-Screening Level |')) ?? '',
+    text: () => lineWith(readme, '| Injection-Screening Level |'),
     withdrawn: '| Injection-Screening Level | no | `standard` |',
   },
   {
     where: 'README.md plugin-configuration table row',
-    text: () => readme.split('\n').find((l) => l.startsWith('| `security_level` |')) ?? '',
+    text: () => lineWith(readme, '| `security_level` | `strict`'),
     withdrawn: 'Prompt-injection screening (default `standard`) |',
   },
   {
@@ -47,23 +50,31 @@ const CLAIM_SITES = [
   },
 ] as const;
 
+// By name, never by index: inserting a claim site must not silently re-aim a test at another one.
+const site = (where: string) => {
+  const found = CLAIM_SITES.find((s) => s.where === where);
+  if (!found) throw new Error(`no claim site named ${where}`);
+  return found;
+};
+
+const securitySection = () => site('README.md Security section').text();
+
 describe('no shipped text promises a security level the plugin does not offer (#59)', () => {
-  it.each(CLAIM_SITES.map((s) => [s.where, s] as const))('%s says the level is fixed', (where, site) => {
-    const text = plain(site.text());
+  // One assertion block per place: the correction is there AND the old promise is gone. A revert to
+  // today's wording fails the first half; an edit that APPENDS the correction without removing the
+  // promise fails the second, which a `fixed`-only check would wave through.
+  it.each(CLAIM_SITES.map((s) => [s.where, s] as const))('%s says the level is fixed, and no longer promises a choice', (where, s) => {
+    const text = plain(s.text());
     expect(text, where).not.toBe('');
     expect(text.toLowerCase(), where).toContain('fixed');
     expect(text.toLowerCase(), where).toContain('standard');
-  });
-
-  it.each(CLAIM_SITES.map((s) => [s.where, s] as const))('%s no longer carries its old promise', (where, site) => {
-    const haystack = where.startsWith('manifest') ? read('manifest.json') : readme;
-    expect(haystack, where).not.toContain(site.withdrawn);
+    expect(text, where).not.toContain(s.withdrawn);
   });
 
   // The two paths that CAN set it, named where the operator reads about it, so the withdrawal is a
   // correction and not just a deletion.
   it('the Security section names the only two paths that can still set a level', () => {
-    const section = CLAIM_SITES[3].text();
+    const section = securitySection();
     expect(section).toContain('ZENDESK_SECURITY_LEVEL');
     expect(section).toContain('started by hand');
     expect(section).toContain('remote-connector');

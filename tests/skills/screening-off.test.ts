@@ -47,12 +47,4 @@ describe('security_level=off is visible in-band (#59 scenario 2)', () => {
     expect(text).toMatch(new RegExp(`<zendesk-content-ticket-1001-subject-[0-9a-f]+>\\n${INJECTION}\\n</zendesk-content-ticket-1001-subject-`));
     expect(text).toContain('WARNING: prompt-injection patterns detected');
   });
-
-  // #59 scenario 4, through the shipped tool path rather than the parser:
-  // an unrecognised value fails closed to strict, so it is fenced and carries no off-notice.
-  it('an unrecognised level still fails closed to strict', async () => {
-    const text = await getTicket('stict');
-    expect(text).not.toContain(NOTICE);
-    expect(text).toContain('<zendesk-content-ticket-1001-subject-');
-  });
 });

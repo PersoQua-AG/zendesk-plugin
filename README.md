@@ -296,10 +296,8 @@ inventory.
   The level is **not selectable in the installed plugin**: it is fixed at
   `standard`. `ZENDESK_SECURITY_LEVEL` (`strict` | `standard` | `off`) is read
   only when the server is started by hand from a shell, or by a remote-connector
-  deployment (deprioritised since 2026-09-23). `.claude-plugin/plugin.json`
-  declares no configuration of its own since
-  [#68](https://github.com/PersoQua-AG/zendesk-plugin/issues/68), and the `.mcpb`
-  dialog is the retired path. At `security_level=off` the fence is dropped but
+  deployment (deprioritised since 2026-09-23). At `security_level=off` the fence
+  is dropped but
   forged delimiters are still stripped, patterns are still detected, and every
   tool result says screening is off.
 - **No destructive operations.** Delete/merge/redact/mark-as-spam are not
