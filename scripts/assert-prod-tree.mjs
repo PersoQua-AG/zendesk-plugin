@@ -14,7 +14,7 @@ const problems = [];
 // The dev-only markers ARE the repo's own devDependencies — read, not restated. A hand-kept copy
 // (there was one here and a second one in the test) silently stops matching the day a tool is added
 // or dropped, and this gate would then wave through exactly what it exists to catch. None of the
-// four frozen runtime dependencies depends on any of them.
+// five frozen runtime dependencies depends on any of them (parse5 pulls only entities).
 let devMarkers = [];
 try {
   devMarkers = Object.keys(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).devDependencies ?? {});

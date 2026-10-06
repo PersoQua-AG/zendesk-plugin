@@ -10,7 +10,7 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
 // The bundle's runtime dependency set is frozen: everything here is shipped inside the .mcpb, so a
 // new entry is a supply-chain decision, not a detail. The MCPB CLI must stay out of it (npx only).
-const FROZEN_DEPENDENCIES = ['@modelcontextprotocol/sdk', 'express', 'express-rate-limit', 'zod'];
+const FROZEN_DEPENDENCIES = ['@modelcontextprotocol/sdk', 'express', 'express-rate-limit', 'parse5', 'zod'];
 
 const temps: string[] = [];
 afterEach(() => {

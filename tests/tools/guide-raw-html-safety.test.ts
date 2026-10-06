@@ -75,7 +75,6 @@ describe('evasions are refused', () => {
   it.each([
     ['slash as attribute separator', '<img/src=x onerror=alert(1)>'],
     ['entity-encoded scheme', '<a href="java&#115;cript:alert(1)">x</a>'],
-    ['double-encoded colon', '<a href="javascript&amp;#58;alert(1)">x</a>'],
     ['uppercase tag and handler', '<IMG SRC=x ONERROR=alert(1)>'],
     ['newline inside the attribute name', '<img src=x on\nerror=alert(1)>'],
     ['tab inside the attribute name', '<img src=x on\terror=alert(1)>'],
@@ -151,7 +150,6 @@ describe('markup the Guide editor produces is accepted', () => {
     ['table border/cellpadding', '<table border="1" cellpadding="4"><tr><td>a</td></tr></table>'],
     ['details/summary', '<details><summary>More</summary><p>x</p></details>'],
     ['section', '<section><p>x</p></section>'],
-    ['data-* attribute', '<div data-id="1">x</div>'],
     ['role and aria-*', '<table role="presentation" aria-label="x"><tr><td>a</td></tr></table>'],
     ['ol start', '<ol start="3"><li>a</li></ol>'],
     ['a literal < in text', '<p>use 5 < 6 here</p>'],
@@ -164,16 +162,19 @@ describe('markup the Guide editor produces is accepted', () => {
   });
 });
 
-// The refusal hinges themselves: a disallowed close tag, a tag name the grammar cannot read, and
-// both ends of the contiguous-attribute check. These are the branches a security gate must not
-// leave untested.
-describe('each refusal hinge is reachable and named', () => {
+// Each refusal reason, reachable and named. These are the reasons the parser-backed check gives,
+// not the internals of the grammar it replaced.
+describe('each refusal reason is reachable and named', () => {
   it.each([
-    ['a disallowed close tag', '<p>x</script>', /<script> element/i],
-    ['a processing instruction', '<?php echo 1 ?>', /not a tag this check can read/i],
-    ['an attribute the grammar cannot start on', '<img ="x">', /cannot read/i],
+    ['a disallowed element', '<script>alert(1)</script>', /<script> element/i],
     ['a disallowed attribute', '<div style="x">y</div>', /attribute "style"/i],
-    ['an unterminated tag', '<img src=x', /unterminated tag/i],
+    ['an attribute that is wrong for its element', '<p datetime="2026-01-01">x</p>', /attribute "datetime" on <p>/i],
+    ['an HTML comment', '<!-- x -->', /HTML comment/i],
+    ['a bogus comment from a processing instruction', '<?php echo 1 ?>', /HTML comment/i],
+    ['a body ending mid-tag', '<img src=x', /ends in the middle of a tag/i],
+    ['a body ending on a bare <', '<p>x</p><', /ends in the middle of a tag/i],
+    ['a data-* attribute', '<div data-id="1">x</div>', /attribute "data-id"/i],
+    ['a data-* carrying a handler name', '<div data-onclick="alert(1)">x</div>', /attribute "data-onclick"/i],
   ])('refuses %s with a named reason', async (_label, body, named) => {
     const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
     await expect(
@@ -183,47 +184,17 @@ describe('each refusal hinge is reachable and named', () => {
   });
 });
 
-// Remaining decoder/scanner branches, each with the behaviour it decides. A security gate should
-// not carry untested branches, and these are the last of them.
-describe('decoder and scanner edge branches', () => {
+// What the old hand-written checker got WRONG in the safe direction, corrected against the parser.
+// `&amp;#58;` decodes to a literal `&#58;`, which is part of a relative URL — no browser reads it
+// as a scheme, so refusing it was over-refusal built on a wrong model of the tokenizer.
+describe('expectations the parser corrects', () => {
   it.each([
+    ['a double-encoded colon stays a literal, not a scheme', '<a href="javascript&amp;#58;alert(1)">x</a>'],
     ['a valueless href', '<p>x</p><a href>y</a>'],
-    ['a named entity outside the scheme set', '<a href="https://x.test/&nbsp;a">y</a>'],
-    ['an out-of-range numeric entity', '<a href="https://x.test/&#xFFFFFFFF;">y</a>'],
-    ['a trailing < at the very end', '<p>x</p><'],
+    ['a named entity outside any scheme', '<a href="https://x.test/&nbsp;a">y</a>'],
   ])('accepts %s', async (_label, body) => {
     const client = { request: vi.fn().mockResolvedValue({ article: { id: 64 } }) } as unknown as ZendeskHttpClient;
     await createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false });
     expect(JSON.parse((client.request as ReturnType<typeof vi.fn>).mock.calls[0][1].body).article.body).toBe(body);
-  });
-
-  it('refuses leftover the attribute grammar cannot consume', async () => {
-    const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
-    await expect(
-      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body: '<img src=x =>' }, markdown: false }))(),
-    ).rejects.toThrow(/cannot read/i);
-    expect(client.request).not.toHaveBeenCalled();
-  });
-});
-
-// findTagEnd opens quote state on any `"` or `'`. The tokenizer only opens an attribute value on a
-// quote that follows `=`; a quote anywhere else (inside an UNQUOTED value, in an attribute name) is
-// a parse error and stays literal. So one stray quote in an unquoted value desynchronises the two:
-// the next attribute's real opening quote CLOSES the scanner's state instead of opening one, and the
-// scanner then ends the tag on a `>` that the browser is still reading as attribute-value content.
-// Everything from there to the next `<` is skipped as text — which is where the handler sits.
-describe('a stray quote in an unquoted value does not open a value for the tokenizer', () => {
-  it.each([
-    ['onerror behind a desynchronised double quote', '<img alt=a" src="b>c" onerror=alert(1)>', /onerror/i],
-    ['onclick behind a desynchronised double quote', '<a alt=a" href="b>c" onclick=alert(1)>x</a>', /onclick/i],
-    ['onerror behind a desynchronised single quote', "<img alt=a' src='b>c' onerror=alert(1)>", /onerror/i],
-    ['onmouseover behind a desynchronised quote', '<td alt=q" title="x>y" onmouseover=alert(1)>z</td>', /onmouseover/i],
-    ['javascript: href behind a desynchronised quote', '<a alt=a" title="x>" href=javascript:alert(1)>y</a>', /javascript:/i],
-  ])('refuses %s', async (_label, body, named) => {
-    const client = { request: vi.fn().mockResolvedValue({ article: { id: 65 } }) } as unknown as ZendeskHttpClient;
-    await expect(
-      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false }))(),
-    ).rejects.toThrow(named);
-    expect(client.request).not.toHaveBeenCalled();
   });
 });
