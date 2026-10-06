@@ -106,8 +106,7 @@ const DECLARATION = /\.d\.(ts|mts|cts)$/;
 
 // SYMLINKED DIRECTORIES ARE FOLLOWED, and a cycle is survived rather than broken. The previous
 // claim here — "does not descend into symlinked directories, so a symlink cycle cannot turn this
-// into an ELOOP stack trace" — is false, and no runtime is "pinned": package.json allows node
-// >=20 and CI runs 20 (.github/workflows/ci.yml:20). Re-measured on node 20.20.2 and 26.5.0 alike,
+// into an ELOOP stack trace" — is false. Re-measured on node 20.20.2 and 26.5.0 alike,
 // on a tree holding one nested-executor file plus `src/sub/loop -> src`:
 //   node -e 'console.log(require("node:fs").readdirSync(process.argv[1],{recursive:true}).length)' <tree>
 // → 64 entries, including sub/loop, sub/loop/sub, sub/loop/sub/loop. It descends. What saves it is
@@ -116,17 +115,23 @@ const DECLARATION = /\.d\.(ts|mts|cts)$/;
 // counts, not the findings: the same file is collected once per level, so that tree reports
 // 32 executors, 16 inspected for the 2 executors, 1 inspected it holds, and the wedge in it is
 // reported 16 times. Nothing is hidden and the exit code is right; the inventory just repeats.
+
+// A message, not a stack trace, and ONE sentence for every way a named root refuses to be read:
+// a missing directory (ENOENT), a FILE named as the root (ENOTDIR — measured on 3ee1d43: `node
+// scripts/assert-executor-safety.mjs src/server.ts` printed a node:fs source excerpt and a stack
+// trace), and a listable-but-unstattable root (EACCES), which reaches the lstat on the mark far
+// below rather than this walk. The last fallback is for a throw that is neither: `??` on `.code`
+// alone printed `(undefined)`. The sibling guard is held to the same bar.
+const unreadable = (err) => {
+  console.error(`Nothing to inspect: ${target} (${err?.code ?? err?.message ?? err}).`);
+  process.exit(1);
+};
+
 let entries;
 try {
   entries = readdirSync(target, { recursive: true });
 } catch (err) {
-  // A message, not a stack trace, and one sentence for both ways of naming a root that cannot be
-  // walked: a missing directory (ENOENT) and a FILE named as the root (ENOTDIR — measured on
-  // 3ee1d43: `node scripts/assert-executor-safety.mjs src/server.ts` printed a node:fs source
-  // excerpt and a stack trace — 8 frames on node 20, 10 on 26, which is why no count is pinned
-  // here). The sibling guard is held to the same bar.
-  console.error(`Nothing to inspect: ${target} (${err.code ?? err.message}).`);
-  process.exit(1);
+  unreadable(err);
 }
 const files = entries
   .filter((f) => SOURCE.test(f) && !DECLARATION.test(f))
@@ -330,7 +335,16 @@ const show = relative(root, target) || target;
 // following it. A DANGLING symlink was already refused and still is: lstat succeeds, isFile() is
 // false. Costs nothing extra: `files` is built above either way.
 const ENTRY_PATH = join(target, ENTRY);
-const marked = files.includes(ENTRY_PATH) && lstatSync(ENTRY_PATH).isFile();
+// lstat is the one read left outside the walk, so it is the one read that can still die on a root
+// the walk survived: `chmod 444` on a directory lists its names and refuses to stat its entries.
+// ts.createProgram above needs no such guard — losing the cwd, the case it was raised for, kills
+// node in bootstrap before this script's first line runs, so a catch there would be unreachable.
+let marked = false;
+try {
+  marked = files.includes(ENTRY_PATH) && lstatSync(ENTRY_PATH).isFile();
+} catch (err) {
+  unreadable(err);
+}
 
 // Printed in EVERY outcome, pass or fail: a gate that only speaks when it is happy leaves a red
 // build with no record of what was actually looked at. THE STREAM IS KEYED ON THE MARK, NOT ON THE

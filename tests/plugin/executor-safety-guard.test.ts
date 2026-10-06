@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -413,7 +413,7 @@ export const f = (server: { listen: (p: number) => void }) =>
       const run = spawnSync('node', [GUARD, join(root, 'no-such-directory')], { encoding: 'utf8' });
       expect(run.status).toBe(1);
       expect(run.stderr).toContain('Nothing to inspect');
-      expect(run.stderr).not.toContain('at read (node:fs');
+      expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
     });
   });
 
@@ -486,7 +486,25 @@ export const f = (server: { listen: (p: number) => void }) =>
       const run = spawnSync('node', [GUARD, 'src/server.ts'], { encoding: 'utf8' });
       expect(run.status).toBe(1);
       expect(run.stderr).toContain('Nothing to inspect');
-      expect(run.stderr).not.toContain('at read (node:fs');
+      expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
+    });
+
+    // The third way a root refuses to be read, and the one the walk survives: `chmod 444` on a
+    // directory lists its names and refuses to stat its entries, so the only read that dies is the
+    // lstat on the mark, long after the try/catch around the walk. It was unguarded until #77.
+    it('reports an unreadable scan root as a message, not an EACCES stack trace', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'executor-guard-'));
+      temps.push(dir);
+      writeFileSync(join(dir, 'server.ts'), MARK);
+      chmodSync(dir, 0o444);
+      try {
+        const run = spawnSync('node', [GUARD, dir], { encoding: 'utf8' });
+        expect(run.status).toBe(1);
+        expect(run.stderr).toContain('Nothing to inspect');
+        expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
+      } finally {
+        chmodSync(dir, 0o755); // or afterEach cannot remove it
+      }
     });
 
     // The empty string passed the arity gate and resolved to the repo root, so the guard walked
