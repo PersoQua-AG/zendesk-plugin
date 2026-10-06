@@ -1,6 +1,6 @@
 // src/tools/ticket-comments.ts
 import { z } from 'zod';
-import { makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
+import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import { listCbp } from './cbp-list.js';
 import { buildComment } from './tickets.js';
 export async function addComment(client, cache, 
@@ -19,7 +19,7 @@ params, securityLevel = 'standard') {
     // subject). Screen at ingest so the cached payload is safe at rest.
     const { value: safe, flagged } = screenRecordDeep(raw, (key) => `add-comment-${params.ticketId}-${key}`, makeScreener(securityLevel));
     const entry = cache.save('zendesk_add_comment', safe);
-    return { summary: `Added ${isPublic ? 'public' : 'internal'} comment to ticket #${params.ticketId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+    return { summary: `Added ${isPublic ? 'public' : 'internal'} comment to ticket #${params.ticketId}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }
 const CommentSchema = z.object({
     id: z.number(),

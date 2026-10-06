@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
+import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 const MeResponse = z.object({
     user: z.object({
         id: z.number(),
@@ -17,7 +17,7 @@ export async function getMe(client, cache, securityLevel = 'standard') {
     const { value, flagged } = screenRecordDeep(parsed.data, (key) => `me-${key}`, makeScreener(securityLevel));
     const safe = value;
     const entry = cache.save('zendesk_get_me', safe);
-    const warning = flagged ? SCREEN_WARNING : '';
+    const warning = screenNote(flagged, securityLevel);
     // name/email are free text — render from the FENCED `safe.user`, never raw (parity with
     // getUser). id is numeric and role a server-controlled enum, so both read from raw.
     const fenced = safe.user;

@@ -4,7 +4,7 @@
 // safeUpdateWithConflict optimistic-concurrency mutation. Macro bodies (actions) are screened on
 // every path — list, preview, and apply — via the field-agnostic deep screen.
 import { z } from 'zod';
-import { makeScreener, screenRecordDeep, makeDescribe, SCREEN_WARNING } from '../screening.js';
+import { makeScreener, screenRecordDeep, makeDescribe, screenNote } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from '../cbp-list.js';
 import { safeUpdateWithConflict } from '../write-helpers.js';
 // A macro's actions carry the free-text body it would set (comment/html_body). Include them in
@@ -48,7 +48,7 @@ export async function previewMacro(client, cache, params, securityLevel = 'stand
     const { value, flagged } = screenRecordDeep(parsed.data, (key) => `macro-${params.macroId}-${key}`, makeScreener(securityLevel));
     const entry = cache.save('zendesk_preview_macro', value);
     return {
-        summary: `Preview of macro #${params.macroId} on a blank ticket — no changes persisted (read-only).${flagged ? SCREEN_WARNING : ''}`,
+        summary: `Preview of macro #${params.macroId} on a blank ticket — no changes persisted (read-only).${screenNote(flagged, securityLevel)}`,
         cacheHandle: entry.handle,
         flagged,
     };
@@ -69,7 +69,7 @@ export async function applyMacroToTicket(client, cache, params, securityLevel = 
         return {
             status: 'preview',
             summary: `PREVIEW ONLY — macro #${params.macroId} would change ticket #${params.ticketId} (see cached result). Nothing was persisted. ` +
-                `Re-invoke with confirm:true and the ticket's updatedStamp (from zendesk_get_ticket) to apply, or force:true to overwrite without a concurrency check.${flagged ? SCREEN_WARNING : ''}`,
+                `Re-invoke with confirm:true and the ticket's updatedStamp (from zendesk_get_ticket) to apply, or force:true to overwrite without a concurrency check.${screenNote(flagged, securityLevel)}`,
             cacheHandle: entry.handle,
         };
     }

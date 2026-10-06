@@ -32,10 +32,14 @@ describe('guide-authoring: foreign article text reaches the model screened (S0 G
     expect(text).toContain('WARNING: prompt-injection patterns detected');
   });
 
-  // Documented, not hidden: security_level=off is the operator's opt-out (src/security/screen.ts:39).
-  it('GA-3 documented: at off the title passes through unfenced', async () => {
+  // Documented, not hidden: security_level=off is the operator's opt-out from the FENCE alone
+  // (src/security/screen.ts). The title arrives unfenced, but the pattern screen still runs, so
+  // the model is told both that a pattern matched and that screening is off for this session.
+  it('GA-3 documented: at off the title is unfenced, yet still flagged and announced', async () => {
     const text = await getArticle('off');
     expect(text).toContain(`Article #7 ${INJECTION} [en-us]`);
     expect(text).not.toContain('zendesk-content-');
+    expect(text).toContain('NOTICE: injection screening is off for this session');
+    expect(text).toContain('WARNING: prompt-injection patterns detected');
   });
 });

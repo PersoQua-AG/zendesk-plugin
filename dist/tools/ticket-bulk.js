@@ -1,5 +1,5 @@
 import { pollJobToCompletion } from '../client/job-poller.js';
-import { makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
+import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 async function runJob(client, cache, toolName, path, payload, method, poll, securityLevel = 'standard') {
     const created = await client.request(path, {
         method,
@@ -17,7 +17,7 @@ async function runJob(client, cache, toolName, path, payload, method, poll, secu
     const screened = value;
     const entry = cache.save(toolName, screened);
     const failures = (screened.results ?? []).filter((r) => !r.success);
-    const summary = `Job ${final.status}: ${(final.results ?? []).length} record(s), ${failures.length} failed.${flagged ? SCREEN_WARNING : ''}`;
+    const summary = `Job ${final.status}: ${(final.results ?? []).length} record(s), ${failures.length} failed.${screenNote(flagged, securityLevel)}`;
     return { summary, cacheHandle: entry.handle, jobStatus: final.status, failures };
 }
 export async function createTicketsBulk(client, cache, params, poll = {}, securityLevel = 'standard') {

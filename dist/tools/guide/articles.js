@@ -6,7 +6,7 @@
 // record is screened at ingest by construction (title/body fenced; the rest passes through the
 // field-agnostic deep screen).
 import { z } from 'zod';
-import { makeScreener, screenRecordDeep, summariseScreened, makeDescribe, SCREEN_WARNING } from '../screening.js';
+import { makeScreener, screenRecordDeep, summariseScreened, makeDescribe, screenNote } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP, MAX_PAGE_SIZE } from '../cbp-list.js';
 import { markdownToHtml } from '../../util/markdown.js';
 import { stripUndefined } from '../../util/object.js';
@@ -84,7 +84,7 @@ export async function getArticle(client, cache, params, securityLevel = 'standar
     const safe = value;
     const entry = cache.save('zendesk_get_article', safe);
     return {
-        summary: `Article #${safe.article.id} ${safe.article.title ?? '(untitled)'} [${safe.article.locale ?? '?'}]${flagged ? SCREEN_WARNING : ''}`,
+        summary: `Article #${safe.article.id} ${safe.article.title ?? '(untitled)'} [${safe.article.locale ?? '?'}]${screenNote(flagged, securityLevel)}`,
         cacheHandle: entry.handle,
         flagged,
     };

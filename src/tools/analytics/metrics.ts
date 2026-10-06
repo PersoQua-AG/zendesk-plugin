@@ -12,7 +12,7 @@ import {
   screenRecordDeep,
   makeDescribe,
   summariseScreened,
-  SCREEN_WARNING,
+  screenNote,
   type RecordScreen,
   type Screener,
   type ScreenedSummary,
@@ -57,7 +57,7 @@ export async function ticketMetrics(
     const safe = value as { ticket_metric: TicketMetric };
     const entry = cache.save('zendesk_ticket_metrics', safe);
     return {
-      summary: `Ticket metric #${safe.ticket_metric.id} for ticket ${params.ticketId} — reply(cal ${cal(safe.ticket_metric.reply_time_in_minutes)}m), resolution(cal ${cal(safe.ticket_metric.full_resolution_time_in_minutes)}m)${flagged ? SCREEN_WARNING : ''}`,
+      summary: `Ticket metric #${safe.ticket_metric.id} for ticket ${params.ticketId} — reply(cal ${cal(safe.ticket_metric.reply_time_in_minutes)}m), resolution(cal ${cal(safe.ticket_metric.full_resolution_time_in_minutes)}m)${screenNote(flagged, securityLevel)}`,
       cacheHandle: entry.handle,
       flagged,
     };

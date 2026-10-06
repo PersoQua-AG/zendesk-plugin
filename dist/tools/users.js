@@ -1,6 +1,6 @@
 // src/tools/users.ts
 import { z } from 'zod';
-import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING } from './screening.js';
+import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, screenNote } from './screening.js';
 import { SEARCH_HARD_CAP } from './search.js';
 import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
 import { collectOffset } from '../client/paginator.js';
@@ -61,7 +61,7 @@ export async function getUser(client, cache, params, securityLevel = 'standard')
     const { value, flagged } = screenRecordDeep(parsed.data, (key) => `user-${params.userId}-${key}`, makeScreener(securityLevel));
     const safe = value;
     const entry = cache.save('zendesk_get_user', safe);
-    const warning = flagged ? SCREEN_WARNING : '';
+    const warning = screenNote(flagged, securityLevel);
     // name/email are attacker-controllable free text — render them from the FENCED `safe.user`,
     // never raw. role is a server-controlled enum, so it may read raw. id is numeric (control).
     const u = safe.user;
@@ -90,7 +90,7 @@ export async function upsertUser(client, cache, params, securityLevel = 'standar
     // Screen at ingest so the cached payload is safe at rest, not merely at replay.
     const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `upsert-user-${parsed.data.user.id}-${key}`, makeScreener(securityLevel));
     const entry = cache.save('zendesk_upsert_user', safe);
-    return { summary: `Upserted user #${parsed.data.user.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+    return { summary: `Upserted user #${parsed.data.user.id}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }
 export async function updateUser(client, cache, params, securityLevel = 'standard') {
     // Users have no updated_stamp safe_update path (unlike tickets); confirmation of the state
