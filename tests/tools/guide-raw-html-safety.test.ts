@@ -169,6 +169,11 @@ describe('each refusal reason is reachable and named', () => {
     ['an attribute that is wrong for its element', '<p datetime="2026-01-01">x</p>', /attribute "datetime" on <p>/i],
     ['an HTML comment', '<!-- x -->', /HTML comment/i],
     ['a bogus comment from a processing instruction', '<?php echo 1 ?>', /HTML comment/i],
+    // onDoctype is hand-written policy on top of parse5, exactly like onComment and the eof-* rule.
+    // Trimming the scaffold block took the only body that reached it, leaving one of the three
+    // tokenizer-callback rules unguarded in a file whose whole history is hand-written rules drifting.
+    ['a doctype declaration', '<!DOCTYPE html><p>x</p>', /doctype declaration/i],
+    ['a doctype in the middle of the body', '<p>x</p><!doctype HTML>', /doctype declaration/i],
     ['a body ending mid-tag', '<img src=x', /ends in the middle of a tag/i],
     ['a body ending on a bare <', '<p>x</p><', /ends in the middle of a tag/i],
     ['a data-* attribute', '<div data-id="1">x</div>', /attribute "data-id"/i],
