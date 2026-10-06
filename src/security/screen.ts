@@ -36,10 +36,6 @@ export function screenContent(
   sourceLabel: string,
   securityLevel: SecurityLevel = 'standard',
 ): ScreenResult {
-  if (securityLevel === 'off') {
-    return { flagged: false, matchedPatterns: [], wrapped: text };
-  }
-
   const attemptedBreakout = text.match(DELIMITER_PATTERN) !== null;
   // Strip forged delimiters so a ticket body cannot close our envelope early.
   const neutralized = text.replace(DELIMITER_PATTERN, DELIMITER_REDACTION);
@@ -48,6 +44,12 @@ export function screenContent(
   const matched = patterns.filter((pattern) => pattern.test(neutralized)).map((pattern) => pattern.source);
   if (securityLevel === 'strict' && attemptedBreakout) {
     matched.push('delimiter-breakout-attempt');
+  }
+
+  // `off` opts out of the FENCE alone, not of the boundary: forged delimiters are still stripped
+  // and patterns still detected, so the caller can still warn (owner decision on #59, 2026-10-06).
+  if (securityLevel === 'off') {
+    return { flagged: matched.length > 0, matchedPatterns: matched, wrapped: neutralized };
   }
 
   // Nonce-suffixed delimiter the untrusted text cannot predict or forge.

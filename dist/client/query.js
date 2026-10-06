@@ -54,9 +54,9 @@ export function runQuery(data, query) {
 // re-screening a genuinely-fenced string is safe (old delimiters redacted, re-fenced).
 // Numbers/booleans/ids pass through untouched so structured extraction (ids_only, numeric
 // dot-paths) stays usable.
+// At `off` there is no separate short-circuit here: screenContent itself drops only the fence and
+// still neutralizes + detects, so the replay boundary opts out of exactly as much as ingest does.
 export function screenReplay(value, level, depth = 0) {
-    if (level === 'off')
-        return { value, flagged: false };
     if (depth > MAX_REPLAY_DEPTH)
         throw new Error('screenReplay: input nesting exceeds safe depth.');
     if (typeof value === 'string') {

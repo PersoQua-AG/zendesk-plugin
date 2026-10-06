@@ -3,7 +3,7 @@
 // Every inbound record is screened at ingest by construction (titles fenced; the rest passes
 // through the field-agnostic deep screen).
 import { z } from 'zod';
-import { makeScreener, screenRecordDeep, makeDescribe, SCREEN_WARNING } from '../screening.js';
+import { makeScreener, screenRecordDeep, makeDescribe, screenNote } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from '../cbp-list.js';
 const ViewSchema = z.object({
     id: z.number(),
@@ -43,7 +43,7 @@ export async function getView(client, cache, params, securityLevel = 'standard')
     const safe = value;
     const entry = cache.save('zendesk_get_view', safe);
     return {
-        summary: `View #${safe.view.id} ${safe.view.title ?? '(untitled)'}${flagged ? SCREEN_WARNING : ''}`,
+        summary: `View #${safe.view.id} ${safe.view.title ?? '(untitled)'}${screenNote(flagged, securityLevel)}`,
         cacheHandle: entry.handle,
         flagged,
     };

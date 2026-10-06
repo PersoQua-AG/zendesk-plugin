@@ -2,7 +2,7 @@
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
+import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 
 export async function addTicketTags(
   client: ZendeskHttpClient,
@@ -23,5 +23,5 @@ export async function addTicketTags(
   const entry = cache.save('zendesk_add_ticket_tags', safe);
   const verb = params.replace ? 'Replaced' : 'Appended';
   const tags = (safe as { tags: string[] }).tags;
-  return { summary: `${verb} tags on ticket #${params.ticketId}: ${tags.join(', ')}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+  return { summary: `${verb} tags on ticket #${params.ticketId}: ${tags.join(', ')}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }

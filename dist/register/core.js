@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { okWithHandle, toText } from '../tools/result.js';
 import { getMe } from '../tools/me.js';
 import { runQuery, screenReplay } from '../client/query.js';
-import { SCREEN_WARNING } from '../tools/screening.js';
+import { screenNote } from '../tools/screening.js';
 export function registerCoreTools(server, ctx) {
     const { httpClient, cache, securityLevel } = ctx;
     server.registerTool('zendesk_get_me', { description: 'Return the authenticated Zendesk user and role — use to verify auth is working.' }, async () => {
@@ -15,6 +15,6 @@ export function registerCoreTools(server, ctx) {
     }, async ({ cacheHandle, query }) => {
         const { value, flagged } = screenReplay(runQuery(cache.load(cacheHandle), query), securityLevel);
         const body = JSON.stringify(value, null, 2);
-        return toText(flagged ? `${body}${SCREEN_WARNING}` : body);
+        return toText(`${body}${screenNote(flagged, securityLevel)}`);
     });
 }

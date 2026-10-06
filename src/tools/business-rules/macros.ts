@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { ZendeskHttpClient } from '../../client/http-client.js';
 import type { ResponseCache } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
-import { makeScreener, screenRecordDeep, makeDescribe, SCREEN_WARNING } from '../screening.js';
+import { makeScreener, screenRecordDeep, makeDescribe, screenNote } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from '../cbp-list.js';
 import { safeUpdateWithConflict, type MutationResult } from '../write-helpers.js';
 import type { ReadResult } from '../result.js';
@@ -68,7 +68,7 @@ export async function previewMacro(
   const { value, flagged } = screenRecordDeep(parsed.data, (key) => `macro-${params.macroId}-${key}`, makeScreener(securityLevel));
   const entry = cache.save('zendesk_preview_macro', value);
   return {
-    summary: `Preview of macro #${params.macroId} on a blank ticket — no changes persisted (read-only).${flagged ? SCREEN_WARNING : ''}`,
+    summary: `Preview of macro #${params.macroId} on a blank ticket — no changes persisted (read-only).${screenNote(flagged, securityLevel)}`,
     cacheHandle: entry.handle,
     flagged,
   };
@@ -104,7 +104,7 @@ export async function applyMacroToTicket(
       status: 'preview',
       summary:
         `PREVIEW ONLY — macro #${params.macroId} would change ticket #${params.ticketId} (see cached result). Nothing was persisted. ` +
-        `Re-invoke with confirm:true and the ticket's updatedStamp (from zendesk_get_ticket) to apply, or force:true to overwrite without a concurrency check.${flagged ? SCREEN_WARNING : ''}`,
+        `Re-invoke with confirm:true and the ticket's updatedStamp (from zendesk_get_ticket) to apply, or force:true to overwrite without a concurrency check.${screenNote(flagged, securityLevel)}`,
       cacheHandle: entry.handle,
     };
   }

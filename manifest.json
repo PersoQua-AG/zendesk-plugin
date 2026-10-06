@@ -73,7 +73,7 @@
     "security_level": {
       "type": "string",
       "title": "Injection-Screening Level",
-      "description": "strict | standard | off — how aggressively inbound Zendesk content is screened for prompt injection.",
+      "description": "strict | standard | off — how aggressively inbound Zendesk content is screened for prompt injection. This dialog is the retired MCPB path: the installed plugin offers no such field and is fixed at standard. Only a server started by hand (ZENDESK_SECURITY_LEVEL) or a remote-connector deployment can change the level.",
       "default": "standard"
     },
     "markdown_conversion": {

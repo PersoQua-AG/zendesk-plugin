@@ -41,13 +41,16 @@ describe('registered zendesk_query handler wiring', () => {
     expect(text).toContain('WARNING: prompt-injection patterns detected'); // flagged → warning appended
   });
 
-  it('honors securityLevel=off end-to-end: passthrough, no fence, no warning', async () => {
+  // `off` opts out of the fence and nothing else (owner decision on #59, 2026-10-06): the replay
+  // still detects, so the result carries the warning, and it always carries the off-notice.
+  it('honors securityLevel=off end-to-end: unfenced, but screened, warned and announced', async () => {
     const handler = captureQueryHandler({ ticket: { id: 1, subject: PAYLOAD } }, 'off');
     const { content } = await handler({ cacheHandle: 'h1', query: 'ticket.subject' });
     const text = content[0].text;
-    expect(text).toContain(PAYLOAD); // off is a deliberate passthrough
+    expect(text).toContain(PAYLOAD); // the value itself is handed over unfenced
     expect(text).not.toContain('zendesk-content-query-replay-');
-    expect(text).not.toContain('WARNING:');
+    expect(text).toContain('NOTICE: injection screening is off for this session');
+    expect(text).toContain('WARNING: prompt-injection patterns detected');
   });
 
   it('passes a benign preset extraction (ids_only) through untouched with no warning', async () => {

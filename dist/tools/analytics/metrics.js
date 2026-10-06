@@ -4,7 +4,7 @@
 // text (numeric timings + ids) but still route through the field-agnostic deep screen; rating
 // comments ARE attacker-authored free text and are fenced explicitly (describeRating below).
 import { z } from 'zod';
-import { makeScreener, screenRecordDeep, makeDescribe, summariseScreened, SCREEN_WARNING, } from '../screening.js';
+import { makeScreener, screenRecordDeep, makeDescribe, summariseScreened, screenNote, } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP, MAX_PAGE_SIZE } from '../cbp-list.js';
 import { cbpPageSchema, collectCbp } from '../../client/paginator.js';
 const MinutesPairSchema = z.object({ calendar: z.number().nullish(), business: z.number().nullish() }).nullish();
@@ -30,7 +30,7 @@ export async function ticketMetrics(client, cache, params = {}, securityLevel = 
         const safe = value;
         const entry = cache.save('zendesk_ticket_metrics', safe);
         return {
-            summary: `Ticket metric #${safe.ticket_metric.id} for ticket ${params.ticketId} — reply(cal ${cal(safe.ticket_metric.reply_time_in_minutes)}m), resolution(cal ${cal(safe.ticket_metric.full_resolution_time_in_minutes)}m)${flagged ? SCREEN_WARNING : ''}`,
+            summary: `Ticket metric #${safe.ticket_metric.id} for ticket ${params.ticketId} — reply(cal ${cal(safe.ticket_metric.reply_time_in_minutes)}m), resolution(cal ${cal(safe.ticket_metric.full_resolution_time_in_minutes)}m)${screenNote(flagged, securityLevel)}`,
             cacheHandle: entry.handle,
             flagged,
         };

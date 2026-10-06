@@ -3,7 +3,7 @@ import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import { pollJobToCompletion, type JobStatus, type JobPollerOptions } from '../client/job-poller.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
+import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import type { TicketUpdateFields } from './tickets.js';
 
 type PollOverrides = Partial<Pick<JobPollerOptions, 'sleep' | 'intervalMs' | 'maxAttempts'>>;
@@ -41,7 +41,7 @@ async function runJob(
   const screened = value as JobStatus;
   const entry = cache.save(toolName, screened);
   const failures = (screened.results ?? []).filter((r) => !r.success);
-  const summary = `Job ${final.status}: ${(final.results ?? []).length} record(s), ${failures.length} failed.${flagged ? SCREEN_WARNING : ''}`;
+  const summary = `Job ${final.status}: ${(final.results ?? []).length} record(s), ${failures.length} failed.${screenNote(flagged, securityLevel)}`;
   return { summary, cacheHandle: entry.handle, jobStatus: final.status, failures };
 }
 
