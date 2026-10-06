@@ -399,9 +399,9 @@ export const f = () =>
       expect(
         runGuard(`
 const P = Promise;
-export const f = (server: { listen: (p: number) => void }) =>
+export const f = (server: { listen: (p: number) => void }, port: number) =>
   new P((bound: (v: void) => void) => {
-    const inner = new P((resolve: (v: void) => void) => { server.listen(1); resolve(); });
+    const inner = new P((resolve: (v: void) => void) => { server.listen(port); resolve(); });
     (inner as Promise<void>).catch(() => {});
     bound();
   });
