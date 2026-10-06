@@ -22,7 +22,7 @@ Ask the user for the German text; if they only supply English, offer to translat
 
 ## Writing bodies
 
-- Bodies convert **Markdown → HTML** by default. For rich content that Markdown can't express cleanly (tables, images, nested lists), pass `markdown:false` and provide raw HTML.
+- Bodies convert **Markdown → HTML** by default. For rich content that Markdown can't express cleanly (tables, images, nested lists), pass `markdown:false` and provide raw HTML. Raw HTML is checked before it is sent: static rich markup goes through untouched, but scripts, inline event handlers (`onclick=`, `onerror=`), embedded frames and non-http(s) URLs are refused and the error names the construct.
 - Create articles as `draft:true` first when the user wants to review before publishing; flip to published with `zendesk_update_article` (`draft:false`) once approved.
 - Update existing content: `zendesk_update_article` (`articleId`, any of `title`/`body`/`draft`); update a translation with `zendesk_update_article_translation` (`articleId`, `locale`, fields).
 

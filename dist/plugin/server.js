@@ -24380,7 +24380,7 @@ function registerGuideTools(server, ctx) {
   server.registerTool(
     "zendesk_create_article",
     {
-      description: "Create a Help Center article in a section (Guide manager/admin only). Requires title + body; locale defaults to en-us (en-us + de are first-class, any valid locale accepted). Body is converted Markdown\u2192HTML unless markdown:false (pass raw HTML for rich content \u2014 tables/images/nested lists need markdown:false). Confirm the change in-conversation before calling.",
+      description: "Create a Help Center article in a section (Guide manager/admin only). Requires title + body; locale defaults to en-us (en-us + de are first-class, any valid locale accepted). Body is converted Markdown\u2192HTML unless markdown:false (pass raw HTML for rich content \u2014 tables/images/nested lists need markdown:false; raw HTML is refused if it carries scripts, inline event handlers or non-http(s) URLs). Confirm the change in-conversation before calling.",
       inputSchema: { sectionId: idSchema2, title: external_exports.string().min(1), body: external_exports.string().min(1), locale: localeSchema.optional(), draft: external_exports.boolean().optional(), markdown: external_exports.boolean().optional() }
     },
     async ({ sectionId, markdown, ...fields }) => okWithHandle(await createArticle(httpClient, cache, { sectionId, fields, markdown: markdown ?? markdownDefault }, securityLevel))
