@@ -220,12 +220,12 @@ describe('a stray quote in an unquoted value does not open a value for the token
   });
 });
 
-// parseFragment parses in the FRAGMENT case, where "in body" ignores an <html>/<body> start tag
-// outright: no element, no attributes, parseTags returns []. A Help Center page is a DOCUMENT parse,
-// and there the same token MERGES its attributes onto the page's real <html>/<body> element. That
-// divergence is the premise raw-html.ts:84-87 already relies on for the eof-* rule — the body is
-// inserted into a page, not rendered alone — applied to the end of the string but not here.
-describe('tags the fragment parser drops but a page merges onto its own elements', () => {
+// These four are the guard against the check ever hanging off a tree mode again. A fragment parse
+// drops an <html>/<body> start tag outright — no element, no attributes, nothing to judge — while a
+// page MERGES the same token's attributes onto its own <html>/<body>, where an onclick covers
+// everything. parseTags reads the TOKEN STREAM, so it reports the <body> token either way; that is
+// what these assert, and it is why there is no second, tree-based view to be re-added.
+describe('start tags a tree mode would drop or merge are still judged', () => {
   it.each([
     ['body onclick', '<body onclick=alert(1)>', /onclick/i],
     ['body onclick after real content', '<p>Harmless looking article.</p><body onclick="alert(1)">', /onclick/i],

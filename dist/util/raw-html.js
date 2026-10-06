@@ -28,7 +28,7 @@ const ALLOWED_ELEMENTS = new Set([
 const GLOBAL_ATTRS = new Set(['id', 'class', 'title', 'lang', 'dir', 'role']);
 // Per-element attributes. Scoping these to the element rather than keeping one flat list is what
 // makes the allowlist mean what it says: flat, it let `<p datetime>` and `<img start>` through and
-// promised a precision it did not have. With the parse tree in hand the element name is free.
+// promised a precision it did not have. The element name comes free with each start tag token.
 const ELEMENT_ATTRS = {
     a: ['href', 'target', 'rel'],
     img: ['src', 'alt', 'width', 'height', 'loading'],
@@ -76,6 +76,13 @@ function isSafeUrl(raw) {
 // attributes; tbody is allowed and carries none when implied. The tree builder never invents an
 // attribute — the one spec operation that did (<isindex>) was removed in 2016. Two independent
 // runs (66 and 108 bodies) found zero verdict divergences.
+//
+// WHEN THIS STOPS HOLDING, and a tree view has to be reconsidered: as soon as `html`, `head` or
+// `body` goes on ALLOWED_ELEMENTS (the "not allowed, so caught here" half falls away), or as soon as
+// a foreign-content element (`svg`, `math`) does. Foreign content is where the tree builder DOES
+// rewrite attributes — `xlink:href`→`href`, `xml:lang`→`lang` — and it rewrites systematically from
+// a name this list rejects to one it accepts, so a tree view would then be the PERMISSIVE one rather
+// than a subset of this.
 //
 // KNOWN DEVIATION, fail-closed: a standalone Tokenizer never enters RAWTEXT/RCDATA, which only a
 // tree builder switches it into. So inside `title`, `style`, `textarea`, `script`, `plaintext` and
