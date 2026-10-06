@@ -3637,21 +3637,21 @@ var require_fast_uri = __commonJS({
         normalizeString(uri, options);
       } else if (typeof uri === "object") {
         uri = /** @type {T} */
-        parse3(serialize2(uri, options), options);
+        parse4(serialize2(uri, options), options);
       }
       return uri;
     }
     function resolve2(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
-      const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
+      const resolved = resolveComponent(parse4(baseURI, schemelessOptions), parse4(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
       return serialize2(resolved, schemelessOptions);
     }
     function resolveComponent(base, relative, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base = parse3(serialize2(base, options), options);
-        relative = parse3(serialize2(relative, options), options);
+        base = parse4(serialize2(base, options), options);
+        relative = parse4(serialize2(relative, options), options);
       }
       options = options || {};
       if (!options.tolerant && relative.scheme) {
@@ -3880,7 +3880,7 @@ var require_fast_uri = __commonJS({
       }
       return { parsed, malformedAuthorityOrPort };
     }
-    function parse3(uri, opts) {
+    function parse4(uri, opts) {
       return parseWithStatus(uri, opts).parsed;
     }
     function normalizeString(uri, opts) {
@@ -3909,7 +3909,7 @@ var require_fast_uri = __commonJS({
       resolveComponent,
       equal,
       serialize: serialize2,
-      parse: parse3
+      parse: parse4
     };
     module.exports = fastUri;
     module.exports.default = fastUri;
@@ -32117,15 +32117,8 @@ var VOID_ELEMENTS = /* @__PURE__ */ new Set([
 ]);
 
 // node_modules/parse5/dist/index.js
-function parseFragment(fragmentContext, html, options) {
-  if (typeof fragmentContext === "string") {
-    options = html;
-    html = fragmentContext;
-    fragmentContext = null;
-  }
-  const parser = Parser.getFragmentParser(fragmentContext, options);
-  parser.tokenizer.write(html, true);
-  return parser.getFragment();
+function parse3(html, options) {
+  return Parser.parse(html, options);
 }
 
 // src/util/raw-html.ts
@@ -32216,26 +32209,48 @@ function isSafeUrl(raw) {
 function parseTags(html) {
   const seen = [];
   const atEof = [];
+  const noop = () => void 0;
+  const tokenizer = new Tokenizer(
+    { sourceCodeLocationInfo: false },
+    {
+      onStartTag: (t) => {
+        seen.push({ tag: t.tagName.toLowerCase(), attrs: t.attrs.map((a) => [a.name.toLowerCase(), a.value]) });
+      },
+      onComment: () => refuse("an HTML comment"),
+      onDoctype: () => refuse("a doctype declaration"),
+      onEndTag: noop,
+      onEof: noop,
+      onCharacter: noop,
+      onNullCharacter: noop,
+      onWhitespaceCharacter: noop,
+      onParseError: (err) => {
+        if (err.code.startsWith("eof-")) atEof.push(err.code);
+      }
+    }
+  );
+  tokenizer.write(html, true);
+  if (atEof.length > 0) refuse(`the body ends in the middle of a tag (${atEof[0]}), which the surrounding page would finish`);
+  return seen;
+}
+var SCAFFOLD = /* @__PURE__ */ new Set(["html", "head", "body"]);
+function documentElements(html) {
+  const seen = [];
   const walk = (node) => {
     for (const raw of node.childNodes ?? []) {
       const child = raw;
       if (child.tagName !== void 0) {
-        seen.push({ tag: child.tagName.toLowerCase(), attrs: (child.attrs ?? []).map((a) => [a.name.toLowerCase(), a.value]) });
-      } else if (child.nodeName === "#comment") {
-        refuse("an HTML comment");
-      } else if (child.nodeName === "#documentType") {
-        refuse("a doctype declaration");
+        const tag = child.tagName.toLowerCase();
+        const attrs = (child.attrs ?? []).map((a) => [a.name.toLowerCase(), a.value]);
+        if (SCAFFOLD.has(tag)) {
+          for (const [attr] of attrs) refuse(`the attribute "${attr}", which a page merges onto its own <${tag}> element`);
+        } else {
+          seen.push({ tag, attrs });
+        }
       }
       walk(child);
     }
   };
-  const fragment = parseFragment(html, {
-    onParseError: (err) => {
-      if (err.code.startsWith("eof-")) atEof.push(err.code);
-    }
-  });
-  if (atEof.length > 0) refuse(`the body ends in the middle of a tag (${atEof[0]}), which the surrounding page would finish`);
-  walk(fragment);
+  walk(parse3(`<!DOCTYPE html><html><body>${html}</body></html>`));
   return seen;
 }
 function attrAllowed(tag, attr) {
@@ -32243,10 +32258,10 @@ function attrAllowed(tag, attr) {
   return (ELEMENT_ATTRS[tag] ?? []).includes(attr);
 }
 function assertSafeRawHtml(html) {
-  const tags = parseTags(html);
+  const tags = [...parseTags(html), ...documentElements(html)];
   for (const { tag, attrs } of tags) {
     for (const [attr, value] of attrs) {
-      if (attr.startsWith("on")) refuse(`the inline event handler "${attr}" on <${tag}>`);
+      if (attr.startsWith("on")) refuse(`the attribute "${attr}" on <${tag}> \u2014 names beginning with "on" are refused as inline event handlers`);
       if (URL_ATTRS.has(attr) && !isSafeUrl(value)) refuse(`the non-http(s) URL in ${attr}="${value.slice(0, 60)}" on <${tag}>`);
     }
   }

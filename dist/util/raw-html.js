@@ -9,7 +9,7 @@
 // fact reading wrongly, and so refused confidently rather than fail-closed. Deciding what is safe
 // requires seeing the same elements and attributes the browser sees; that is a parser's job, and
 // choosing "refuse" never avoided the parsing, it only made it invisible.
-import { parseFragment } from 'parse5';
+import { parse, Tokenizer } from 'parse5';
 // Rich-content set: what markdownToHtml emits, plus tables/figures/definition lists and the
 // structural elements the Zendesk Guide editor produces. None of these run script on their own.
 const ALLOWED_ELEMENTS = new Set([
@@ -65,40 +65,73 @@ function isSafeUrl(raw) {
         return true;
     return !/^[a-z0-9+.-]*:/.test(v);
 }
-// The tokenizer's view of the body: every element the browser would build, with the attribute names
-// and values it would see. Exported because this is the half that has to agree with the browser,
-// and a test asserts that agreement against expectations derived by hand from the HTML spec.
+// Every start tag the AUTHOR WROTE, with the attribute names and values the tokenizer resolves.
+// This is deliberately the token stream and not the tree: an insertion mode may drop a start tag
+// (<frameset>) or merge its attributes onto an element that already exists (<html>, <body>), and in
+// both cases the tree for THIS string shows nothing while the host page is changed. The token
+// stream is insertion-mode independent, so it states what the author asked for either way.
+// Exported because this is the half that has to agree with the browser, and a test asserts that
+// agreement against expectations derived by hand from the HTML spec.
 export function parseTags(html) {
     const seen = [];
-    // A body ending mid-construct is refused even though the fragment parser simply drops the
-    // half-tag: this body is not rendered alone, it is inserted into a Help Center page, and the
-    // markup that follows it there would finish the tag — attribute values and all. Only the `eof-*`
-    // codes matter; the other parse errors are recoveries a browser performs identically.
+    // A body ending mid-construct is refused even though the parser just drops the half-tag: this
+    // body is not rendered alone, it is inserted into a Help Center page, and the markup that follows
+    // it there would finish the tag — attribute values and all. Only the `eof-*` codes matter; the
+    // other parse errors are recoveries a browser performs identically. The same premise is why the
+    // check reads the token stream and parses as a document: the context is a page, not a fragment.
     const atEof = [];
-    const walk = (node) => {
-        for (const raw of node.childNodes ?? []) {
-            const child = raw;
-            if (child.tagName !== undefined) {
-                seen.push({ tag: child.tagName.toLowerCase(), attrs: (child.attrs ?? []).map((a) => [a.name.toLowerCase(), a.value]) });
-            }
-            else if (child.nodeName === '#comment') {
-                refuse('an HTML comment');
-            }
-            else if (child.nodeName === '#documentType') {
-                refuse('a doctype declaration');
-            }
-            walk(child);
-        }
-    };
-    const fragment = parseFragment(html, {
+    const noop = () => undefined;
+    const tokenizer = new Tokenizer({ sourceCodeLocationInfo: false }, {
+        onStartTag: (t) => {
+            // NOTE: lowercasing drops an attribute's namespace prefix, so `xlink:href` would arrive as
+            // `xlink:href` here but a foreign-content parse could yield a bare `href`. Unreachable while
+            // `svg` and `math` are refused at the element name; revisit before allowing foreign content.
+            seen.push({ tag: t.tagName.toLowerCase(), attrs: t.attrs.map((a) => [a.name.toLowerCase(), a.value]) });
+        },
+        onComment: () => refuse('an HTML comment'),
+        onDoctype: () => refuse('a doctype declaration'),
+        onEndTag: noop,
+        onEof: noop,
+        onCharacter: noop,
+        onNullCharacter: noop,
+        onWhitespaceCharacter: noop,
         onParseError: (err) => {
             if (err.code.startsWith('eof-'))
                 atEof.push(err.code);
         },
     });
+    tokenizer.write(html, true);
     if (atEof.length > 0)
         refuse(`the body ends in the middle of a tag (${atEof[0]}), which the surrounding page would finish`);
-    walk(fragment);
+    return seen;
+}
+// Elements the DOCUMENT parse materialises, which is the mode an article body is rendered in. Its
+// job here is the half the token stream cannot give: tags the tree builder implies on its own
+// (a <tbody> inside a table), and attributes an insertion mode merges onto the page's own <html> or
+// <body>. The scaffold below contributes html/head/body with NO attributes, so any attribute found
+// on them came from the body and would land on the host page's elements.
+const SCAFFOLD = new Set(['html', 'head', 'body']);
+export function documentElements(html) {
+    const seen = [];
+    const walk = (node) => {
+        for (const raw of node.childNodes ?? []) {
+            const child = raw;
+            if (child.tagName !== undefined) {
+                const tag = child.tagName.toLowerCase();
+                const attrs = (child.attrs ?? []).map((a) => [a.name.toLowerCase(), a.value]);
+                if (SCAFFOLD.has(tag)) {
+                    // Not "an attribute on <body>" but "an attribute the page would adopt onto its own body".
+                    for (const [attr] of attrs)
+                        refuse(`the attribute "${attr}", which a page merges onto its own <${tag}> element`);
+                }
+                else {
+                    seen.push({ tag, attrs });
+                }
+            }
+            walk(child);
+        }
+    };
+    walk(parse(`<!DOCTYPE html><html><body>${html}</body></html>`));
     return seen;
 }
 function attrAllowed(tag, attr) {
@@ -108,14 +141,19 @@ function attrAllowed(tag, attr) {
 }
 // Throws naming the offending construct; returns the body untouched when it is clean.
 export function assertSafeRawHtml(html) {
-    const tags = parseTags(html);
+    // Both views, because neither alone is complete: the token stream states what the author wrote
+    // even when an insertion mode discards it, the document parse states what a page actually builds
+    // including tags implied by the tree builder.
+    const tags = [...parseTags(html), ...documentElements(html)];
     // Active constructs are named before merely-unknown ones. Both refuse, but when a tag carries an
     // event handler AND an attribute that is simply not on the list, the handler is what the author
     // needs told — a message naming the harmless half of the tag buries the reason.
     for (const { tag, attrs } of tags) {
         for (const [attr, value] of attrs) {
+            // Every `on`-prefixed name is refused, including a non-handler like `once`. The wording says
+            // the rule rather than asserting a claim about the attribute, which would be wrong for those.
             if (attr.startsWith('on'))
-                refuse(`the inline event handler "${attr}" on <${tag}>`);
+                refuse(`the attribute "${attr}" on <${tag}> — names beginning with "on" are refused as inline event handlers`);
             if (URL_ATTRS.has(attr) && !isSafeUrl(value))
                 refuse(`the non-http(s) URL in ${attr}="${value.slice(0, 60)}" on <${tag}>`);
         }

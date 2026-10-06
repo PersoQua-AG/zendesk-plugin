@@ -6,7 +6,7 @@
 // from the WHATWG tokenizer rules, case by case. If the parser's view ever drifts from the spec
 // reading written out here, these fail; that is the thing the previous two rounds could not detect.
 import { describe, it, expect } from 'vitest';
-import { parseTags } from '../../src/util/raw-html.js';
+import { parseTags, documentElements } from '../../src/util/raw-html.js';
 
 describe('the parsed view matches the HTML tokenizer, case by case', () => {
   it.each([
@@ -67,13 +67,55 @@ describe('the parsed view matches the HTML tokenizer, case by case', () => {
       [{ tag: 'td', attrs: [['alt', 'q"'], ['title', 'x>y'], ['onmouseover', 'alert(1)']] }],
     ],
     [
-      // Tree construction, not just tokenization: the parser inserts the tbody a browser inserts,
-      // so the allowlist is asked about the element that actually ends up in the DOM.
-      'an implied tbody is inserted',
+      // The token stream carries no implied tbody — the tree builder adds that, and the
+      // document-view test below is where it is asserted.
+      'a table start tag carries no implied tbody in the token stream',
       '<table><tr><td>a</td></tr></table>',
-      [{ tag: 'table', attrs: [] }, { tag: 'tbody', attrs: [] }, { tag: 'tr', attrs: [] }, { tag: 'td', attrs: [] }],
+      [{ tag: 'table', attrs: [] }, { tag: 'tr', attrs: [] }, { tag: 'td', attrs: [] }],
+    ],
+    [
+      // THE EMPTY EXPECTATION. `[]` is the most dangerous answer this function can give, and not
+      // asserting it anywhere is how the <body> pass survived: the fragment parser returned [] for
+      // `<body onclick=…>` and nothing demanded to know when "nothing" is the right answer. Here
+      // nothing is right, because there is no markup at all.
+      'text with no markup yields no elements at all',
+      'just words, no markup',
+      [],
+    ],
+    [
+      // ...and here nothing would be WRONG, which is why it is a token and not a tree question.
+      // "in body" ignores a <body> start tag outright, so a fragment parse sees no element; a page
+      // merges these attributes onto its own <body>. The token stream states what was written.
+      'a <body> start tag is a real token even where an insertion mode would drop it',
+      '<body onclick=alert(1)>',
+      [{ tag: 'body', attrs: [['onclick', 'alert(1)']] }],
     ],
   ])('%s', (_label, html, expected) => {
     expect(parseTags(html as string)).toEqual(expected);
+  });
+});
+
+// The fragment-vs-document contrast itself, which neither of the earlier rounds measured. An article
+// body is not rendered as a fragment; it is inserted into a page. Where the two modes disagree, the
+// DOCUMENT mode is the one that describes the delivered context — and the token stream is what
+// survives both. These assert the disagreement rather than assuming it away.
+describe('the two parse modes are compared, not assumed equal', () => {
+  it('the document parse adds the tbody the token stream does not have', () => {
+    const html = '<table><tr><td>a</td></tr></table>';
+    expect(parseTags(html).map((t) => t.tag)).toEqual(['table', 'tr', 'td']);
+    expect(documentElements(html).map((t) => t.tag)).toEqual(['table', 'tbody', 'tr', 'td']);
+  });
+
+  it('a <body> start tag is a token, and the document parse shows it merging onto the page body', () => {
+    const html = '<body onclick=alert(1)>';
+    expect(parseTags(html)).toEqual([{ tag: 'body', attrs: [['onclick', 'alert(1)']] }]);
+    // Not "an attribute on <body>": the scaffold contributes a bare <body>, so an attribute found
+    // there is one the host page would adopt onto its own element.
+    expect(() => documentElements(html)).toThrow(/merges onto its own <body>/i);
+  });
+
+  it('both modes agree that plain text contains nothing', () => {
+    expect(parseTags('just words, no markup')).toEqual([]);
+    expect(documentElements('just words, no markup')).toEqual([]);
   });
 });

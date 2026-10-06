@@ -240,3 +240,32 @@ describe('tags the fragment parser drops but a page merges onto its own elements
     expect(client.request).not.toHaveBeenCalled();
   });
 });
+
+// Parsing in document context moves the attack surface, so the new surface gets its own attacks:
+// can the body break out of the scaffold the check wraps it in, and do <head> elements that an
+// insertion mode may relocate still get seen? Both classes are new with the mode, neither existed
+// while the check parsed fragments.
+describe('the document-context scaffold cannot be escaped', () => {
+  it.each([
+    ['a body that closes body and continues', '</body><script>alert(1)</script>'],
+    ['a body that closes body and html and continues', '</body></html><script>alert(1)</script>'],
+    ['a body that closes body then re-opens it with attributes', '</body><body onclick=alert(1)>'],
+    ['a body that closes html then re-opens it with attributes', '</html><html onclick=alert(1)>'],
+    ['a body that starts a second document', '</body></html><!DOCTYPE html><html onclick=x>'],
+    ['a nested second body', '<body><body onclick=alert(1)>'],
+    ['a head re-opened after body', '</body><head><base href="https://evil.test">'],
+    ['a base that would retarget every relative link', '<base href="https://evil.test">'],
+    ['a meta refresh', '<meta http-equiv="refresh" content="0;url=https://evil.test">'],
+    ['a title', '<title>x</title>'],
+    ['a stylesheet link', '<link rel=stylesheet href="https://evil.test/x.css">'],
+    ['a style element', '<style>body{background:url(javascript:1)}</style>'],
+    ['noframes', '<noframes><p>x</p></noframes>'],
+    ['a frame', '<frame src="https://evil.test">'],
+  ])('refuses %s', async (_label, body) => {
+    const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
+    await expect(
+      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false }))(),
+    ).rejects.toThrow(/Refusing to send raw HTML/i);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});
