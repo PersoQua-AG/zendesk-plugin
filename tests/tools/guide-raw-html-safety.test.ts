@@ -93,3 +93,21 @@ describe('evasions are refused', () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 });
+
+// A `>` inside a quoted attribute value ends the tag for this check but not for an HTML tokenizer,
+// which stays in the attribute-value state. Everything after that `>` up to the next `<` is skipped
+// as text, so any attribute parked there is never looked at. The browser still sees it. These pin
+// the three shapes that reach client.request today (#60 follow-up).
+describe('a > inside a quoted attribute value does not end the tag for a browser', () => {
+  it.each([
+    ['onerror parked after the split', '<img src="https://x.test/a.png" alt="a>b" onerror=alert(1)>', /onerror/i],
+    ['javascript: href parked after the split', '<a title="x>" href="javascript:alert(1)">y</a>', /javascript:/i],
+    ['onclick parked after the split', '<img alt="z>" src=x onclick="alert(1)">', /onclick/i],
+  ])('refuses %s', async (_label, body, named) => {
+    const client = { request: vi.fn().mockResolvedValue({ article: { id: 62 } }) } as unknown as ZendeskHttpClient;
+    await expect(
+      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false }))(),
+    ).rejects.toThrow(named);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});
