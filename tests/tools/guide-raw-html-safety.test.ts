@@ -111,3 +111,97 @@ describe('a > inside a quoted attribute value does not end the tag for a browser
     expect(client.request).not.toHaveBeenCalled();
   });
 });
+
+// The twelve evasions above all attack classes the grammar already recognises. These attack the
+// SCANNER'S OWN STATE BOUNDARIES — quote state, tag boundary, cursor end — which is where the
+// `>`-inside-a-value defect actually lived. Each one parks something active where a boundary bug
+// would skip it.
+describe('scanner state boundaries are fail-closed', () => {
+  it.each([
+    ['nested quotes, handler after', `<a title="he said 'hi'" onclick="alert(1)">x</a>`],
+    ['single-quoted value containing >', `<img alt='a>b' onerror=alert(1)>`],
+    ['backtick as a quote (IE legacy)', '<img src=x onerror=`alert(1)`>'],
+    ['value left unclosed to the end of the body', '<img alt="a>b onerror=alert(1)>'],
+    ['slash before > with a handler', '<img src="a>b" onerror=alert(1)/>'],
+    ['several > inside one value', '<img alt="a>b>c>d" onerror=alert(1)>'],
+    ['quote inside an unquoted value', '<img src=x"y onerror=alert(1)>'],
+    ['> in value then a javascript: href', `<a title="x>" href='javascript:alert(1)'>y</a>`],
+    ['mixed quote types straddling the >', `<img alt="a'>b" onerror=alert(1)>`],
+    ['> as the whole value, then a javascript: src', '<img alt=">" src="javascript:alert(1)">'],
+    ['handler on the next line after a > value', '<img alt="a>b"\n onerror=alert(1)>'],
+    ['empty attribute name after a > value', '<img alt="a>b" ="x">'],
+    ['script element hidden behind a > value', '<img alt="a>b"><script>alert(1)</script>'],
+    ['unterminated plain tag', '<img src=x'],
+    ['comment', '<!-- x -->'],
+    ['bare data- prefix with no name', '<div data->x</div>'],
+  ])('refuses %s', async (_label, body) => {
+    const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
+    await expect(
+      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false }))(),
+    ).rejects.toThrow(/Refusing to send raw HTML/i);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});
+
+// The allowlist has to carry what the Zendesk Guide editor itself emits, or a read-modify-write of
+// an existing article is refused and the author has no way through (markdownToHtml cannot do tables).
+describe('markup the Guide editor produces is accepted', () => {
+  it.each([
+    ['target with rel', '<a href="https://x.test" target="_blank" rel="noopener">x</a>'],
+    ['table border/cellpadding', '<table border="1" cellpadding="4"><tr><td>a</td></tr></table>'],
+    ['details/summary', '<details><summary>More</summary><p>x</p></details>'],
+    ['section', '<section><p>x</p></section>'],
+    ['data-* attribute', '<div data-id="1">x</div>'],
+    ['role and aria-*', '<table role="presentation" aria-label="x"><tr><td>a</td></tr></table>'],
+    ['ol start', '<ol start="3"><li>a</li></ol>'],
+    ['a literal < in text', '<p>use 5 < 6 here</p>'],
+    ['trailing space before >', '<p>x</p><img src="https://x.test/a.png" >'],
+    ['self-closing img', '<p>x</p><img src="https://x.test/a.png"/>'],
+  ])('sends %s byte-identically', async (_label, body) => {
+    const client = { request: vi.fn().mockResolvedValue({ article: { id: 63 } }) } as unknown as ZendeskHttpClient;
+    await createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false });
+    expect(JSON.parse((client.request as ReturnType<typeof vi.fn>).mock.calls[0][1].body).article.body).toBe(body);
+  });
+});
+
+// The refusal hinges themselves: a disallowed close tag, a tag name the grammar cannot read, and
+// both ends of the contiguous-attribute check. These are the branches a security gate must not
+// leave untested.
+describe('each refusal hinge is reachable and named', () => {
+  it.each([
+    ['a disallowed close tag', '<p>x</script>', /<script> element/i],
+    ['a processing instruction', '<?php echo 1 ?>', /not a tag this check can read/i],
+    ['an attribute the grammar cannot start on', '<img ="x">', /cannot read/i],
+    ['a disallowed attribute', '<div style="x">y</div>', /attribute "style"/i],
+    ['an unterminated tag', '<img src=x', /unterminated tag/i],
+  ])('refuses %s with a named reason', async (_label, body, named) => {
+    const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
+    await expect(
+      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false }))(),
+    ).rejects.toThrow(named);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});
+
+// Remaining decoder/scanner branches, each with the behaviour it decides. A security gate should
+// not carry untested branches, and these are the last of them.
+describe('decoder and scanner edge branches', () => {
+  it.each([
+    ['a valueless href', '<p>x</p><a href>y</a>'],
+    ['a named entity outside the scheme set', '<a href="https://x.test/&nbsp;a">y</a>'],
+    ['an out-of-range numeric entity', '<a href="https://x.test/&#xFFFFFFFF;">y</a>'],
+    ['a trailing < at the very end', '<p>x</p><'],
+  ])('accepts %s', async (_label, body) => {
+    const client = { request: vi.fn().mockResolvedValue({ article: { id: 64 } }) } as unknown as ZendeskHttpClient;
+    await createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false });
+    expect(JSON.parse((client.request as ReturnType<typeof vi.fn>).mock.calls[0][1].body).article.body).toBe(body);
+  });
+
+  it('refuses leftover the attribute grammar cannot consume', async () => {
+    const client = { request: vi.fn() } as unknown as ZendeskHttpClient;
+    await expect(
+      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body: '<img src=x =>' }, markdown: false }))(),
+    ).rejects.toThrow(/cannot read/i);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});

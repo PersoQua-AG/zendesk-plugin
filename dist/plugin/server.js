@@ -24032,9 +24032,11 @@ var ALLOWED_ELEMENTS = /* @__PURE__ */ new Set([
   "hr",
   "div",
   "span",
+  "section",
   "blockquote",
   "pre",
   "code",
+  "kbd",
   "h1",
   "h2",
   "h3",
@@ -24061,6 +24063,8 @@ var ALLOWED_ELEMENTS = /* @__PURE__ */ new Set([
   "img",
   "figure",
   "figcaption",
+  "details",
+  "summary",
   "strong",
   "b",
   "em",
@@ -24070,7 +24074,10 @@ var ALLOWED_ELEMENTS = /* @__PURE__ */ new Set([
   "sub",
   "sup",
   "small",
-  "mark"
+  "mark",
+  "abbr",
+  "time",
+  "cite"
 ]);
 var ALLOWED_ATTRS = /* @__PURE__ */ new Set([
   "href",
@@ -24081,6 +24088,7 @@ var ALLOWED_ATTRS = /* @__PURE__ */ new Set([
   "class",
   "lang",
   "dir",
+  "role",
   "width",
   "height",
   "colspan",
@@ -24090,12 +24098,21 @@ var ALLOWED_ATTRS = /* @__PURE__ */ new Set([
   "span",
   "align",
   "rel",
-  "loading"
+  "loading",
+  "target",
+  "border",
+  "cellpadding",
+  "cellspacing",
+  "start",
+  "reversed",
+  "datetime",
+  "open"
 ]);
+var ALLOWED_ATTR_PREFIXES = ["aria-", "data-"];
 var URL_ATTRS = /* @__PURE__ */ new Set(["href", "src"]);
-var NAMED = /* @__PURE__ */ new Map([["amp", "&"], ["colon", ":"], ["tab", "	"], ["newline", "\n"], ["lt", "<"], ["gt", ">"], ["quot", '"'], ["apos", "'"]]);
+var SCHEME_ENTITIES = /* @__PURE__ */ new Map([["amp", "&"], ["colon", ":"], ["tab", "	"], ["newline", "\n"], ["lt", "<"], ["gt", ">"], ["quot", '"'], ["apos", "'"]]);
 function decodeEntities(s) {
-  const once = (t) => t.replace(/&#x([0-9a-f]+);?/gi, (m, h) => safeChar(parseInt(h, 16), m)).replace(/&#(\d+);?/g, (m, d) => safeChar(parseInt(d, 10), m)).replace(/&([a-z]+);?/gi, (m, n) => NAMED.get(n.toLowerCase()) ?? m);
+  const once = (t) => t.replace(/&#x([0-9a-f]+);?/gi, (m, h) => safeChar(parseInt(h, 16), m)).replace(/&#(\d+);?/g, (m, d) => safeChar(parseInt(d, 10), m)).replace(/&([a-z]+);?/gi, (m, n) => SCHEME_ENTITIES.get(n.toLowerCase()) ?? m);
   return once(once(s));
 }
 function safeChar(code, fallback) {
@@ -24110,6 +24127,9 @@ function refuse(construct) {
   throw new Error(`Refusing to send raw HTML: ${construct}. With markdown:false only static rich content is accepted (tables, images, links, lists, text formatting); scripts, event handlers, embedded frames and non-http(s) URLs are not. Remove it, or send the text with markdown:true.`);
 }
 var ATTR = /[\s/]*([^\s/=>]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s/>]*))?/g;
+function attrAllowed(attr) {
+  return ALLOWED_ATTRS.has(attr) || ALLOWED_ATTR_PREFIXES.some((p) => attr.startsWith(p) && attr.length > p.length);
+}
 function checkTag(inner, whole) {
   const close = inner.match(/^\/\s*([a-z][a-z0-9]*)\s*$/i);
   if (close) {
@@ -24120,7 +24140,7 @@ function checkTag(inner, whole) {
   if (!open) refuse(`"<${inner.slice(0, 40)}>" is not a tag this check can read`);
   const name = open[1].toLowerCase();
   if (!ALLOWED_ELEMENTS.has(name)) refuse(`the <${name}> element is not allowed`);
-  const rest = open[2].replace(/\/\s*$/, "");
+  const rest = open[2].replace(/[\s/]*$/, "");
   ATTR.lastIndex = 0;
   let cursor = 0;
   let m;
@@ -24129,7 +24149,7 @@ function checkTag(inner, whole) {
     cursor = m.index + m[0].length;
     const attr = decodeEntities(m[1]).toLowerCase();
     if (/^on/.test(attr)) refuse(`the inline event handler "${attr}" on <${name}>`);
-    if (!ALLOWED_ATTRS.has(attr)) refuse(`the attribute "${attr}" on <${name}> is not allowed`);
+    if (!attrAllowed(attr)) refuse(`the attribute "${attr}" on <${name}> is not allowed`);
     if (URL_ATTRS.has(attr)) {
       const value = (m[2] ?? "").replace(/^["']|["']$/g, "");
       if (!isSafeUrl(value)) refuse(`the non-http(s) URL in ${attr}="${value.slice(0, 60)}" on <${name}>`);
@@ -24137,10 +24157,28 @@ function checkTag(inner, whole) {
   }
   if (cursor !== rest.length) refuse(`"${whole.slice(0, 60)}" contains an attribute this check cannot read`);
 }
+function findTagEnd(html, from) {
+  let quote = "";
+  for (let j = from; j < html.length; j++) {
+    const c = html[j];
+    if (quote) {
+      if (c === quote) quote = "";
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === ">") {
+      return j;
+    }
+  }
+  return -1;
+}
 function assertSafeRawHtml(html) {
   let i = 0;
   while ((i = html.indexOf("<", i)) !== -1) {
-    const end = html.indexOf(">", i);
+    if (!/[a-z/!?]/i.test(html[i + 1] ?? "")) {
+      i += 1;
+      continue;
+    }
+    const end = findTagEnd(html, i + 1);
     if (end === -1) refuse(`"${html.slice(i, i + 60)}" is an unterminated tag`);
     checkTag(html.slice(i + 1, end), html.slice(i, end + 1));
     i = end + 1;
@@ -24388,7 +24426,7 @@ function registerGuideTools(server, ctx) {
   server.registerTool(
     "zendesk_update_article",
     {
-      description: "Update a Help Center article by id (Guide manager/admin only). At least one of title/body/draft required. Body is converted Markdown\u2192HTML unless markdown:false. Confirm the change in-conversation before calling.",
+      description: "Update a Help Center article by id (Guide manager/admin only). At least one of title/body/draft required. Body is converted Markdown\u2192HTML unless markdown:false, and raw HTML is refused if it carries scripts, inline event handlers or non-http(s) URLs. Confirm the change in-conversation before calling.",
       inputSchema: { articleId: idSchema2, title: external_exports.string().min(1).optional(), body: external_exports.string().min(1).optional(), draft: external_exports.boolean().optional(), markdown: external_exports.boolean().optional() }
     },
     async ({ articleId, markdown, ...fields }) => okWithHandle(await updateArticle(httpClient, cache, { articleId, fields, markdown: markdown ?? markdownDefault }, securityLevel))
@@ -24396,7 +24434,7 @@ function registerGuideTools(server, ctx) {
   server.registerTool(
     "zendesk_create_article_translation",
     {
-      description: "Create a translation for an article (Guide manager/admin only). Requires locale + title + body; locale defaults to en-us (typically pass the target locale, e.g. de). Body Markdown\u2192HTML unless markdown:false. Confirm the change in-conversation before calling.",
+      description: "Create a translation for an article (Guide manager/admin only). Requires locale + title + body; locale defaults to en-us (typically pass the target locale, e.g. de). Body Markdown\u2192HTML unless markdown:false, and raw HTML is refused if it carries scripts, inline event handlers or non-http(s) URLs. Confirm the change in-conversation before calling.",
       inputSchema: { articleId: idSchema2, locale: localeSchema.optional(), title: external_exports.string().min(1), body: external_exports.string().min(1), draft: external_exports.boolean().optional(), markdown: external_exports.boolean().optional() }
     },
     async ({ articleId, markdown, ...fields }) => okWithHandle(await createArticleTranslation(httpClient, cache, { articleId, fields, markdown: markdown ?? markdownDefault }, securityLevel))
@@ -24404,7 +24442,7 @@ function registerGuideTools(server, ctx) {
   server.registerTool(
     "zendesk_update_article_translation",
     {
-      description: "Update an article translation for a given locale (Guide manager/admin only). At least one of title/body/draft required. Body Markdown\u2192HTML unless markdown:false. Confirm the change in-conversation before calling.",
+      description: "Update an article translation for a given locale (Guide manager/admin only). At least one of title/body/draft required. Body Markdown\u2192HTML unless markdown:false, and raw HTML is refused if it carries scripts, inline event handlers or non-http(s) URLs. Confirm the change in-conversation before calling.",
       inputSchema: { articleId: idSchema2, locale: localeSchema, title: external_exports.string().min(1).optional(), body: external_exports.string().min(1).optional(), draft: external_exports.boolean().optional(), markdown: external_exports.boolean().optional() }
     },
     async ({ articleId, locale, markdown, ...fields }) => okWithHandle(await updateArticleTranslation(httpClient, cache, { articleId, locale, fields, markdown: markdown ?? markdownDefault }, securityLevel))
