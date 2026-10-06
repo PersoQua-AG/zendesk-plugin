@@ -269,3 +269,38 @@ describe('the document-context scaffold cannot be escaped', () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 });
+
+// Acceptance test 2 is byte-identity, and the check only ever reads: assertSafeRawHtml returns its
+// own argument. These are the character classes a reader would worry about on the way to Zendesk —
+// line endings, NUL, astral planes, a lone surrogate, entities and invisible formatting characters —
+// asserted on the real request body after the JSON round trip, not on the checker's return value.
+describe('the body survives byte-identically whatever characters it holds', () => {
+  it.each([
+    ['CRLF line endings', '<p>a</p>\r\n<p>b</p>'],
+    ['a NUL in text', '<p>a\u0000b</p>'],
+    ['astral-plane characters', '<p>x \u{1F44D} y</p>'],
+    ['a lone surrogate', '<p>a\ud800b</p>'],
+    ['entities left unresolved', '<p>a&nbsp;&amp;&lt;b</p>'],
+    ['a zero-width space', '<p>a​b</p>'],
+    ['an RTL override', '<p>a‮b</p>'],
+  ])('sends %s unchanged', async (_label, body) => {
+    const client = { request: vi.fn().mockResolvedValue({ article: { id: 67 } }) } as unknown as ZendeskHttpClient;
+    await createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false });
+    expect(JSON.parse((client.request as ReturnType<typeof vi.fn>).mock.calls[0][1].body).article.body).toBe(body);
+  });
+});
+
+// documentElements walks the tree with a recursive function, so a deeply nested body exhausts the
+// call stack before any verdict is reached. The direction is safe — nothing is sent — but the error
+// is a RangeError, not a refusal, so the result names no construct. This pins the guarantee that
+// actually holds today (no request leaves); naming the construct is an open defect, not pinned here.
+describe('a body too deeply nested for the tree walk still sends nothing', () => {
+  it('makes no request when the walk exhausts the stack', async () => {
+    const body = `${'<div>'.repeat(5000)}x${'</div>'.repeat(5000)}`;
+    const client = { request: vi.fn().mockResolvedValue({ article: { id: 68 } }) } as unknown as ZendeskHttpClient;
+    await expect(
+      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false }))(),
+    ).rejects.toThrow();
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});

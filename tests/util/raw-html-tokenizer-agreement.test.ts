@@ -119,3 +119,21 @@ describe('the two parse modes are compared, not assumed equal', () => {
     expect(documentElements('just words, no markup')).toEqual([]);
   });
 });
+
+// The third way the two modes can disagree. The block above covers "the tree builder IMPLIES a tag
+// the token stream lacks" (tbody) and "an insertion mode MERGES attributes onto an element that
+// already exists" (body). This is the one `frameset` was the argument for: an insertion mode DROPS
+// the tag outright, so the document parse is empty and only the token stream still has it. Asserting
+// the class, not just the one witness that motivated it.
+describe('tags an insertion mode drops entirely survive in the token stream', () => {
+  it.each([
+    ['frameset', '<frameset onload=alert(1)>'],
+    ['head', '<head onclick=alert(1)>'],
+    ['frame', '<frame src="https://evil.test">'],
+    ['col outside a table', '<col onclick=alert(1)>'],
+    ['caption outside a table', '<caption onclick=alert(1)>x</caption>'],
+  ])('%s is a token the document parse does not build', (_label, html) => {
+    expect(documentElements(html)).toEqual([]);
+    expect(parseTags(html).length).toBe(1);
+  });
+});
