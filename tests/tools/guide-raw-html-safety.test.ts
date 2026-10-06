@@ -198,3 +198,25 @@ describe('expectations the parser corrects', () => {
     expect(JSON.parse((client.request as ReturnType<typeof vi.fn>).mock.calls[0][1].body).article.body).toBe(body);
   });
 });
+
+// findTagEnd opens quote state on any `"` or `'`. The tokenizer only opens an attribute value on a
+// quote that follows `=`; a quote anywhere else (inside an UNQUOTED value, in an attribute name) is
+// a parse error and stays literal. So one stray quote in an unquoted value desynchronises the two:
+// the next attribute's real opening quote CLOSES the scanner's state instead of opening one, and the
+// scanner then ends the tag on a `>` that the browser is still reading as attribute-value content.
+// Everything from there to the next `<` is skipped as text — which is where the handler sits.
+describe('a stray quote in an unquoted value does not open a value for the tokenizer', () => {
+  it.each([
+    ['onerror behind a desynchronised double quote', '<img alt=a" src="b>c" onerror=alert(1)>', /onerror/i],
+    ['onclick behind a desynchronised double quote', '<a alt=a" href="b>c" onclick=alert(1)>x</a>', /onclick/i],
+    ['onerror behind a desynchronised single quote', "<img alt=a' src='b>c' onerror=alert(1)>", /onerror/i],
+    ['onmouseover behind a desynchronised quote', '<td alt=q" title="x>y" onmouseover=alert(1)>z</td>', /onmouseover/i],
+    ['javascript: href behind a desynchronised quote', '<a alt=a" title="x>" href=javascript:alert(1)>y</a>', /javascript:/i],
+  ])('refuses %s', async (_label, body, named) => {
+    const client = { request: vi.fn().mockResolvedValue({ article: { id: 65 } }) } as unknown as ZendeskHttpClient;
+    await expect(
+      (async () => createArticle(client, cacheStub(), { sectionId: 3, fields: { title: 'T', body }, markdown: false }))(),
+    ).rejects.toThrow(named);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});
