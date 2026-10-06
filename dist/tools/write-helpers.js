@@ -12,7 +12,7 @@
 // than domain-owned. All three screen inbound content BEFORE caching, so ingest screening stays
 // enforced by construction.
 import { z } from 'zod';
-import { makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
+import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import { ZendeskConflictError, ZendeskPermissionError } from '../client/errors.js';
 import { stripUndefined } from '../util/object.js';
 // The two mutating callers both re-fetch a ticket on 409. Keep the re-fetch schema minimal:
@@ -43,7 +43,7 @@ export async function safeUpdateWithConflict(client, cache, opts) {
         // so the cached payload is safe at rest, not solely reliant on the replay-boundary net.
         const { value: safe, flagged } = screenRecordDeep(raw, (key) => `${opts.seedPrefix}-${key}`, screener);
         const entry = cache.save(opts.toolName, safe);
-        return { status: 'applied', summary: `${opts.appliedSummary}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+        return { status: 'applied', summary: `${opts.appliedSummary}${screenNote(flagged, opts.securityLevel)}`, cacheHandle: entry.handle };
     }
     catch (err) {
         if (!(err instanceof ZendeskConflictError))
@@ -107,7 +107,7 @@ export async function updateEntity(client, cache, config, id, fields, securityLe
     // A numeric id reads as "#42"; a string id (e.g. a translation locale) uses "(de)" since "#"
     // implies a numeric record id.
     const idLabel = typeof id === 'number' ? `#${id}` : `(${id})`;
-    return { summary: `Updated ${config.resourceLabel} ${idLabel}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+    return { summary: `Updated ${config.resourceLabel} ${idLabel}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }
 // The generic POST-create tail — twin of updateEntity. passthrough keeps the full record for
 // screening/caching; only `id` is structurally required so the tail stays field-agnostic (the
@@ -127,5 +127,5 @@ export async function createEntity(client, cache, config, fields, securityLevel)
     const record = parsed.data[config.key];
     const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `${config.toolName}-${record.id}-${key}`, makeScreener(securityLevel));
     const entry = cache.save(config.toolName, safe);
-    return { summary: `Created ${config.resourceLabel} #${record.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+    return { summary: `Created ${config.resourceLabel} #${record.id}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }

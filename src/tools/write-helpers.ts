@@ -15,7 +15,7 @@ import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
+import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import { ZendeskConflictError, ZendeskPermissionError } from '../client/errors.js';
 import { stripUndefined } from '../util/object.js';
 
@@ -41,7 +41,7 @@ export interface SafeUpdateOptions {
   toolName: string; // success cache tool name; conflict caches under `${toolName}_conflict`
   seedPrefix: string; // screening label seed, e.g. 'update-ticket-42'
   securityLevel: SecurityLevel;
-  appliedSummary: string; // success summary base; SCREEN_WARNING is appended when flagged
+  appliedSummary: string; // success summary base; screenNote() appends the off-notice/warning
   conflictSummary: (current: ConflictSnapshot) => string;
 }
 
@@ -78,7 +78,7 @@ export async function safeUpdateWithConflict(
     // so the cached payload is safe at rest, not solely reliant on the replay-boundary net.
     const { value: safe, flagged } = screenRecordDeep(raw, (key) => `${opts.seedPrefix}-${key}`, screener);
     const entry = cache.save(opts.toolName, safe);
-    return { status: 'applied', summary: `${opts.appliedSummary}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+    return { status: 'applied', summary: `${opts.appliedSummary}${screenNote(flagged, opts.securityLevel)}`, cacheHandle: entry.handle };
   } catch (err) {
     if (!(err instanceof ZendeskConflictError)) throw err;
     const current = await client.request<unknown>(opts.path);
@@ -162,7 +162,7 @@ export async function updateEntity<F extends object>(
   // A numeric id reads as "#42"; a string id (e.g. a translation locale) uses "(de)" since "#"
   // implies a numeric record id.
   const idLabel = typeof id === 'number' ? `#${id}` : `(${id})`;
-  return { summary: `Updated ${config.resourceLabel} ${idLabel}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+  return { summary: `Updated ${config.resourceLabel} ${idLabel}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }
 
 export interface CreateEntityConfig {
@@ -197,5 +197,5 @@ export async function createEntity<F extends object>(
   const record = parsed.data[config.key] as { id: number };
   const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `${config.toolName}-${record.id}-${key}`, makeScreener(securityLevel));
   const entry = cache.save(config.toolName, safe);
-  return { summary: `Created ${config.resourceLabel} #${record.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+  return { summary: `Created ${config.resourceLabel} #${record.id}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }

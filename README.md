@@ -41,7 +41,7 @@ No terminal required.
    | OAuth Client ID | **yes** | — |
    | OAuth Client Secret | **yes** | — |
    | OAuth Callback Port | no | `8976` |
-   | Injection-Screening Level | no | `standard` |
+   | Injection-Screening Level | no | `standard` — fixed, see [Security](#security) |
    | Markdown to HTML Conversion | no | on |
    | Business-Hours Timezone | no | UTC |
    | Business Work Hours | no | 09:00–17:00 |
@@ -206,7 +206,7 @@ Claude Code plugin they are environment variables (`ZENDESK_SUBDOMAIN`,
 | `oauth_client_id` | string | yes | From step 1 |
 | `oauth_client_secret` | string (sensitive) | yes | From step 1 — stored in the macOS Keychain when the setup page collects it, never on disk in the clear |
 | `oauth_callback_port` | number | no | Localhost redirect port (default `8976`) |
-| `security_level` | `strict`\|`standard`\|`off` | no | Prompt-injection screening (default `standard`) |
+| `security_level` | `strict`\|`standard`\|`off` | no | Prompt-injection screening. Fixed at `standard` in the installed plugin — only a hand-started server reads `ZENDESK_SECURITY_LEVEL`, see [Security](#security) |
 | `markdown_conversion` | boolean | no | Markdown→HTML on writes (default `true`) |
 | `timezone` | string | no | IANA tz for business-hours metrics (e.g. `Europe/Berlin`) |
 | `work_hours` | JSON | no | `{"start":"09:00","end":"17:00"}` |
@@ -293,7 +293,13 @@ inventory.
 - **Prompt-injection screening.** Ticket/comment/user content is
   attacker-controllable; all inbound Zendesk content is screened and wrapped in
   session-scoped delimiters so the model treats it as data, not instructions.
-  Level via `security_level` (`strict` | `standard` | `off`).
+  The level is **not selectable in the installed plugin**: it is fixed at
+  `standard`. `ZENDESK_SECURITY_LEVEL` (`strict` | `standard` | `off`) is read
+  only when the server is started by hand from a shell, or by a remote-connector
+  deployment (deprioritised since 2026-09-23). At `security_level=off` the fence
+  is dropped but
+  forged delimiters are still stripped, patterns are still detected, and every
+  tool result says screening is off.
 - **No destructive operations.** Delete/merge/redact/mark-as-spam are not
   implemented at all — enforced by omission.
 - **Safe writes.** Ticket updates use optimistic concurrency (`safe_update`,

@@ -1,4 +1,4 @@
-import { makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
+import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 export async function addTicketTags(client, cache, params, securityLevel = 'standard') {
     if (params.tags.length === 0)
         throw new Error('At least one tag is required.');
@@ -14,5 +14,5 @@ export async function addTicketTags(client, cache, params, securityLevel = 'stan
     const entry = cache.save('zendesk_add_ticket_tags', safe);
     const verb = params.replace ? 'Replaced' : 'Appended';
     const tags = safe.tags;
-    return { summary: `${verb} tags on ticket #${params.ticketId}: ${tags.join(', ')}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+    return { summary: `${verb} tags on ticket #${params.ticketId}: ${tags.join(', ')}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }

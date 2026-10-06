@@ -1,6 +1,6 @@
 // src/tools/tickets.ts
 import { z } from 'zod';
-import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, SCREEN_WARNING } from './screening.js';
+import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, screenNote } from './screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
 import { markdownToHtml } from '../util/markdown.js';
 import { safeUpdateWithConflict } from './write-helpers.js';
@@ -41,7 +41,7 @@ export async function getTicket(client, cache, params, securityLevel = 'standard
     const { value, flagged } = screenRecordDeep(parsed.data, (key) => `ticket-${params.ticketId}-${key}`, makeScreener(securityLevel));
     const safe = value;
     const entry = cache.save('zendesk_get_ticket', safe);
-    const warning = flagged ? SCREEN_WARNING : '';
+    const warning = screenNote(flagged, securityLevel);
     const summary = `Ticket #${t.id} [${t.status ?? 'unknown'}] priority=${t.priority ?? 'none'}\nSubject: ${safe.ticket.subject ?? ''}\nDescription: ${safe.ticket.description ?? ''}${warning}`;
     return { summary, cacheHandle: entry.handle, flagged, updatedStamp: t.updated_at ?? null };
 }

@@ -59,7 +59,10 @@ export const INCREMENTAL_RATE_LIMIT_RPM = 10;
 // security level does. And the port's throw is caught: resolveOrDegrade turns it into a server that
 // still starts and names the field in every tool's answer, while a throw out of parseSecurityLevel
 // would leave a dead extension with nothing to read — exactly the outcome resolveOrDegrade exists
-// to prevent. Absent stays 'standard': that is the shipped default both manifests declare, not a typo.
+// to prevent. Absent stays 'standard', and since #68 that is not a mirror of a declared default but the
+// shipped behaviour itself: .claude-plugin/plugin.json declares no security_level at all and the
+// manifest.json default belongs to the retired MCPB dialog, so 'standard' IS the level the installed
+// plugin runs at (owner decision on #59, 2026-10-06).
 export const SECURITY_LEVELS: readonly SecurityLevel[] = ['strict', 'standard', 'off'];
 
 function parseSecurityLevel(raw: string | undefined): SecurityLevel {

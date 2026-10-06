@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeDescribe, makeScreener, screenRecordDeep, SCREEN_WARNING } from './screening.js';
+import { makeDescribe, makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import { listCbp, DEFAULT_LIST_CAP, DEFAULT_MEMBERSHIP_CAP } from './cbp-list.js';
 import { updateEntity } from './write-helpers.js';
 import type { ReadResult } from './result.js';
@@ -60,7 +60,7 @@ export async function getOrg(
   const { value, flagged } = screenRecordDeep(parsed.data, (key) => `org-${params.orgId}-${key}`, makeScreener(securityLevel));
   const safe = value as { organization: Org };
   const entry = cache.save('zendesk_get_org', safe);
-  const warning = flagged ? SCREEN_WARNING : '';
+  const warning = screenNote(flagged, securityLevel);
   // `name` is attacker-controllable free text — render it from the FENCED `safe` copy, never
   // raw. id is numeric (control).
   const org = safe.organization;
@@ -97,7 +97,7 @@ export async function upsertOrg(
   if (!parsed.success) throw new Error('Unexpected /organizations/create_or_update response shape.');
   const { value: safe, flagged } = screenRecordDeep(parsed.data, (key) => `upsert-org-${parsed.data.organization.id}-${key}`, makeScreener(securityLevel));
   const entry = cache.save('zendesk_upsert_org', safe);
-  return { summary: `Upserted organization #${parsed.data.organization.id}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+  return { summary: `Upserted organization #${parsed.data.organization.id}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }
 
 export async function updateOrg(

@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { businessMinutesBetween, calendarMinutesBetween } from './business-hours.js';
 import { summariseCsat, fetchRatings, DEFAULT_RATINGS_CAP } from './metrics.js';
 import { fetchIncrementalCursor, fetchIncrementalTime, MetricEventSchema, DEFAULT_EVENTS_CAP, DEFAULT_INCREMENTAL_CAP, } from './incremental.js';
-import { makeDescribe, SCREEN_WARNING } from '../screening.js';
+import { makeDescribe, screenNote } from '../screening.js';
 // Pair a ticket's activate/fulfill events into closed intervals by walking them in time order:
 // each activate opens an interval that the next fulfill closes. This keeps DISTINCT cycles on one
 // ticket separate (activate→next fulfill) instead of collapsing them into one earliest→latest span
@@ -194,7 +194,7 @@ export async function report(client, cache, params, config, securityLevel = 'sta
         report: built,
     });
     return {
-        summary: `${renderReport(built, params.startTime, endTime)}${flagged ? SCREEN_WARNING : ''}`,
+        summary: `${renderReport(built, params.startTime, endTime)}${screenNote(flagged, securityLevel)}`,
         cacheHandle: entry.handle,
         flagged,
     };

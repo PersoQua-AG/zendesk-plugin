@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { okWithHandle, toText } from '../tools/result.js';
 import { getMe } from '../tools/me.js';
 import { runQuery, screenReplay } from '../client/query.js';
-import { SCREEN_WARNING } from '../tools/screening.js';
+import { screenNote } from '../tools/screening.js';
 import type { ToolContext } from './context.js';
 
 export function registerCoreTools(server: McpServer, ctx: ToolContext): void {
@@ -28,7 +28,7 @@ export function registerCoreTools(server: McpServer, ctx: ToolContext): void {
     async ({ cacheHandle, query }) => {
       const { value, flagged } = screenReplay(runQuery(cache.load(cacheHandle), query), securityLevel);
       const body = JSON.stringify(value, null, 2);
-      return toText(flagged ? `${body}${SCREEN_WARNING}` : body);
+      return toText(`${body}${screenNote(flagged, securityLevel)}`);
     },
   );
 }

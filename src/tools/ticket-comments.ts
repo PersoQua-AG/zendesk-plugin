@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
 import type { ResponseCache } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
-import { makeScreener, screenRecordDeep, SCREEN_WARNING, type RecordScreen, type Screener } from './screening.js';
+import { makeScreener, screenRecordDeep, screenNote, type RecordScreen, type Screener } from './screening.js';
 import { listCbp } from './cbp-list.js';
 import { buildComment } from './tickets.js';
 import type { ReadResult } from './result.js';
@@ -27,7 +27,7 @@ export async function addComment(
   // subject). Screen at ingest so the cached payload is safe at rest.
   const { value: safe, flagged } = screenRecordDeep(raw, (key) => `add-comment-${params.ticketId}-${key}`, makeScreener(securityLevel));
   const entry = cache.save('zendesk_add_comment', safe);
-  return { summary: `Added ${isPublic ? 'public' : 'internal'} comment to ticket #${params.ticketId}${flagged ? SCREEN_WARNING : ''}`, cacheHandle: entry.handle };
+  return { summary: `Added ${isPublic ? 'public' : 'internal'} comment to ticket #${params.ticketId}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }
 
 const CommentSchema = z.object({

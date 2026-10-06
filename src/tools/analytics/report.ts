@@ -21,7 +21,7 @@ import {
 import type { ZendeskHttpClient } from '../../client/http-client.js';
 import type { ResponseCache } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
-import { makeDescribe, SCREEN_WARNING } from '../screening.js';
+import { makeDescribe, screenNote } from '../screening.js';
 import type { ReadResult } from '../result.js';
 
 export interface Interval {
@@ -258,7 +258,7 @@ export async function report(
     report: built,
   });
   return {
-    summary: `${renderReport(built, params.startTime, endTime)}${flagged ? SCREEN_WARNING : ''}`,
+    summary: `${renderReport(built, params.startTime, endTime)}${screenNote(flagged, securityLevel)}`,
     cacheHandle: entry.handle,
     flagged,
   };
