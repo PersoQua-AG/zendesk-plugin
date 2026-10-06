@@ -8,45 +8,21 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-bound-port-literals.mjs');
 
-// THIS FILE IS NOW INSIDE THE SCANNED TREE (#82). The root was tests/auth and the scan was one
-// directory deep, so this file — in tests/plugin — could write its samples whole. The root is
-// `tests` and the scan is recursive, so every sample literal here is a finding against the repo
-// unless it is written split. It is split, through BIND below, and that cost is the honest price
-// of scanning all 197 test files instead of 50. It was measured, not guessed: `npm run check:ports`
-// against the widened root named 11 occurrences in this file and 1 in executor-safety-guard.test.ts.
+// THIS FILE IS NOW INSIDE THE SCANNED TREE (#82), so every sample literal here would be a finding
+// against the repo unless it is written split. It is, through ACQUIRES and BIND below.
 const temps: string[] = [];
 afterEach(() => {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-// Every fixture meant to BE a guarded tree carries its mark — the DEFINITION of freePort(),
-// exactly as tests/auth/login-harness.ts carries it. A mere call is no longer the mark: PR #71
-// put freePort() calls in three more directories in a single merge and three wrong roots then
-// exited 0. An unmarked tree is still scanned and its findings are still named, but it can never
-// exit 0. See the script header.
-//
-// WRITTEN SPLIT, DELIBERATELY, AND SINCE #82 BOTH CONSTANTS ARE. A probe for a text guard cannot
-// contain the text it probes for: written whole, ACQUIRES marks tests/plugin itself — the header's
-// count becomes 2 of 27 instead of 1, which happened three times in #73 — and BIND makes this file
-// a finding of the very check it tests. Neither is remembered: the counting command is executed
-// below, and `npm run check:ports` over the whole test tree is the other half of the pin.
+// BOTH CONSTANTS ARE WRITTEN SPLIT, and that is the point of them. A probe for a text guard cannot
+// contain the text it probes for: written whole, ACQUIRES marks tests/plugin as a guarded tree (it
+// did, three times in #73) and BIND makes this file a finding of the very check it tests. A fixture
+// meant to BE a guarded tree carries the DEFINITION of freePort(), as tests/auth/login-harness.ts
+// does — a mere call is not the mark, because PR #71 put calls in three more directories at once.
 const ACQUIRES = `export function ${'freePort'}(): number { return 0; }\n`;
-
-// Every sample bind call goes through this, including the two that only escaped the guard by
-// accident: a sample written as a newline escape immediately followed by the call was never
-// reported, because `\n` leaves an `n` in front of the call name and BIND_CALL needs a word
-// boundary there. That is a property of an escape sequence,
-// not a decision, and it would have broken the day a sample was written on a template line.
 const BIND = (port: string) => `${'deps'}(${port})`;
 const BOUND = BIND('18000');
-
-// The script's marker, restated for the sweep below. Written whole it is still not a marker — the
-// regex SOURCE reads `export (async )?function`, and the pattern wants `export ` then either
-// `async ` or nothing then `function`, so `(async` matches neither branch and this file does not
-// mark itself. If that ever stops being true the sweep's `expect(owners)` is red, and the counting
-// command further down reaches the same answer by a different route (git + grep), so the two
-// cross-check each other rather than both trusting this line.
-const DEFINES_FREE_PORT = /\bexport (async )?function freePort\(/;
 
 function fixture(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'port-guard-'));
@@ -70,15 +46,11 @@ const at = (dir: string, file: string) => relative(root, join(dir, file));
 
 // THE SCAN ROOT IS READ OUT OF package.json, NEVER RETYPED (#82). Every case that claims something
 // about the real gate takes its argument from here, so a case cannot agree with a wiring that no
-// longer exists — the #82 defect was a wiring everyone believed covered the tests. The split
-// asserts the shape too: one argument after the script, which is the #73 rule this widening had to
-// keep. Anything else fails loudly here rather than scanning a tree nobody named.
+// longer exists — the #82 defect was a wiring everyone believed covered the tests. The exact
+// command string is pinned separately below, so the shape is not asserted a second time here.
 function wiredRoot(): string {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-  const argv = String(pkg.scripts['check:ports']).split(/\s+/);
-  expect(argv.slice(0, 2)).toEqual(['node', 'scripts/assert-no-bound-port-literals.mjs']);
-  expect(argv).toHaveLength(3);
-  return argv[2];
+  return String(pkg.scripts['check:ports']).split(/\s+/)[2];
 }
 
 describe('the bound-port guard as a script', () => {
@@ -100,19 +72,12 @@ describe('the bound-port guard as a script', () => {
   // ancestors of the allocator exit 0.
   //
   // WHAT #82 CHANGED HERE, and it is a weakening that has to be stated rather than absorbed: the
-  // set used to be exactly one root, and it is three now — `.`, `tests` and `tests/auth`, the
-  // directory that holds the definition plus every ancestor of it, because the mark follows the
-  // recursive scan. It is still DERIVED and not listed: the expectation below is computed from
-  // where the definition actually is, so moving login-harness.ts moves the expectation with it and
-  // a second definition anywhere makes this red. The three are not interchangeable either — only
-  // `tests` is wired, pinned separately below — and the two extra ones are both WIDER than the
-  // wired root, which is the direction that cannot hide anything: `.` scans 275 .ts files to
-  // tests' 197. Every root that is not an ancestor is refused in words, asserted here too, which
-  // is where the narrow misedits (`tests/plugin`, `tests/tools`) land.
-  // Cost, measured: 27 roots, 27 real `node` runs, 1.0s wall on this machine
-  // (`time git ls-files '*.ts' | xargs -n1 dirname | sort -u | while read d; do \
-  //   node scripts/assert-no-bound-port-literals.mjs "$d" >/dev/null 2>&1; done`).
-  // That is affordable; if it stops being, the fallback is sampling, not a hand-kept list.
+  // marked set used to be exactly one root and is three now — `tests/auth`, which holds the
+  // definition, plus its ancestors `tests` and `.`, because the mark follows the recursive scan.
+  // The two extra ones are both WIDER than the wired root, the direction that cannot hide
+  // anything, and they are not interchangeable with it: only `tests` is wired, pinned below.
+  // Every root that is not an ancestor is refused in words, which is where the narrow misedits
+  // (`tests/plugin`, `tests/tools`) land.
   it('reports success only for the allocator tree and its ancestors, and refuses every other', () => {
     const tracked = spawnSync('git', ['ls-files', '*.ts'], { cwd: root, encoding: 'utf8' });
     expect(tracked.status, tracked.stderr).toBe(0);
@@ -121,40 +86,32 @@ describe('the bound-port guard as a script', () => {
     // A sweep that found nothing to sweep would pass every assertion below it.
     expect(roots.length).toBeGreaterThan(20);
 
-    // Derived from disk: the directories that hold the definition, then their ancestor chains.
-    const owners = [
-      ...new Set(
-        files
-          .filter((f) => DEFINES_FREE_PORT.test(readFileSync(join(root, f), 'utf8')))
-          .map((f) => dirname(f)),
-      ),
-    ];
-    expect(owners).toEqual(['tests/auth']);
-    const ancestors = new Set(
-      owners.flatMap((d) =>
-        d.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/')).concat('.'),
-      ),
-    );
-    expect([...ancestors].sort()).toEqual(['.', 'tests', 'tests/auth']);
+    // WHERE THE DEFINITION IS is not re-derived here: the last case in this file runs the command
+    // the script header documents and pins the answer to tests/auth, by git + grep rather than by
+    // a second TypeScript walk over the same files. Moving login-harness.ts, or adding a second
+    // definition, is red there — and then here, because this set stops matching the marked roots.
+    const ancestors = new Set(['.', 'tests', 'tests/auth']);
 
     // THE SWEPT PROPERTY IS THE MARK, NOT THE EXIT CODE, and the difference is measured rather
     // than theoretical: with dependencies installed, `.` is a MARKED root that exits 1 anyway,
-    // because node_modules is full of literals — 1909 .ts files, 1634 of them under node_modules,
-    // and 21 findings in @types/node alone, all of them somebody else's documentation. (The
-    // numbers are quoted and not the literals: this comment is inside the scanned tree now, and
-    // a finding written into a comment here would be a true finding. See the file header.) An
-    // exit-0 sweep would therefore have asserted `['tests', 'tests/auth']` locally with deps
-    // present and `['.', 'tests', 'tests/auth']` without them — one tree, two answers by install
-    // state, which is the same disqualifying shape #87 found in a case-folding `existsSync`.
-    const marks = (d: string) => !runGuard(d).stderr.includes('Not the guarded tree');
+    // because node_modules is full of literals — 1909 .ts files are reachable from `.` there,
+    // 1634 of them under node_modules, with 21 findings in @types/node alone, all of them somebody
+    // else's documentation. (A count of this repository's own tracked .ts files is a different
+    // number and is not needed here.) An exit-0 sweep would therefore have asserted
+    // `['tests', 'tests/auth']` locally with dependencies present and all three without them — one
+    // tree, two answers by install state, the shape #87 found in a case-folding `existsSync`.
+    //
+    // ONE RUN PER ROOT, read three ways. Each root used to be spawned three or four times.
+    const runs = new Map(roots.map((d) => [d, runGuard(d)]));
+    const marks = (d: string) => !runs.get(d)!.stderr.includes('Not the guarded tree');
     expect(roots.filter(marks).sort()).toEqual([...ancestors].sort());
     // Exit 0 is possible ONLY in a marked tree, and the wired root is one that actually reaches it.
-    expect(roots.filter((d) => runGuard(d).status === 0).every(marks)).toBe(true);
+    expect(roots.filter((d) => runs.get(d)!.status === 0).every(marks)).toBe(true);
     expect(runGuard(wiredRoot()).status).toBe(0);
     // The other side of the same cut: a non-ancestor is told it is the wrong tree, not merely
     // handed a non-zero exit. `tests/plugin` and `tests/tools` are in here by construction.
     for (const d of roots.filter((x) => !ancestors.has(x))) {
-      expect(runGuard(d).stderr, d).toContain('Not the guarded tree');
+      expect(runs.get(d)!.stderr, d).toContain('Not the guarded tree');
     }
   });
 
@@ -221,8 +178,9 @@ describe('the bound-port guard as a script', () => {
     const { status, stdout, stderr } = runGuard(wiredRoot());
     expect(status).toBe(0);
     expect(stderr).toBe('');
+    // The same extension set the script filters on, not `.ts`: tests/ holds a .mjs since #87.
     const expected = readdirSync(join(root, wiredRoot()), { recursive: true }).filter((f) =>
-      String(f).endsWith('.ts'),
+      /\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(String(f)),
     ).length;
     // A scan that lost half the tree must be red, and /\d+ files scanned/ would have been
     // satisfied by 1. The floor keeps a non-recursive regression from passing by agreeing with a
@@ -281,6 +239,24 @@ describe('the bound-port guard as a script', () => {
     );
   });
 
+  // EVERY SPELLING A TEST SOURCE CARRIES, not only .ts. The promise is "every test file", and
+  // #87 put tests/plugin/executor-guard-property.mjs inside the scanned root where nothing looked
+  // at it. The exit code is NOT the property here — a tree holding zero scanned files is unmarked
+  // and exits 1 as well, which is exactly how the gap stayed invisible. What separates the two is
+  // that the file is NAMED, and that its freePort() definition is read, so the tree is marked.
+  // Measured against the `.ts`-only filter: .tsx, .mts, .cts, .js, .mjs and .cjs each named 0
+  // findings before and 1 after.
+  it('scans every test-source extension, not only .ts', () => {
+    for (const ext of ['ts', 'tsx', 'mts', 'cts', 'js', 'mjs', 'cjs']) {
+      const dir = fixture({ [`probe.${ext}`]: `${ACQUIRES}${BOUND}\n` });
+      const run = runGuard(dir);
+      expect(run.status, ext).toBe(1);
+      expect(run.stderr, ext).toContain(`${at(dir, `probe.${ext}`)}:2 ${BOUND}`);
+      expect(run.stderr, ext).not.toContain('Not the guarded tree');
+      expect(run.stdout, ext).toContain('1 files scanned.');
+    }
+  });
+
   // login-harness.ts is where the harness binds and is not a *.test.ts, so a filter narrowed to
   // test files would silence the guard where it matters most.
   it('scans helper files too, not only *.test.ts', () => {
@@ -320,6 +296,10 @@ describe('the bound-port guard as a script', () => {
   // The probe is a real file in a real subdirectory of the real scanned tree, removed in a finally
   // so a failed assertion cannot leave it behind. Not named *.test.ts on purpose: vitest must not
   // collect it, and the guard must still scan it — which is the "scans helper files too" rule.
+  // A `finally` does not cover a killed process, so an abort here leaves the probe on disk. That
+  // residue is loud, not silent: `check:ports` goes red on it and `git status` shows it, and the
+  // name says what it is. No test file but this one runs the port guard, so the window is this
+  // file's own, not a race with the rest of a parallel `vitest run`.
   function withProbe<T>(relDir: string, source: string, body: () => T): T {
     const probe = join(root, relDir, 'zz-port-guard-probe.ts');
     writeFileSync(probe, source);
@@ -351,27 +331,6 @@ describe('the bound-port guard as a script', () => {
         expect(run.status).toBe(0);
       },
     );
-  });
-
-  // The gap by directory, not by file: #68 and #80 added tests/tools and tests/plugin, and neither
-  // was reachable from the old root. One probe per directory that holds tracked test sources, so a
-  // future directory is covered the day it appears rather than the day someone remembers it.
-  it('reaches every directory of the test tree, at every depth', () => {
-    const tracked = spawnSync('git', ['ls-files', 'tests/**/*.ts', 'tests/*.ts'], {
-      cwd: root,
-      encoding: 'utf8',
-    });
-    expect(tracked.status, tracked.stderr).toBe(0);
-    const dirs = [...new Set(tracked.stdout.trim().split('\n').map((f) => dirname(f)))].sort();
-    expect(dirs.length).toBeGreaterThan(5);
-
-    for (const dir of dirs) {
-      withProbe(dir, `${ACQUIRES}${BOUND}\n`, () => {
-        const run = runGuard(wiredRoot());
-        expect(run.status, dir).toBe(1);
-        expect(run.stderr, dir).toContain(`${dir}/zz-port-guard-probe.ts:2 ${BOUND}`);
-      });
-    }
   });
 
   // The empty string is a root only in the sense that resolve() accepts it, and recursion is what
