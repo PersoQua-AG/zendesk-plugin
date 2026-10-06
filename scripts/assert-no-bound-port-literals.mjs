@@ -67,13 +67,16 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // Exactly one, not "at least one": a second root used to be dropped without a word, so
 // `check:ports tests/auth tests/plugin` would have guarded half of what it named and said nothing.
 // The empty string is not a root either — `resolve(root, '')` is the repository root, which a
-// recursive scan walks whole (measured on b9f0615 with dependencies installed: 1909 .ts files,
-// 1634 of them under node_modules, 21 findings there). The sibling guard refuses it too (#76).
+// recursive scan walks whole (measured on c3ab1c1 with dependencies installed and the directory
+// skip below in place: 4109 files scanned, 1910 of them .ts, 1634 .ts under node_modules).
+// The sibling guard refuses it too (#76).
 //
 // OPEN, DELIBERATELY: `.`, `./` and the absolute repository path ARE accepted. All three are
 // ancestors of the allocator and therefore marked by design, they scan more than the wired root
-// and so can hide nothing, and with dependencies installed they are loud rather than silent — the
-// first of those 21 findings is somebody else's documentation in @types/node. Narrowing the root
+// and so can hide nothing, and with dependencies installed they are loud rather than silent —
+// measured: exit 1 with 27 findings, 25 of them under node_modules (19 in @types/node alone, all
+// of them somebody else's documentation) and 2 in this script's own prose and regex, which `.`
+// reaches because the filter now takes .mjs and `tests` never did. Narrowing the root
 // back to `tests/auth` is not silent either, although nothing refuses it at runtime: the exact
 // wiring in package.json is pinned by tests/plugin/bound-port-literals-guard.test.ts.
 if (process.argv.length !== 3 || !process.argv[2]) {
@@ -121,10 +124,18 @@ for (const file of files) {
   try {
     sources.push([path, readFileSync(path, 'utf8')]);
   } catch (err) {
-    // Exit 2, not 1. An unreadable entry — a mode-000 file, or a directory named `x.ts` — used to
-    // crash here with exit 1, the very code that means "a fixed port was found". "Could not look"
-    // must not be spelled like "looked and found"; tests/auth/login-harness.ts draws the same line
-    // in its probe child, 1 for the expected refusal and 2 for every other failure.
+    // A DIRECTORY IS NOT AN UNREADABLE FILE (#82 follow-up). `node_modules/ipaddr.js` is a
+    // directory whose name ends in a source extension, and since the filter grew the JS spellings
+    // it matches: the whole gate ended in exit 2 before it printed a single line. Skipping it
+    // costs nothing — readdirSync already walked into it, so its contents are in `entries` and are
+    // scanned on their own. Decided over naming the limit in prose, because a package named
+    // `anything.js` is ordinary and the gate must not be an infrastructure failure next to one.
+    if (err.code === 'EISDIR') continue;
+    // Exit 2, not 1, for everything else — a mode-000 file, a dangling symlink. An unreadable
+    // entry used to crash here with exit 1, the very code that means "a fixed port was found".
+    // "Could not look" must not be spelled like "looked and found"; tests/auth/login-harness.ts
+    // draws the same line in its probe child, 1 for the expected refusal and 2 for every other
+    // failure.
     console.error(`Cannot read ${show(path)}: ${err.code ?? err.message}.`);
     process.exit(2);
   }
@@ -146,8 +157,10 @@ const findings = sources.flatMap(([path, source]) =>
 // Printed in every outcome, pass or fail: a green line that names the tree and the count is the
 // only way a reader can tell "clean" from "looked at almost nothing". On stderr when the tree is
 // not the guarded one: a run that ends in 1 must leave nothing on stdout that reads like a report.
+// The count is what was READ, not what matched the name filter, so a skipped directory such as
+// `node_modules/ipaddr.js` is not reported as a file somebody looked at.
 (marked ? console.log : console.error)(
-  `Bound port literals in ${show(target)}/: ${files.length} files scanned.`,
+  `Bound port literals in ${show(target)}/: ${sources.length} files scanned.`,
 );
 
 if (findings.length > 0) {
@@ -163,7 +176,7 @@ if (findings.length > 0) {
 // look like an ordinary hit, and the reader would fix the fixture instead of the argument.
 if (!marked) {
   console.error(`Not the guarded tree: nothing under ${show(target)} defines freePort().`);
-  console.error(`${files.length} source file(s) looked at. A tree that does not own the port`);
+  console.error(`${sources.length} source file(s) looked at. A tree that does not own the port`);
   console.error('allocator is not the tree this guard is for, so a clean result here would mean');
   console.error('nothing. Name the tree that defines freePort(), the one package.json wires.');
 }

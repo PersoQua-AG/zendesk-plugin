@@ -1,6 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +51,13 @@ function runGuard(...args: string[]) {
 
 // Findings are repo-relative, so a temp directory outside the repo is named by its way out of it.
 const at = (dir: string, file: string) => relative(root, join(dir, file));
+
+// MARKED IS WHAT THE RUN SAID, NOT WHAT IT FAILED TO SAY. The script puts its report line on
+// stdout for a guarded tree and on stderr for every other, so the line's presence on stdout IS the
+// mark. This used to be spelled `!stderr.includes('Not the guarded tree')`, and that reading
+// counted every abort as a guarded tree: an exit-2 run prints neither notice. Pinned by the case
+// 'does not count an aborted run as a marked tree' below, which the old spelling fails.
+const isMarked = (run: { stdout: string }) => run.stdout.includes('Bound port literals in ');
 
 // THE SCAN ROOT IS READ OUT OF package.json, NEVER RETYPED (#82). Every case that claims something
 // about the real gate takes its argument from here, so a case cannot agree with a wiring that no
@@ -94,16 +109,19 @@ describe('the bound-port guard as a script', () => {
 
     // THE SWEPT PROPERTY IS THE MARK, NOT THE EXIT CODE, and the difference is measured rather
     // than theoretical: with dependencies installed, `.` is a MARKED root that exits 1 anyway,
-    // because node_modules is full of literals — 1909 .ts files are reachable from `.` there,
-    // 1634 of them under node_modules, with 21 findings in @types/node alone, all of them somebody
-    // else's documentation. (A count of this repository's own tracked .ts files is a different
-    // number and is not needed here.) An exit-0 sweep would therefore have asserted
+    // because node_modules is full of literals. Measured on c3ab1c1 plus this commit's directory
+    // skip: `.` scans 4109 files (1910 of them .ts, 1634 .ts under node_modules) and exits 1 with
+    // 27 findings — 19 in @types/node alone, all of them somebody else's documentation. (A count
+    // of this repository's own tracked .ts files is a different number and is not needed here.)
+    // Without the skip the same run ended at exit 2 on the directory `node_modules/ipaddr.js`
+    // before printing anything, which is what made the old `marks` spelling look green.
+    // An exit-0 sweep would therefore have asserted
     // `['tests', 'tests/auth']` locally with dependencies present and all three without them — one
     // tree, two answers by install state, the shape #87 found in a case-folding `existsSync`.
     //
     // ONE RUN PER ROOT, read three ways. Each root used to be spawned three or four times.
     const runs = new Map(roots.map((d) => [d, runGuard(d)]));
-    const marks = (d: string) => !runs.get(d)!.stderr.includes('Not the guarded tree');
+    const marks = (d: string) => isMarked(runs.get(d)!);
     expect(roots.filter(marks).sort()).toEqual([...ancestors].sort());
     // Exit 0 is possible ONLY in a marked tree, and the wired root is one that actually reaches it.
     expect(roots.filter((d) => runs.get(d)!.status === 0).every(marks)).toBe(true);
@@ -145,14 +163,49 @@ describe('the bound-port guard as a script', () => {
   });
 
   // "Could not look" must not be spelled like "looked and found": both used to exit 1, and a
-  // stack trace is not a message. A directory named `subdir.ts` is an entry readFileSync refuses.
+  // stack trace is not a message. The unreadable entry is a dangling symlink, not the directory
+  // `subdir.ts` this case used to build: a directory is skipped now (see below), and a mode-000
+  // file is readable again inside a CI container that runs as root.
   it('separates an unreadable file from a finding, by exit code', () => {
     const dir = fixture({ 'ok.ts': `${ACQUIRES}${BIND('port')};` });
-    mkdirSync(join(dir, 'subdir.ts'));
+    symlinkSync(join(dir, 'nowhere'), join(dir, 'dangling.ts'));
     const { status, stderr } = runGuard(dir);
     expect(status).toBe(2);
     expect(stderr).toContain('Cannot read');
     expect(stderr).not.toContain('at readFileSync');
+  });
+
+  // AN ABORT IS NOT A MARK. The sweep's predicate used to read the ABSENCE of 'Not the guarded
+  // tree', and an exit-2 run prints neither notice — so every abort was counted as a guarded tree.
+  // This fixture is unmarked (nothing defines freePort()) and aborts, which is the combination the
+  // old spelling got wrong.
+  it('does not count an aborted run as a marked tree', () => {
+    const dir = fixture({ 'p.ts': `const p = ${BIND('freePort()')};\n` });
+    symlinkSync(join(dir, 'nowhere'), join(dir, 'dangling.ts'));
+    const run = runGuard(dir);
+    expect(run.status).toBe(2);
+    expect(run.stdout).toBe('');
+    // The blind spot itself, stated: the sentence the old predicate looked for is absent here.
+    expect(run.stderr).not.toContain('Not the guarded tree');
+    expect(isMarked(run)).toBe(false);
+  });
+
+  // A DIRECTORY IS NOT AN UNREADABLE FILE. `node_modules/ipaddr.js` is a directory, and once the
+  // filter took .js it matched: measured on c3ab1c1 at the repository root, the gate printed
+  // `Cannot read node_modules/ipaddr.js: EISDIR.` and exited 2 with an empty stdout — before any
+  // scan report, before any mark. A package named `anything.js` is ordinary; the gate must not
+  // turn one into an infrastructure failure.
+  it('skips a directory whose name ends in a source extension, and still scans into it', () => {
+    const dir = fixture({ 'ok.ts': ACQUIRES });
+    mkdirSync(join(dir, 'ipaddr.js'));
+    writeFileSync(join(dir, 'ipaddr.js', 'index.ts'), `${BOUND}\n`);
+    const run = runGuard(dir);
+    expect(run.stderr).not.toContain('EISDIR');
+    // Skipped, not stepped over: the walk is recursive, so the file INSIDE it is still a finding,
+    // and the directory itself is not counted as a file somebody looked at.
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain(`${at(dir, join('ipaddr.js', 'index.ts'))}:1 ${BOUND}`);
+    expect(run.stdout).toContain('2 files scanned.');
   });
 
   // The rule itself, unchanged from the predecessor: port 0 is chosen by the OS and 70_000 is
@@ -296,10 +349,12 @@ describe('the bound-port guard as a script', () => {
   // The probe is a real file in a real subdirectory of the real scanned tree, removed in a finally
   // so a failed assertion cannot leave it behind. Not named *.test.ts on purpose: vitest must not
   // collect it, and the guard must still scan it — which is the "scans helper files too" rule.
-  // A `finally` does not cover a killed process, so an abort here leaves the probe on disk. That
-  // residue is loud, not silent: `check:ports` goes red on it and `git status` shows it, and the
-  // name says what it is. No test file but this one runs the port guard, so the window is this
-  // file's own, not a race with the rest of a parallel `vitest run`.
+  // A `finally` does not cover a killed process, so an abort here leaves the probe on disk. How
+  // loud that residue is depends on which probe it is, and only one of the two is caught by the
+  // gate: the bound-literal probe makes `check:ports` go red, the `deps(freePort())` probe leaves
+  // it green (measured: exit 0) and is shown by `git status` alone. Both are named for what they
+  // are, which is what makes the quiet one survivable. No test file but this one runs the port
+  // guard, so the window is this file's own, not a race with the rest of a parallel `vitest run`.
   function withProbe<T>(relDir: string, source: string, body: () => T): T {
     const probe = join(root, relDir, 'zz-port-guard-probe.ts');
     writeFileSync(probe, source);
