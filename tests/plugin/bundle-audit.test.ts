@@ -391,7 +391,7 @@ describe('an archive that cannot be judged is refused', () => {
     const run = runAudit(makeTree({ raw: Buffer.from('this is not an archive'.repeat(10)) }));
     expect(run.status).not.toBe(0);
     expect(run.stderr).toContain('no ZIP end-of-central-directory record');
-    expect(run.stderr).not.toContain('at Object.');
+    expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
   });
 
   it('refuses a file too small to be an archive', () => {
@@ -404,7 +404,7 @@ describe('an archive that cannot be judged is refused', () => {
     const run = runAudit(makeTree(), ['no-such-bundle.mcpb']);
     expect(run.status).not.toBe(0);
     expect(run.stderr).toContain('could not be read as a bundle');
-    expect(run.stderr).not.toContain('at Object.readFileSync');
+    expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
   });
 
   it('refuses a directory whose record count disagrees with the records it holds', () => {

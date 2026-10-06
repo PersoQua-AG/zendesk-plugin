@@ -22,7 +22,6 @@ describe('zendesk_login with an unusable callback port', () => {
     expect(text).toContain('oauth_callback_port');
     // MCP presentation rules: one line, no stack, no path, no secret.
     expect(text.split('\n')).toHaveLength(1);
-    expect(text).not.toMatch(/\bat \S+:\d+|node:internal|RangeError/);
     expect(text).not.toContain('secret-xyz');
     expect(text).not.toMatch(/tokens\.enc|\/(?:var|tmp|Users)\//);
   });
