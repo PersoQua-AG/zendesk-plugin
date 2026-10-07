@@ -518,16 +518,19 @@ function clearStaleArtifact() {
   // clearing runs only on an otherwise sound tree), so it is one name, not a list.
   const gone = [];
   for (const stale of [artifactPath, checksumPath]) {
+    // `state` is only ever asked "was it there", because that is the only question whose answer
+    // changes a message. A separate 'unknown' arm was written here and taken back out: it is
+    // unreachable without `root` itself being unreadable, in which case the rmSync below fails too
+    // and reports "could not be cleared", which is true. A branch no fixture can reach is a branch
+    // no fixture can pin — the same reasoning that removed the name re-check in the quarantine.
+    const state = nameState(stale);
     try {
-      // `force: true` suppresses ENOENT and nothing else. A stale artifact that is a non-empty
-      // directory makes this throw, and an unwritable parent makes it throw EACCES — unguarded,
-      // that throw ended the run as a stack trace. A tree whose artifact slot cannot be cleared
-      // cannot be released from, whatever the bundle holds.
-      const wasThere = nameState(stale) === 'taken';
-      // `force: true` suppresses ENOENT and nothing else: a slot that is a non-empty directory
-      // throws, and an unwritable parent throws EACCES.
+      // `force: true` suppresses ENOENT and nothing else: a slot that is a DIRECTORY throws
+      // ERR_FS_EISDIR whether it is empty or not (measured — an earlier comment here said
+      // "non-empty", which is wrong), and an unwritable parent throws EACCES. Unguarded, that
+      // throw ended the run as a stack trace.
       rmSync(stale, { force: true });
-      if (wasThere) gone.push(basename(stale));
+      if (state === 'taken') gone.push(basename(stale));
     } catch (error) {
       treeFaults.push(
         `the stale artifact ${basename(stale)} could not be cleared: ${error.code ?? error.message}` +
@@ -809,13 +812,22 @@ const sha256 = createHash('sha256').update(bundle).digest('hex');
 // this tree — but it does not get to claim this tree's release name. The slot is in `root` because
 // the version is, and writing it from a downloaded bundle re-pointed this checkout's published
 // release at a file from somewhere else. Measured.
+//
+// A SYMLINK IN `root` UNDER THE PUBLISHABLE NAME IS THIS TREE'S BUNDLE, deliberately: the operator
+// aimed this tree's own publishable name at that file, and the quarantine path treats such a link
+// the same way (it moves the target, not only the link). Decided and pinned, not left to be found.
+//
+// `writing` names the path a failure is ABOUT. It named the artifact unconditionally, so a
+// checksum write that failed was reported against the wrong file.
+let writing = artifactPath;
 if (ownBundle) try {
   writeFileSync(artifactPath, bundle);
+  writing = checksumPath;
   // `shasum -a 256 -c <file>.sha256` format: digest, two spaces, the name it applies to.
   writeFileSync(checksumPath, `${sha256}  ${basename(artifactPath)}\n`);
 } catch (error) {
   console.error(`${basename(bundlePath)} PASSED the audit, and this tree could not write the artifact.`);
-  console.error(`  - ${basename(artifactPath)}: ${error.code ?? error.message}`);
+  console.error(`  - ${basename(writing)}: ${error.code ?? error.message}`);
   // A HALF-WRITTEN RELEASE IS WORSE THAN NO RELEASE AND WORSE THAN THE STACK TRACE. If the
   // artifact landed and the checksum did not, what is left on disk is a file under the release
   // name with nothing to verify it against — and the stale pair was already cleared, so there is

@@ -61,8 +61,12 @@ describe('freePort() and a foreign listener in the band', () => {
   //
   // THE ATTEMPT LOG STAYS. It is what turned "20 attempts" from a count into a measurement, and
   // the next failure here has to arrive with its ports and its reasons attached.
+  // `steppedOver` is the ports the walk had to pass by, which is the ONLY set `freePort()` may
+  // legitimately answer from without having examined the stranger. See the assertion below.
+  const steppedOver: number[] = [];
   async function foreignListenerOnNextCandidate(host?: string): Promise<number> {
     const refused: string[] = [];
+    steppedOver.length = 0;
     const anchor = freePort();
     // IT WRAPS, like the cursor it follows. `for (next = anchor + 1; next <= PORT_BAND_LAST)` ran
     // zero times when freePort() returned the last port of the band, and the case then failed
@@ -77,6 +81,7 @@ describe('freePort() and a foreign listener in the band', () => {
         writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' });
       } catch (err) {
         refused.push(`${next} claim ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
+        steppedOver.push(next);
         continue;
       }
       try {
@@ -84,6 +89,7 @@ describe('freePort() and a foreign listener in the band', () => {
       } catch (err) {
         rmSync(portClaimPath(next), { force: true });
         refused.push(`${next} bind ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
+        steppedOver.push(next);
         continue;
       }
       rmSync(portClaimPath(next), { force: true });
@@ -118,18 +124,23 @@ describe('freePort() and a foreign listener in the band', () => {
         write.mockRestore();
       }
       expect(port).not.toBe(foreign);
-      // EITHER PROOF, and the disjunction is the honest shape rather than a weakening. The case is
-      // non-vacuous when freePort() reached `foreign` and said so. It can legitimately answer from
-      // BELOW `foreign` instead — the walk steps over ports other runs have claimed, and a
-      // concurrent worker exiting in between frees one of them (`sweepDeadClaims()` runs at module
-      // load in every worker). Demanding the skip line in that case would turn the old vacuous
-      // pass into a flake, which is the opposite of this ticket. So: it examined the stranger and
-      // skipped it, or it never got that far — and never getting that far is observable as
-      // `port < foreign`, not assumed.
+      // EITHER PROOF, and the second one is NAMED rather than inferred from the ordering. The case
+      // is non-vacuous when freePort() reached `foreign` and said so. It can legitimately answer
+      // from one of the ports the WALK stepped over instead — another run had claimed one and
+      // released it (`sweepDeadClaims()` runs at module load in every worker, and the bind-failure
+      // path here releases its own claim too). Demanding the skip line in that case would turn the
+      // old vacuous pass into a flake, which is the opposite of this ticket.
+      //
+      // `port < foreign` was the first spelling of that second proof and it was wrong twice: the
+      // walk WRAPS, so at the band edge `foreign` is numerically below `anchor` and a legitimate
+      // answer-from-below is numerically above it — red for no defect — while a port the walk
+      // stepped over after a failed BIND is below `foreign` with the stranger never examined —
+      // green for no reason. The set the walk actually passed by is neither.
       const examined = skips.join('').includes(`skipping band port ${foreign}`);
       expect(
-        examined || port < foreign,
-        `freePort() returned ${port}, did not examine ${foreign}, and did not answer from below it`,
+        examined || steppedOver.includes(port),
+        `freePort() returned ${port}; it did not examine ${foreign} and ${port} is not one of the ` +
+          `${steppedOver.length} ports the walk stepped over`,
       ).toBe(true);
       opened.push(await bind(port));
     });

@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateRawSync } from 'node:zlib';
 import { constants } from 'node:buffer';
@@ -1009,18 +1009,29 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
   // the whole validation was deletable with the suite green. These three cases are why it cannot
   // be deleted any more. Each one was a live blocker before it was pinned.
   describe('the declared version has to be usable as a file name', () => {
+    // THE SHAPE THAT ACTUALLY ESCAPES, and the first version of this case did not use it:
+    // `../VICTIM` yields `zendesk-../VICTIM.mcpb`, where `zendesk-..` is a literal segment that
+    // goes nowhere. `0/../../../VICTIM` does — measured against the ablated script: `artifact
+    // ../../VICTIM.mcpb`, exit 0, and a file three levels above `root` overwritten. The victim is
+    // therefore placed where the artifact path really lands.
     it('refuses a version with path segments, and deletes nothing outside the tree', () => {
       const tree = makeTree();
-      // Four levels above the tree, which is where `../../../../VICTIM` pointed.
-      const victim = join(tree.dir, 'VICTIM-1.0.0.mcpb');
+      const outside = mkdtempSync(join(tmpdir(), 'audit-victim-'));
+      temps.push(outside);
+      const victim = join(outside, 'VICTIM.mcpb');
       writeFileSync(victim, 'somebody else\'s file');
-      writeFileSync(join(tree.dir, 'manifest.json'), JSON.stringify({ name: 't', version: '../VICTIM' }));
-      writeFileSync(join(tree.dir, 'package.json'), JSON.stringify({ name: 't', version: '../VICTIM' }));
+      writeFileSync(`${victim}.sha256`, 'and its checksum');
+      // Relative from the tree to the victim, as a version: `zendesk-<version>.mcpb` then resolves
+      // onto the victim itself.
+      const escape = `0${relative(tree.dir, victim).replace(/\.mcpb$/, '')}`;
+      writeFileSync(join(tree.dir, 'manifest.json'), JSON.stringify({ name: 't', version: escape }));
+      writeFileSync(join(tree.dir, 'package.json'), JSON.stringify({ name: 't', version: escape }));
       const run = runAudit(tree);
       expect(run.status).toBe(2);
       expect(run.stderr).toContain('is not a usable file-name component');
       expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
       expect(readFileSync(victim, 'utf8')).toBe('somebody else\'s file');
+      expect(readFileSync(`${victim}.sha256`, 'utf8')).toBe('and its checksum');
       expect(existsSync(tree.bundle)).toBe(true);
     });
 
@@ -1082,6 +1093,65 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(run.stderr).not.toContain('Nothing was deleted');
     expect(run.stderr).toContain('was already removed before this was found');
     expect(run.stderr).toContain(basename(tree.artifact));
+  });
+
+  // `wasThere` was pinned by nothing: replacing it with `true` left 188/188 green. Ablated, with
+  // the artifact slot EMPTY and only the checksum slot in the way, the run claimed a release that
+  // never existed had been destroyed.
+  it('does not claim it removed an artifact that was never there', () => {
+    const tree = makeTree();
+    mkdirSync(tree.checksum); // a directory in the slot: rmSync(force) throws ERR_FS_EISDIR
+    const run = runAudit(tree);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('could not be cleared');
+    expect(run.stderr).not.toContain('was already removed');
+    expect(run.stderr).not.toContain(basename(tree.artifact) + ' was');
+  });
+
+  // THE SAME PARAGRAPH IN THE OTHER ARM. The deletion notice used to be interpolated only into the
+  // "no bundle finding" sentence, so a run with a bundle finding AND a partial clearing deleted the
+  // operator's artifact and said nothing at all about it. It rides the clearing's own fault line
+  // now, which is printed in both arms.
+  it('names the deletion even when the bundle also failed', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    writeFileSync(tree.artifact, 'the release this tree published');
+    mkdirSync(tree.checksum);
+    const run = runAudit(tree);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('CONTAMINATED');
+    expect(existsSync(tree.artifact), 'the artifact was removed, as the code intends').toBe(false);
+    expect(run.stderr).toContain('was already removed before this was found');
+    expect(run.stderr).toContain(basename(tree.artifact));
+  });
+
+  // A foreign bundle gets the FULL report. The coverage disclosure is the part its caller most
+  // needs — they cannot see this tree — and an early exit had been skipping it.
+  it('gives a foreign bundle the coverage disclosure it cannot get anywhere else', () => {
+    const tree = makeTree();
+    const elsewhere = mkdtempSync(join(tmpdir(), 'audit-coverage-'));
+    temps.push(elsewhere);
+    copyFileSync(tree.bundle, join(elsewhere, 'zendesk.mcpb'));
+    const run = runAudit(tree, ['./zendesk.mcpb'], elsewhere);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain('Accepted 6 paths');
+    expect(run.stdout).toMatch(/scanned\s+\d+ of \d+ entries/);
+    expect(run.stdout).toContain('No artifact was written');
+  });
+
+  // A symlink in `root` under the publishable name IS this tree's bundle, by decision: the operator
+  // aimed this tree's own name at that file. Pinned so the decision is visible rather than found.
+  it('treats a symlink in the tree under the publishable name as this tree\'s own', () => {
+    const tree = makeTree();
+    const elsewhere = mkdtempSync(join(tmpdir(), 'audit-linked-'));
+    temps.push(elsewhere);
+    const real = join(elsewhere, 'downloaded.mcpb');
+    copyFileSync(tree.bundle, real);
+    rmSync(tree.bundle);
+    symlinkSync(real, tree.bundle);
+    const run = runAudit(tree);
+    expect(run.status, run.stderr).toBe(0);
+    expect(existsSync(tree.artifact)).toBe(true);
+    expect(run.stdout).not.toContain('No artifact was written');
   });
 
   // "No artifact and no checksum were produced" is the only line an operator reads about

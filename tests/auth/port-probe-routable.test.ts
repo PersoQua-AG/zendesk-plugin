@@ -58,4 +58,18 @@ describe('portHeldOn() and a stranger on a routable address', () => {
       `only the discovered addresses can see a stranger on ${host}:${port} from a loopback probe`,
     ).toBe(host);
   });
+
+  // A NARROWED STRICT SET MAY NOT NARROW WHAT IS PROBED, which is the invariant written above
+  // portHeldOn. The de-duplication of discovered addresses subtracted the default CONSTANT rather
+  // than what the caller named, so `portHeldOn(p, ['127.0.0.1'])` dropped `::1` from the probe —
+  // it is in the constant — and an `::1` holder was answered FREE. Reverting that one filter left
+  // the whole suite byte-identical, so the rule had no case of its own. This is it.
+  it('still sees a holder on an address the caller did not name', async () => {
+    const port = freePort();
+    const stranger = createServer();
+    stranger.listen(port, '::1');
+    await once(stranger, 'listening');
+    opened.push(stranger);
+    expect(portHeldOn(port, ['127.0.0.1']), `a stranger is listening on [::1]:${port}`).not.toBe('');
+  });
 });
