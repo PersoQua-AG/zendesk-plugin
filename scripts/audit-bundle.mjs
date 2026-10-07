@@ -529,7 +529,8 @@ if (problems.length > 0) {
   if (bundleIsUnfit && nameIsTaken(bundlePath)) {
     quarantined = `${bundlePath}.REJECTED`;
     try {
-      rmSync(quarantined, { force: true });
+      // `recursive` so an unpacked earlier quarantine in the slot cannot keep the rename from running.
+      rmSync(quarantined, { recursive: true, force: true });
       renameSync(bundlePath, quarantined);
     } catch (error) {
       quarantined = null;

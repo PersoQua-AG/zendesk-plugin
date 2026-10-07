@@ -524,21 +524,19 @@ describe('a bundle the audit could not read', () => {
   });
 });
 
-describe('a quarantine that cannot be performed', () => {
-  it('exits 2, not 1: this is a tree to fix by hand, not a bundle to fix', () => {
+describe('a quarantine slot somebody has already unpacked', () => {
+  // A non-empty directory in the slot answered the clearing rmSync with EISDIR, so the rename never
+  // ran and the failed bundle kept its publishable name — the one outcome #90 exists to forbid.
+  it('still takes the failed bundle out of its publishable name', () => {
     const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
-    // The .REJECTED slot is a non-empty directory, so the `rmSync` that clears it throws
-    // ERR_FS_EISDIR inside the quarantine's own try. Nothing can be renamed, and the publishable
-    // name survives — which is precisely why the operator has to be told to act by hand. A
-    // directory rather than a mode bit, because a mode bit does not stop root.
     mkdirSync(`${tree.bundle}.REJECTED`);
     writeFileSync(join(`${tree.bundle}.REJECTED`, 'occupant'), 'left by an earlier run');
     const run = runAudit(tree);
 
-    expect(run.status).toBe(2);
-    expect(run.stderr).toContain('could not quarantine zendesk.mcpb');
-    expect(run.stderr).toContain('DELETE IT BY HAND');
-    expect(existsSync(tree.bundle), 'the uploadable name is still there').toBe(true);
+    expect(existsSync(tree.bundle), 'the uploadable name is still there').toBe(false);
+    expect(lstatSync(`${tree.bundle}.REJECTED`).isFile(), 'the slot is not the quarantined bundle').toBe(true);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('CONTAMINATED');
     expectNoSecretEchoed(run);
   });
 });
