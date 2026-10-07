@@ -21246,7 +21246,6 @@ var USER_CONFIG_FIELDS = {
   ZENDESK_WORK_HOURS: "work_hours",
   ZENDESK_WORKDAYS: "workdays"
 };
-var USER_CONFIG_FIELD_BY_ENV = USER_CONFIG_FIELDS;
 var PLACEHOLDER = /^\$\{[^}]*\}$/;
 function isPlaceholder(value) {
   return typeof value === "string" && PLACEHOLDER.test(value);
@@ -21510,10 +21509,10 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
   });
 }
 var MAX_ERROR_BODY_CHARS = 200;
-var LINE_BREAK = /[\n\r\u0085\u2028\u2029]/;
-var CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]/g;
+var LINE_BREAK = /[\n\r\u000B\u000C\u001C-\u001E\u0085\u2028\u2029]/;
+var CONTROL_OR_BIDI = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
 function summarizeErrorBody(raw) {
-  const firstLine = raw.split(LINE_BREAK)[0].replace(CONTROL_OR_BIDI, "").trim();
+  const firstLine = raw.split(LINE_BREAK)[0].replaceAll("	", " ").replace(CONTROL_OR_BIDI, "").trim();
   if (/[<>]/.test(firstLine)) return "(non-text response body omitted)";
   return firstLine.length > MAX_ERROR_BODY_CHARS ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS).replace(/[\uD800-\uDBFF]$/, "")}\u2026 (truncated)` : firstLine;
 }
@@ -29756,16 +29755,22 @@ function registerPrompts(server) {
 // src/server.ts
 import { argv } from "node:process";
 import { join as join3 } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { statSync as statSync2 } from "node:fs";
 var DEFAULT_RATE_LIMIT_RPM = 400;
 var INCREMENTAL_RATE_LIMIT_RPM = 10;
 var SECURITY_LEVELS = ["strict", "standard", "off"];
 function parseSecurityLevel(raw) {
   const value = raw?.trim().toLowerCase();
-  if (!value) return "standard";
+  if (!value) {
+    warnConfig(
+      `ZENDESK_SECURITY_LEVEL is not set \u2014 injection screening runs at standard, the shipped level. The installed plugin declares no configuration field for it, so only a hand-started server or the remote connector reads this variable (${SECURITY_LEVELS.join(" | ")}; README, Security).`
+    );
+    return "standard";
+  }
   if (SECURITY_LEVELS.includes(value)) return value;
   warnConfig(
-    `ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(" | ")} (extension configuration field "${USER_CONFIG_FIELD_BY_ENV.ZENDESK_SECURITY_LEVEL}") \u2014 using strict, the strictest level, rather than silently screening less.`
+    `ZENDESK_SECURITY_LEVEL ${JSON.stringify(raw)} is not one of ${SECURITY_LEVELS.join(" | ")} \u2014 using strict, the strictest level, rather than silently screening less.`
   );
   return "strict";
 }
@@ -29774,7 +29779,7 @@ function parseMarkdownDefault(raw) {
   if (!value) return true;
   if (value === "true" || value === "false") return value === "true";
   warnConfig(
-    `ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false (extension configuration field "${USER_CONFIG_FIELD_BY_ENV.ZENDESK_MARKDOWN_CONVERSION}") \u2014 using true, the shipped default, rather than reading it as a "no".`
+    `ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false \u2014 using true, the shipped default, rather than reading it as a "no".`
   );
   return true;
 }
@@ -29882,7 +29887,13 @@ function createServer3(rawEnv = process.env, deps = {}) {
   registerPrompts(server);
   return { server, ctx, rateLimiter, incrementalRateLimiter };
 }
-if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) {
+function startedAsEntrypoint() {
+  const started = argv[1] ? statSync2(argv[1], { throwIfNoEntry: false }) : void 0;
+  if (!started) return false;
+  const self = statSync2(fileURLToPath(import.meta.url));
+  return started.dev === self.dev && started.ino === self.ino;
+}
+if (startedAsEntrypoint()) {
   const { server } = createServer3();
   await server.connect(new StdioServerTransport());
 }

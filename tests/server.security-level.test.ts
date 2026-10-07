@@ -61,7 +61,22 @@ describe('security level — an unrecognized value is never a silent downgrade',
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(`ZENDESK_SECURITY_LEVEL "${value}"`);
     expect(warnings[0]).toContain('strict | standard | off');
-    expect(warnings[0]).toContain('"security_level"');
+    // …and NOT a configuration field. The installed plugin declares none, so naming one here
+    // contradicted the absence branch, which says in so many words that there is no field.
+    // Asserted on the phrase, not on the field name: the message legitimately contains
+    // ZENDESK_SECURITY_LEVEL, so a name check would only be passing on letter case.
+    expect(warnings[0]).not.toContain('configuration field');
+  });
+
+  // The value is attacker-adjacent text on the operator's own channel, so it is quoted rather than
+  // interpolated: measured, ZENDESK_SECURITY_LEVEL='str\nict' used to produce a forged second log
+  // line. Same injection class as the quoted token-error body in src/auth/oauth-flow.ts.
+  it('cannot forge a second log line out of a value that carries a newline', () => {
+    const { securityLevel, warnings } = build('str\nict');
+    expect(securityLevel).toBe('strict');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain('\n');
+    expect(warnings[0]).toContain('"str\\nict"');
   });
 
   // stdout is the MCP stdio transport (server.ts connects StdioServerTransport to it); a warning
@@ -88,15 +103,27 @@ describe('security level — values that must stay silent', () => {
     expect(warnings).toEqual([]);
   });
 
-  // Absent is not a typo — it is the default both manifests declare. Degrading it to 'strict' would
-  // change the shipped behaviour of every untouched installation.
+  // Absent is not a typo — it is the shipped level. Degrading it to 'strict' would change the
+  // behaviour of every untouched installation, so the LEVEL stays 'standard'.
+  //
+  // What changed with #93 is that the resolution is no longer silent. These three values are what an
+  // operator who believes they configured `strict` actually leaves behind: nothing the server can
+  // read. Under the old behaviour that belief had no symptom anywhere — the strict-only patterns
+  // simply never fired. So absence is the one case the start has to say out loud, while a value that
+  // WAS read stays silent (the block above): it proves itself through the level it produced.
   it.each([
     ['unset', undefined],
     ['blank', ''],
     ['an unsubstituted placeholder', '${user_config.security_level}'],
-  ])('treats %s as the shipped default, standard, without a warning', (_label, value) => {
+  ])('treats %s as the shipped default, standard, and says so rather than assuming it', (_label, value) => {
     const { securityLevel, warnings } = build(value);
     expect(securityLevel).toBe('standard');
-    expect(warnings).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    // Which level is in effect, that nothing configured it, and what to set instead — the three
+    // things an operator needs to notice the belief was wrong. Asserted as substance, not wording.
+    expect(warnings[0]).toContain('ZENDESK_SECURITY_LEVEL is not set');
+    expect(warnings[0]).toContain('standard');
+    expect(warnings[0]).toContain('strict | standard | off');
+    expect(warnings[0]).toContain('no configuration field');
   });
 });
