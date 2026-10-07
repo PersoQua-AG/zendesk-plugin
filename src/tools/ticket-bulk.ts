@@ -5,7 +5,7 @@ import { pollJobToCompletion, type JobStatus, type JobPollerOptions } from '../c
 import type { SecurityLevel } from '../security/screen.js';
 import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import type { TicketUpdateFields } from './tickets.js';
-import { readStatuses, transitionRefusal } from './ticket-status.js';
+import { readStatuses, refusalReason, BIRTH_STATE_REFUSAL, type RefusalReason } from './ticket-status.js';
 
 type PollOverrides = Partial<Pick<JobPollerOptions, 'sleep' | 'intervalMs' | 'maxAttempts'>>;
 
@@ -57,6 +57,18 @@ export async function createTicketsBulk(
   return runJob(client, cache, 'zendesk_create_tickets_bulk', '/tickets/create_many.json', { tickets: params.tickets }, 'POST', poll, securityLevel);
 }
 
+// The bulk wording for each refusal reason refusalReason can hand back after the read.
+function bulkCause(reason: RefusalReason, target: string): string {
+  switch (reason) {
+    case 'terminal':
+      return `Refused on a forbidden status transition to ${target}`;
+    case 'unpublished':
+      return 'Current status is not one of the published statuses, so the lifecycle rules could not be checked';
+    default:
+      return 'Current status could not be read, so the lifecycle rules could not be checked';
+  }
+}
+
 export async function updateTicketsBulk(
   client: ZendeskHttpClient,
   cache: ResponseCache,
@@ -76,31 +88,27 @@ export async function updateTicketsBulk(
     );
   }
   // #61: update_many shares one field set across up to 100 tickets, so the lifecycle table is
-  // checked per ticket and the refused ones are dropped from the batch and named in the result —
-  // a single forbidden ticket must neither be written nor cancel the rest of the batch.
+  // checked per ticket and the refused ones are dropped from the batch and named in the result.
   let ids = params.ids;
   let refusedNote = '';
   const target = params.fields.status;
   if (target !== undefined) {
-    // → new is refused from every state, so the batch needs no read and no per-id arithmetic: it
-    // ends here, with the SAME sentence the single-update path gives. The generic wrapper below
-    // would tell the model only that the batch was refused, not that `new` is the birth state and
-    // cannot be restored — which is the sentence skills/ticket-manager/SKILL.md:48 asks it to pass on.
-    if (target === 'new') throw new Error(transitionRefusal(null, 'new') as string);
+    // → new is refused from every state, so the batch needs no read, and it ends with the SAME
+    // sentence the single path gives: the generic wrapper below would not say `new` is the birth state.
+    if (target === 'new') throw new Error(BIRTH_STATE_REFUSAL);
     const statuses = await readStatuses(client, params.ids);
-    // Two causes, reported apart. An id show_many did not answer for (a deleted ticket, a truncated
-    // response, a record that did not parse) has no known status, so it is refused — but calling
-    // that "a forbidden status transition" sends the model to the linked-follow-up remedy for a
-    // ticket that may not exist. The lifecycle refusal is only for ids whose status was read.
-    const unreadable = params.ids.filter((id) => !statuses.has(id) || statuses.get(id) === null);
-    const unreadableSet = new Set(unreadable);
-    const forbidden = params.ids.filter((id) => !unreadableSet.has(id) && transitionRefusal(statuses.get(id) ?? null, target));
-    const refused = new Set([...unreadable, ...forbidden]);
-    if (refused.size > 0) {
+    // The judgment is refusalReason's alone — the causes are only GROUPED here, because one note
+    // must name the ids per cause: "forbidden transition" sends the model to the linked-follow-up
+    // remedy, which is wrong advice for a ticket show_many never answered for.
+    const refusedBy = new Map<RefusalReason, number[]>();
+    for (const id of params.ids) {
+      const reason = refusalReason(statuses.get(id) ?? null, target);
+      if (reason) refusedBy.set(reason, [...(refusedBy.get(reason) ?? []), id]);
+    }
+    if (refusedBy.size > 0) {
+      const refused = new Set([...refusedBy.values()].flat());
       ids = params.ids.filter((id) => !refused.has(id));
-      refusedNote =
-        (forbidden.length > 0 ? ` Refused on a forbidden status transition to ${target}, not written: ${forbidden.join(', ')}.` : '') +
-        (unreadable.length > 0 ? ` Current status could not be read, so the lifecycle rules could not be checked and these were not written: ${unreadable.join(', ')}.` : '');
+      refusedNote = [...refusedBy].map(([reason, rs]) => ` ${bulkCause(reason, target)}, not written: ${rs.join(', ')}.`).join('');
       if (ids.length === 0) throw new Error(`Refusing the bulk update — no ticket in the batch may move to ${target}.${refusedNote}`);
     }
   }

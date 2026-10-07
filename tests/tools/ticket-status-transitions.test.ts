@@ -206,6 +206,26 @@ describe('an unreadable current status refuses the write (#61, fail-closed)', ()
     expect(r.text).not.toMatch(/forbidden status transition/);
   });
 
+  // #61, QA round 2: the bulk path re-implemented the unreadable check, which made the shared
+  // decision's unknown-status arm unreachable from here — removing it left both bulk cases green.
+  // Both causes in one batch, reported apart, is what pins the bulk to the shared function.
+  it('reports an unreadable id and a closed id as two separate causes in one batch', async () => {
+    const r = await once(
+      'zendesk_update_tickets_bulk',
+      { ids: [1001, 1002, 1003], fields: { status: 'pending' }, force: true },
+      (c: Call, n: number): Response => {
+        if (c.path.includes('/tickets/show_many.json')) {
+          return json({ tickets: [{ id: 1002, status: 'closed' }, { id: 1003, status: 'open' }] });
+        }
+        return jobReply(n, [{ id: 1003, success: true }], 2);
+      },
+    );
+    expect(r.isError).toBe(false);
+    expect(r.text).toMatch(/Current status could not be read[^.]*1001/);
+    expect(r.text).toMatch(/forbidden status transition to pending[^.]*1002/);
+    expect(r.text).not.toMatch(/1003/);
+  });
+
   // Per RECORD, not per response: 1001 is malformed, 1002 is fine and must still be written.
   it('keeps the readable records when one record in show_many is malformed', async () => {
     const r = await once(
@@ -257,6 +277,8 @@ describe('a current status outside the published six refuses the write (#61, pos
     expect(r.calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
     // The note is produced on the same branch that drops the id from the update_many list, so it
     // is the proof 1001 was not written; the id list itself is asserted in ticket-bulk-update.test.ts.
-    expect(r.text).toMatch(/not written: 1001/);
+    expect(r.text).toMatch(/not one of the published statuses[^.]*1001/);
+    // Not the linked-follow-up remedy: this is not a closed ticket, it is a status nobody can judge.
+    expect(r.text).not.toMatch(/forbidden status transition/);
   });
 });

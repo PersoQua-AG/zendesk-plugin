@@ -23005,6 +23005,16 @@ async function createTicketsBulk(client, cache, params, poll = {}, securityLevel
   if (params.tickets.length === 0) throw new Error("At least one ticket is required for a bulk create.");
   return runJob(client, cache, "zendesk_create_tickets_bulk", "/tickets/create_many.json", { tickets: params.tickets }, "POST", poll, securityLevel);
 }
+function bulkCause(reason, target) {
+  switch (reason) {
+    case "terminal":
+      return `Refused on a forbidden status transition to ${target}`;
+    case "unpublished":
+      return "Current status is not one of the published statuses, so the lifecycle rules could not be checked";
+    default:
+      return "Current status could not be read, so the lifecycle rules could not be checked";
+  }
+}
 async function updateTicketsBulk(client, cache, params, poll = {}, securityLevel = "standard") {
   if (params.ids.length === 0) throw new Error("At least one ticket id is required for a bulk update.");
   if (!params.force) {
@@ -23016,15 +23026,17 @@ async function updateTicketsBulk(client, cache, params, poll = {}, securityLevel
   let refusedNote = "";
   const target = params.fields.status;
   if (target !== void 0) {
-    if (target === "new") throw new Error(transitionRefusal(null, "new"));
+    if (target === "new") throw new Error(BIRTH_STATE_REFUSAL);
     const statuses = await readStatuses(client, params.ids);
-    const unreadable2 = params.ids.filter((id) => !statuses.has(id) || statuses.get(id) === null);
-    const unreadableSet = new Set(unreadable2);
-    const forbidden = params.ids.filter((id) => !unreadableSet.has(id) && transitionRefusal(statuses.get(id) ?? null, target));
-    const refused = /* @__PURE__ */ new Set([...unreadable2, ...forbidden]);
-    if (refused.size > 0) {
+    const refusedBy = /* @__PURE__ */ new Map();
+    for (const id of params.ids) {
+      const reason = refusalReason(statuses.get(id) ?? null, target);
+      if (reason) refusedBy.set(reason, [...refusedBy.get(reason) ?? [], id]);
+    }
+    if (refusedBy.size > 0) {
+      const refused = new Set([...refusedBy.values()].flat());
       ids = params.ids.filter((id) => !refused.has(id));
-      refusedNote = (forbidden.length > 0 ? ` Refused on a forbidden status transition to ${target}, not written: ${forbidden.join(", ")}.` : "") + (unreadable2.length > 0 ? ` Current status could not be read, so the lifecycle rules could not be checked and these were not written: ${unreadable2.join(", ")}.` : "");
+      refusedNote = [...refusedBy].map(([reason, rs]) => ` ${bulkCause(reason, target)}, not written: ${rs.join(", ")}.`).join("");
       if (ids.length === 0) throw new Error(`Refusing the bulk update \u2014 no ticket in the batch may move to ${target}.${refusedNote}`);
     }
   }
