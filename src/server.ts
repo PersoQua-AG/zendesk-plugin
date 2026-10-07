@@ -40,7 +40,8 @@ import { registerPrompts } from './register/prompts.js';
 import { parseReportConfig } from './tools/analytics/business-hours.js';
 import { argv } from 'node:process';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
 
 // Account-wide rate buckets (PRD §5 infra 1): everything shares 400/min; incremental export is
 // special-cased to 10/min.
@@ -322,9 +323,26 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
   return { server, ctx, rateLimiter, incrementalRateLimiter };
 }
 
-// Connect stdio only when run as the process entrypoint (node dist/server.js), so importing this
-// module for tests does not attempt to open a transport.
-if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) {
+// Connect stdio only when run as the process entrypoint, so importing this module for tests does not
+// attempt to open a transport.
+//
+// Comparing import.meta.url with pathToFileURL(argv[1]) compared two different spellings of one file
+// (#63): node resolves symlinks in import.meta.url but leaves argv[1] as the caller typed it, so a
+// launch through a symlinked plugin root lost the comparison and connected nothing — exit 0, empty
+// stderr, no tools. Resolving BOTH sides asks the only question that matters, "is this module the
+// file node was told to run", and stays right under --preserve-symlinks-main, where neither side is
+// resolved and realpathing only one side would newly break the symlinked launch.
+function startedAsEntrypoint(): boolean {
+  if (!argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(argv[1]);
+  } catch {
+    // argv[1] names nothing on disk, so it cannot be this module. Never a reason to refuse to start.
+    return false;
+  }
+}
+
+if (startedAsEntrypoint()) {
   const { server } = createServer();
   await server.connect(new StdioServerTransport());
 }

@@ -12,7 +12,12 @@ import { createServer } from '../../src/server.js';
 import { keychain } from '../auth/keychain.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-// Realpathed so the launch is not through a symlink (macOS tmpdir is /var -> /private/var).
+// Realpathed to keep this test to ONE subject: whether the bundle runs without node_modules. Until
+// #63 this call was load-bearing — it steered around the entrypoint guard's symlink defect (macOS
+// tmpdir is /var -> /private/var), and removing it turned this test red. That defect is fixed, so
+// the call now only keeps blame where it belongs: tests/plugin/entrypoint-symlink.test.ts owns path
+// spelling and creates its own link, which this cannot — tmpdir is a symlink on macOS but not on
+// the ubuntu-latest CI runner, so leaning on it here would test nothing where it matters.
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'zd-plugin-copy-')));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
