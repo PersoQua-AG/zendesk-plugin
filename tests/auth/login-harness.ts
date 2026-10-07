@@ -233,7 +233,7 @@ function claimPort(port: number): boolean {
 // holder at all — 0.0.0.0, 127.0.0.1, ::1 and every routable address below are each a DIFFERENT
 // address, and macOS's SO_REUSEADDR lets a specific or differently-scoped wildcard bind succeed
 // beside one. Measured: freePort() returned 29559 as free while a concurrent run held `::` on it,
-// and the very next `createServer().listen(29559)` in the test threw
+// and the very next `createServer().listen(…)` on that port in the test threw
 // `listen EADDRINUSE: address already in use :::29559`. The two wildcards are the two shapes a
 // production or test bind with no host actually takes, so both are probed.
 const PROBE_ADDRESSES = ['0.0.0.0', '::', '127.0.0.1', '::1'] as const;
