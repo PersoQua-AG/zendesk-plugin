@@ -19,6 +19,12 @@ afterEach(closeRawSockets);
 // watchdogs in settlesWithin are built on a setTimeout captured at module load (login-harness.ts),
 // precisely so that faking the clock here cannot disarm them: a hung exchange still fails with the
 // label that names which call hung.
+//
+// WHAT THAT LEAVES, stated rather than glossed over: settlesWithin's own 2 s deadline is on the
+// REAL clock and the listener's timer is frozen, so an exchange slower than two seconds turns
+// these cases red with "the listener never settled within 2000ms". That is a ten-fold wider budget
+// than the 200 ms it replaces, and it fails with a label instead of with a wrong expectation —
+// but it is a budget, not a proof, and it is the reason this file is not called race-free.
 async function rejectionAfter(targets: string[], timeoutMs: number): Promise<string> {
   const port = freePort();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
