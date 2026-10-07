@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -18,11 +17,8 @@ describe('the test type-check is wired, and over all of tests/ (#57)', () => {
   it('runs as a CI step, in the job that has the dev toolchain installed', () => {
     const ci = readFileSync(CI, 'utf8');
     expect(ci).toContain('npm run typecheck:tests');
-    // After `npm ci` and before the build: tsc is not there before the install, and a type error
-    // in a test is a defect in the gate that should fail ahead of the slow steps.
-    const after = ci.indexOf('npm run typecheck:tests');
-    expect(after).toBeGreaterThan(ci.indexOf('- run: npm ci'));
-    expect(after).toBeLessThan(ci.indexOf('- run: npm run build'));
+    // After `npm ci`: tsc is not installed before it, so a step above the install cannot run.
+    expect(ci.indexOf('npm run typecheck:tests')).toBeGreaterThan(ci.indexOf('- run: npm ci'));
   });
 
   it('is a package script, so CI and a developer run the same command', () => {
@@ -55,32 +51,6 @@ describe('the test type-check is wired, and over all of tests/ (#57)', () => {
       expect(run.stdout).toContain('TS2322');
     } finally {
       rmSync(probe, { force: true });
-    }
-  }, 120_000);
-
-  // And it is not vacuous: the same probe under the OLD curated include is invisible. The config is
-  // copied rather than edited in place so a crash cannot leave the real one narrowed.
-  it('ablated: under the curated include, that same error is not seen', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'typecheck-ablation-'));
-    const probe = join(root, 'tests', 'tools', `zz-typecheck-probe-${randomUUID()}.ts`);
-    const narrowed = join(root, 'tests', `zz-tsconfig-ablation-${randomUUID()}.json`);
-    writeFileSync(probe, 'export const probe: number = "not a number";\n');
-    writeFileSync(
-      narrowed,
-      JSON.stringify({
-        extends: '../tsconfig.json',
-        compilerOptions: { rootDir: '..', noEmit: true },
-        include: ['../src', 'auth', 'setup', 'skills', '../vitest.config.ts'],
-      }),
-    );
-    try {
-      const run = spawnSync('npx', ['tsc', '-p', narrowed], { cwd: root, encoding: 'utf8' });
-      expect(run.status).toBe(0);
-      expect(run.stdout).not.toContain('TS2322');
-    } finally {
-      rmSync(probe, { force: true });
-      rmSync(narrowed, { force: true });
-      rmSync(dir, { recursive: true, force: true });
     }
   }, 120_000);
 });

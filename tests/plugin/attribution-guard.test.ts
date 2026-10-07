@@ -134,6 +134,22 @@ describe('no-Claude-attribution guard (#86)', () => {
       expect(r.stderr).toContain('There is no default range');
     });
 
+    // "0 commit(s)" followed by "no attribution found" is a guard reporting success over nothing.
+    // Reachable from CI: on a push to the default branch the merge base IS the pushed commit.
+    it('refuses a range that names no commits', () => {
+      const r = run(['--range', 'HEAD..HEAD']);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('names no commits');
+    });
+
+    // A message, not a stack trace — the bar scripts/assert-executor-safety.mjs sets for both.
+    it('refuses a range git cannot resolve, without a stack trace', () => {
+      const r = run(['--range', 'no-such-ref..also-not-a-ref']);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('Cannot read the range');
+      expect(r.stderr).not.toMatch(/^\s+at .*\(node:/m);
+    });
+
     it('refuses an unknown mode rather than guessing', () => {
       const r = run(['--everything', 'x']);
       expect(r.status).toBe(1);
@@ -167,11 +183,23 @@ describe('no-Claude-attribution guard (#86)', () => {
     it('runs as its own CI job on both push and pull_request', () => {
       expect(ci()).toContain('attribution-guard:');
       expect(ci()).toContain('scripts/assert-no-attribution.mjs --range');
-      expect(ci()).toMatch(/^on:\n(\s+push:\n\s+pull_request:|\s+pull_request:\n\s+push:)/m);
     });
 
     it('checks the pull request description too', () => {
       expect(ci()).toContain("--stdin 'the pull request description'");
+    });
+
+    // Both halves of the event coverage, because both revert to green. `edited` is not a
+    // pull_request default, and without it a description that gains a trailer AFTER the green run
+    // is never re-read. The push range is the merge base and not `before..after`, because
+    // cancel-in-progress can cancel the run that would have read the skipped commits.
+    it('covers a pull request description edited after the green run', () => {
+      expect(ci()).toMatch(/pull_request:[\s\S]*?types:.*\bedited\b/);
+    });
+
+    it('computes the push range from the merge base, which no cancelled run can shorten', () => {
+      expect(ci()).toContain('git merge-base FETCH_HEAD "$AFTER"');
+      expect(ci()).not.toContain('$BEFORE..$AFTER');
     });
 
     // A shallow clone has no base commit, so the range would not resolve and the job would be

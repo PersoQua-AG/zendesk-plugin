@@ -30,6 +30,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Pinned like build-test's, so the two jobs do not drift onto different runtimes. The script
+      # itself is zero-dependency and imports node builtins only.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       # BOTH EVENTS, because only one of them ever runs against the target branch. On a
       # pull_request the range is base..head, which is exactly the commits the merge would bring.
       #
@@ -59,7 +64,12 @@ jobs:
             range="$BASE_SHA..$HEAD_SHA"
           else
             git fetch --no-tags origin "$DEFAULT_BRANCH"
-            range="$(git merge-base FETCH_HEAD "$AFTER")..$AFTER"
+            base="$(git merge-base FETCH_HEAD "$AFTER")"
+            # ON THE DEFAULT BRANCH ITSELF the merge base IS the pushed commit, so `base..AFTER` is
+            # empty — and the script now refuses an empty range rather than reporting green over
+            # nothing. The pushed tip is what this event is about, so that is what is checked.
+            if [ "$base" = "$AFTER" ]; then base="$AFTER^"; fi
+            range="$base..$AFTER"
           fi
           echo "range=$range" >> "$GITHUB_OUTPUT"
           echo "Checking $range"

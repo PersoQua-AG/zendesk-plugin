@@ -214,8 +214,16 @@ for (const file of files) {
   try {
     stats = statSync(file);
   } catch (err) {
-    if (err?.code === 'ENOENT') continue;
+    // ENOENT (dangling) and ELOOP (self-referential) are the two throws that are not read
+    // failures: neither names a file the walk could have read, and refusing them would reverse the
+    // #76/#77 cases that settled "a dangling symlink is Not the guarded tree, not an unread file".
+    // They were asymmetric before — a dangling link was a silent skip, its self-referential twin
+    // refused the whole tree.
+    if (err?.code === 'ENOENT' || err?.code === 'ELOOP') continue;
     unreadable(err, rel(file));
+    // Unreachable: `unreadable` ends in process.exit(1). It stands so that `stats` below is
+    // definitely assigned by this block's own shape rather than by a helper's promise to exit.
+    continue;
   }
   if (!stats.isFile()) continue;
   unread.push(`${rel(file)}  (could not be read)`);
@@ -311,7 +319,7 @@ const visited = new Set();
 for (const [file, source] of sources) {
   const where = (node) => {
     const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
-    return `${relative(root, file)}:${line + 1}:${character + 1}`;
+    return `${rel(file)}:${line + 1}:${character + 1}`;
   };
 
   // `ancestors` holds the enclosing executors on the synchronous path, outermost first.
@@ -414,7 +422,7 @@ for (const [file, source] of sources) {
   findRoots(source);
 }
 
-const show = relative(root, target) || target;
+const show = rel(target);
 
 // THE MARK IS A FILE THIS WALK COLLECTED, not a path that merely exists. `existsSync(join(target,
 // ENTRY))` said yes to three things that are not the module the build bundles, each measured on

@@ -86,17 +86,37 @@ if (mode === '--stdin') {
   for (const v of violations(text)) offences.push({ where: `${arg}:${v.line}`, ...v });
 } else if (mode === '--range') {
   subject = `commits in ${arg}`;
-  // NUL-separated so a body containing any line of text cannot forge a record boundary.
-  const log = execFileSync('git', ['log', '--format=%H%x1f%s%x1f%B%x1e', arg], {
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  // NUL-separated so a body containing any line of text cannot forge a record boundary. Wrapped,
+  // because an unresolvable range answered with `Error: Command failed: git log …` and eight
+  // `at (node:` frames — the bar the sibling guard's header sets for both of them is a message.
+  let log;
+  try {
+    log = execFileSync('git', ['log', '--format=%H%x1f%s%x1f%B%x1e', arg], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    console.error(`Cannot read the range ${arg}: git refused it (${String(error.stderr ?? error.message).trim()}).`);
+    console.error('A range this guard cannot read is not a range it has checked.');
+    process.exit(1);
+  }
   const records = log.split('\x1e').filter((r) => r.trim() !== '');
   for (const record of records) {
     const [sha, title, body] = record.replace(/^\n/, '').split('\x1f');
     for (const v of violations(body ?? '')) {
       offences.push({ where: `${sha.slice(0, 8)} ("${title}") body line ${v.line}`, ...v });
     }
+  }
+  // AN EMPTY RANGE IS REFUSED, not reported green. On a push to the default branch the merge base
+  // IS the pushed commit, so the range the job computes is empty — and `0 commit(s)` followed by
+  // "no attribution found" is a guard announcing success over nothing, which is the one shape this
+  // repository has decided twice now that a guard may not have (#76, #85). The caller fixes the
+  // range; it is never this script's job to invent a subject.
+  if (records.length === 0) {
+    console.error(`Refusing ${arg}: it names no commits, so nothing was checked.`);
+    console.error('An empty range is not a clean result. Name a range that holds the commits to check.');
+    process.exit(1);
   }
   console.log(`Attribution check: ${records.length} commit(s) in ${arg}.`);
 } else {

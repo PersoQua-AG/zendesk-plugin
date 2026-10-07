@@ -21,7 +21,6 @@ describe('rejection()', () => {
   it('names the missing rejection when the promise resolves, and does not die on a TypeError', async () => {
     const outcome = await disappointed(Promise.resolve(undefined));
     expect(outcome.message).toBe('expected the subject to reject, and it resolved');
-    expect(outcome.message).not.toContain('Cannot read properties');
   });
 
   // What the cast silently permitted: a promise rejecting with a string. `err.message` on it is

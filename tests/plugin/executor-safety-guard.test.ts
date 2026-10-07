@@ -623,11 +623,18 @@ export const f = (server: { listen: (p: number) => void }, port: number) =>
     // A DANGLING symlink stays what #76/#77 decided it is — not the guarded tree, not an unread
     // file. statSync answers it with ENOENT, and ENOENT is the one throw that is not a read
     // failure. Without that arm the fix above would have turned three settled cases red.
-    it('still treats a dangling symlink as not-a-file rather than as unread', () => {
+    // A DANGLING link stays what #76/#77 decided it is — not the guarded tree, not an unread file.
+    // Its SELF-REFERENTIAL twin is the same category answered by a different errno, ELOOP, and
+    // before the carve-out it refused the entire tree: the opposite verdict for the same thing.
+    it.each([
+      ['dangling', (dir: string) => symlinkSync(join(dir, 'nothing-here.ts'), join(dir, 'link.ts'))],
+      ['self-referential', (dir: string) => symlinkSync('link.ts', join(dir, 'link.ts'))],
+    ])('still treats a %s symlink as not-a-file rather than as unread', (_label, plant) => {
       const target = fixtureDir('export const marker = 1;\n', 'unused.ts');
-      symlinkSync(join(target, 'nothing-here.ts'), join(target, 'dangling.ts'));
+      plant(target);
       const run = spawnSync('node', [GUARD, target], { encoding: 'utf8' });
       expect(run.stderr).not.toContain('could not be read');
+      expect(run.stderr).not.toContain('Nothing to inspect');
       expect(run.status).toBe(0);
     });
 
