@@ -4,8 +4,8 @@
 // SDK client so the assertion covers the shipped boundary and not just the pure helper.
 import { describe, it, expect } from 'vitest';
 import { boot, jobReply, json, once, read, type Call } from '../skills/probe.js';
+import { TICKET_STATUSES as STATUSES } from '../../src/tools/ticket-status.js';
 
-const STATUSES = ['new', 'open', 'pending', 'hold', 'solved', 'closed'] as const;
 type Status = (typeof STATUSES)[number];
 const STAMP = '2026-07-20T10:00:00Z';
 
@@ -208,5 +208,41 @@ describe('an unreadable current status refuses the write (#61, fail-closed)', ()
     expect(r.calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
     expect(r.text).toMatch(/Current status could not be read[^.]*1001/);
     expect(r.text).not.toMatch(/1002/);
+  });
+});
+
+// #61, QA round 2: the guard compared `current === 'closed'` and never checked it against the
+// published six, so every value it did not recognise counted as PERMITTED and the write went out.
+// A capitalisation difference, a trailing space or a status Zendesk adds later reopened the write
+// path to a closed ticket on both tool paths. The check is a positive list over TICKET_STATUSES now.
+describe('a current status outside the published six refuses the write (#61, positive list)', () => {
+  const OUTSIDE = ['Closed', 'closed ', 'CLOSED', 'archived', 'deleted', 'custom_waiting', ''];
+
+  it.each(OUTSIDE)('single update: refuses when the current status is %j', async (current) => {
+    const r = await once(
+      'zendesk_update_ticket',
+      { ticketId: 1001, fields: { status: 'open' }, updatedStamp: STAMP },
+      (c: Call): Response => json(c.method === 'GET' ? { ticket: { id: 1001, status: current } } : {}),
+    );
+    expect(r.isError).toBe(true);
+    expect(r.calls.filter((c) => c.method === 'PUT')).toEqual([]);
+    expect(r.text).toMatch(/Refusing/);
+  });
+
+  it.each(OUTSIDE)('bulk update: drops the ticket and names it when its status is %j', async (current) => {
+    const r = await once(
+      'zendesk_update_tickets_bulk',
+      { ids: [1001, 1002], fields: { status: 'pending' }, force: true },
+      (c: Call, n: number): Response => {
+        if (c.path.includes('/tickets/show_many.json')) {
+          return json({ tickets: [{ id: 1001, status: current }, { id: 1002, status: 'pending' }] });
+        }
+        return jobReply(n, [{ id: 1002, success: true }], 2);
+      },
+    );
+    expect(r.calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
+    // The note is produced on the same branch that drops the id from the update_many list, so it
+    // is the proof 1001 was not written; the id list itself is asserted in ticket-bulk-update.test.ts.
+    expect(r.text).toMatch(/not written: 1001/);
   });
 });

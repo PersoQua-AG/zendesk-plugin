@@ -4,6 +4,7 @@ import { listTickets, getTicket, getTicketsMany, createTicket, updateTicket } fr
 import { addComment, listComments } from '../tools/ticket-comments.js';
 import { addTicketTags } from '../tools/ticket-tags.js';
 import { createTicketsBulk, updateTicketsBulk } from '../tools/ticket-bulk.js';
+import { TICKET_STATUSES } from '../tools/ticket-status.js';
 import { getTicketAudits } from '../tools/ticket-audits.js';
 import { listTicketFields, listTicketForms } from '../tools/ticket-metadata.js';
 import { uploadAttachment, MAX_UPLOAD_BASE64_CHARS } from '../tools/uploads.js';
@@ -14,7 +15,7 @@ import { uploadAttachment, MAX_UPLOAD_BASE64_CHARS } from '../tools/uploads.js';
 // asks for — that `new` is the birth state and cannot be restored. The better message is worth the
 // value surviving in the enum.
 const ticketUpdateFieldsSchema = z.object({
-    status: z.enum(['new', 'open', 'pending', 'hold', 'solved', 'closed']).optional(),
+    status: z.enum(TICKET_STATUSES).optional(),
     priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
     assignee_id: z.number().int().positive().optional(),
     group_id: z.number().int().positive().optional(),
@@ -57,7 +58,8 @@ export function registerTicketTools(server, ctx) {
             comment: z.string().min(1),
             requesterId: z.number().int().positive().optional(),
             priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
-            status: z.enum(['new', 'open', 'pending', 'hold', 'solved']).optional(),
+            // A ticket is never created `closed`; the rest of the published set is derived, not retyped.
+            status: z.enum(TICKET_STATUSES).exclude(['closed']).optional(),
             tags: z.array(z.string()).optional(),
             groupId: z.number().int().positive().optional(),
             assigneeId: z.number().int().positive().optional(),

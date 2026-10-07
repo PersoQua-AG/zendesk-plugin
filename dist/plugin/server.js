@@ -22763,17 +22763,28 @@ async function createEntity(client, cache, config2, fields, securityLevel) {
 }
 
 // src/tools/ticket-status.ts
-function transitionRefusal(current, target) {
-  if (target === "new") {
-    return "Refusing to set status `new`: it is the birth state only and cannot be set on an existing ticket.";
-  }
-  if (current === null) {
-    return `Refusing the status transition to ${target}: the ticket's current status could not be read, so the lifecycle rules cannot be checked and a closed ticket would be edited unnoticed. Read the ticket again and retry.`;
-  }
-  if (current === "closed") {
-    return `Refusing the status transition closed \u2192 ${target}: a closed ticket is terminal and cannot be reopened or edited. To carry its context forward, create a linked follow-up instead: zendesk_create_ticket with followupSourceId, or zendesk_create_tickets_bulk with via_followup_source_id.`;
-  }
+var TICKET_STATUSES = ["new", "open", "pending", "hold", "solved", "closed"];
+var BIRTH_STATE_REFUSAL = "Refusing to set status `new`: it is the birth state only and cannot be set on an existing ticket.";
+function refusalReason(current, target) {
+  if (target === "new") return "birth-state";
+  if (current === null) return "unreadable";
+  if (!TICKET_STATUSES.includes(current)) return "unpublished";
+  if (current === "closed") return "terminal";
   return null;
+}
+function transitionRefusal(current, target) {
+  switch (refusalReason(current, target)) {
+    case "birth-state":
+      return BIRTH_STATE_REFUSAL;
+    case "unreadable":
+      return `Refusing the status transition to ${target}: the ticket's current status could not be read, so the lifecycle rules cannot be checked and a closed ticket would be edited unnoticed. Read the ticket again and retry.`;
+    case "unpublished":
+      return `Refusing the status transition to ${target}: the ticket's current status is not one of the published statuses (${TICKET_STATUSES.join(", ")}), so the lifecycle rules cannot be checked and a closed ticket would be edited unnoticed. Read the ticket again and retry.`;
+    case "terminal":
+      return `Refusing the status transition closed \u2192 ${target}: a closed ticket is terminal and cannot be reopened or edited. To carry its context forward, create a linked follow-up instead: zendesk_create_ticket with followupSourceId, or zendesk_create_tickets_bulk with via_followup_source_id.`;
+    default:
+      return null;
+  }
 }
 var StatusSchema = external_exports.object({ status: external_exports.string().nullish() });
 var BatchStatusSchema = StatusSchema.extend({ id: external_exports.number() });
@@ -23089,7 +23100,7 @@ async function uploadAttachment(client, params) {
 
 // src/register/tickets.ts
 var ticketUpdateFieldsSchema = external_exports.object({
-  status: external_exports.enum(["new", "open", "pending", "hold", "solved", "closed"]).optional(),
+  status: external_exports.enum(TICKET_STATUSES).optional(),
   priority: external_exports.enum(["low", "normal", "high", "urgent"]).optional(),
   assignee_id: external_exports.number().int().positive().optional(),
   group_id: external_exports.number().int().positive().optional(),
@@ -23144,7 +23155,8 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
         comment: external_exports.string().min(1),
         requesterId: external_exports.number().int().positive().optional(),
         priority: external_exports.enum(["low", "normal", "high", "urgent"]).optional(),
-        status: external_exports.enum(["new", "open", "pending", "hold", "solved"]).optional(),
+        // A ticket is never created `closed`; the rest of the published set is derived, not retyped.
+        status: external_exports.enum(TICKET_STATUSES).exclude(["closed"]).optional(),
         tags: external_exports.array(external_exports.string()).optional(),
         groupId: external_exports.number().int().positive().optional(),
         assigneeId: external_exports.number().int().positive().optional(),

@@ -22,8 +22,8 @@
     },
     {
       "file": "src/register/tickets.ts",
-      "line": 21,
-      "quote": "status: z.enum(['new', 'open', 'pending', 'hold', 'solved',"
+      "line": 22,
+      "quote": "status: z.enum(TICKET_STATUSES).optional()"
     }
   ],
   "input": {
