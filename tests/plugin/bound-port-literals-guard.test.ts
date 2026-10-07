@@ -332,14 +332,21 @@ describe('the bound-port guard as a script', () => {
     // which roots are marked — the roots are the ancestors of that, swept above.
     const COUNT = String.raw`git ls-files '*.ts' | xargs grep -lE '\bexport (async )?function freePort\(' \
       | xargs -n1 dirname | sort -u`;
-    // The command is read out of the header, not retyped here: a header that drifts from the
-    // command actually run would put the claim back on paper only.
+    // COUNT is retyped above, so each documented part of the pipeline is asserted against the
+    // header separately below and drift goes red part by part. The sibling at
+    // executor-safety-guard.test.ts asserts `toContain(COUNT)` on the whole command, which is the
+    // stronger form; it is not adopted here because this command spans two header lines with a
+    // `\` continuation and non-uniform `// ` prefixes, so matching it whole needs prefix
+    // stripping plus whitespace normalisation rather than one `toContain`.
     expect(readFileSync(GUARD, 'utf8')).toContain(
       String.raw`xargs grep -lE '\bexport (async )?function freePort\('`,
     );
     // The tail as well, not just the grep: drifting it to `| cut -d/ -f1 | uniq` and the stated
     // result with it left this test green, so half the documented pipeline was unpinned (#79).
     expect(readFileSync(GUARD, 'utf8')).toContain(String.raw`| xargs -n1 dirname | sort -u`);
+    // And the selector, the third part. Drifting it to `'*.mts'` changes the stated answer —
+    // freePort is not defined in a .mts file — and left this test green as well (#79).
+    expect(readFileSync(GUARD, 'utf8')).toContain(String.raw`git ls-files '*.ts' |`);
     const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8' });
     expect(run.stdout.trim().split('\n')).toEqual(['tests/auth']);
   });

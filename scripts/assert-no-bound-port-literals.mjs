@@ -45,8 +45,9 @@ const SOURCE = /\.(ts|tsx|mts|cts|js|mjs|cjs)$/;
 //   git ls-files '*.ts' | xargs grep -lE '\bexport (async )?function freePort\(' \
 //     | xargs -n1 dirname | sort -u
 // measured on 35f4c5d: 1, tests/auth — against 4 for the weaker `\bfreePort\(` mention.
-// tests/plugin/bound-port-literals-guard.test.ts runs this pipeline and asserts both halves of it
-// — the grep AND the tail — against this header, so neither can drift here without going red.
+// tests/plugin/bound-port-literals-guard.test.ts runs this pipeline and asserts all THREE of its
+// parts against this header — the selector, the grep and the tail — so none can drift here
+// without going red. It asserted two of the three until #79, which read as complete and was not.
 //
 // WHY A MARK AT ALL, now that the root is the whole test tree: the danger flipped direction. A too
 // WIDE root scans more and can hide nothing; the NARROW misedit is what is left, and narrow is
@@ -106,6 +107,11 @@ try {
 } catch (err) {
   // A message, not a stack trace: ablated, node prints a node:fs source excerpt and a trace.
   // Asserted by shape rather than by a frame count (#91), in both guards' tests.
+  // KNOWN GAP, here and at the `Cannot read` line below: on a thrown `null` or `undefined`,
+  // `err.code ?? err.message` raises `TypeError: Cannot read properties of null` — the stack
+  // trace these two lines exist to prevent. The sibling guard writes `err?.code ?? err?.message
+  // ?? err` and does not. Deferred, not accepted: the fix changes a code line and an error
+  // string, which #79 is comments-only.
   console.error(`Cannot scan ${target}: ${err.code ?? err.message}.`);
   process.exit(1);
 }
@@ -124,7 +130,8 @@ for (const file of files) {
     if (err.code === 'EISDIR') continue;
     // Exit 2, not 1, for everything else — a mode-000 file, a dangling symlink. 1 means "a fixed
     // port was found", so "could not look" must not be spelled like "looked and found".
-    // tests/auth/login-harness.ts draws the same line in its probe child.
+    // tests/auth/login-harness.ts draws the same line in its probe child. The thrown-null gap
+    // noted at the `Cannot scan` line above applies to this line as well.
     console.error(`Cannot read ${show(path)}: ${err.code ?? err.message}.`);
     process.exit(2);
   }
