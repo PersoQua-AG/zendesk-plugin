@@ -124,6 +124,7 @@ describe('what mcpb pack puts in the bundle', () => {
     'tsconfig.json',
     'coverage/lcov.info',
     'coverage/lcov-report/index.html',
+    'test-results/vitest.json',
   ])('leaves repo-only material out: %s', (path) => {
     expect(excludes(PACKER_PATTERNS, path)).toBe(true);
   });
@@ -133,6 +134,15 @@ describe('what mcpb pack puts in the bundle', () => {
     // The packer's own defaults do not cover it — `npm run test:coverage` before a pack would ship it.
     expect(excludes(EXCLUDE_PATTERNS, 'coverage/lcov.info')).toBe(false);
     expect(excludes(PACKER_PATTERNS, 'coverage/lcov.info')).toBe(true);
+  });
+
+  // Same shape as coverage/, and the same trap: CI runs test:coverage, then `npm ci --omit=dev`,
+  // then `npm run pack`, so the packer meets this directory on every push. Unexcluded, the audit's
+  // default-deny allowlist refuses the bundle over a file the test run left behind.
+  it('keeps the json run record out, which the packer defaults do not', () => {
+    expect(readFileSync(join(root, '.gitignore'), 'utf8')).toMatch(/^test-results\/$/m);
+    expect(excludes(EXCLUDE_PATTERNS, 'test-results/vitest.json')).toBe(false);
+    expect(excludes(PACKER_PATTERNS, 'test-results/vitest.json')).toBe(true);
   });
 
   it.each(['manifest.json', 'package.json', 'dist/server.js', 'README.md', 'node_modules/zod/package.json'])(

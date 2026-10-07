@@ -38,6 +38,10 @@ memory/
 # Test output, produced by `npm run test:coverage` in a checkout that is then packed. Same reason as
 # above: .gitignore keeps it out of git, and only this file keeps it out of the bundle.
 coverage/
+# The run record the json reporter writes (vitest.config.ts, #51). CI's order is test:coverage,
+# then `npm ci --omit=dev`, then `npm run pack` — so the packer meets this directory every time,
+# and the audit's default-deny allowlist would refuse the bundle over it.
+test-results/
 
 # The checksum sidecar scripts/audit-bundle.mjs writes next to the artifact once the audit passes.
 # The packer already drops *.mcpb itself (EXCLUDE_PATTERNS) but not this, and a bundle shipping the
