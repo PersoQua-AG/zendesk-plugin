@@ -124,7 +124,6 @@ describe('what mcpb pack puts in the bundle', () => {
     'tsconfig.json',
     'coverage/lcov.info',
     'coverage/lcov-report/index.html',
-    'test-results/vitest.json',
   ])('leaves repo-only material out: %s', (path) => {
     expect(excludes(PACKER_PATTERNS, path)).toBe(true);
   });
@@ -139,10 +138,20 @@ describe('what mcpb pack puts in the bundle', () => {
   // Same shape as coverage/, and the same trap: CI runs test:coverage, then `npm ci --omit=dev`,
   // then `npm run pack`, so the packer meets this directory on every push. Unexcluded, the audit's
   // default-deny allowlist refuses the bundle over a file the test run left behind.
+  //
+  // THE PATH IS READ OUT OF vitest.config.ts, not retyped. Written twice, the reporter could be
+  // pointed somewhere else while both copies of the literal stayed green and CI's `npm run pack`
+  // started refusing the bundle by default-deny — the exact trap the .mcpbignore line exists to
+  // close, one level up.
   it('keeps the json run record out, which the packer defaults do not', () => {
-    expect(readFileSync(join(root, '.gitignore'), 'utf8')).toMatch(/^test-results\/$/m);
-    expect(excludes(EXCLUDE_PATTERNS, 'test-results/vitest.json')).toBe(false);
-    expect(excludes(PACKER_PATTERNS, 'test-results/vitest.json')).toBe(true);
+    const configured = /outputFile:\s*\{\s*json:\s*'([^']+)'/.exec(readFileSync(join(root, 'vitest.config.ts'), 'utf8'));
+    expect(configured, 'vitest.config.ts no longer configures a json outputFile').not.toBeNull();
+    const record = configured![1];
+    const dir = `${record.split('/')[0]}/`;
+    expect(readFileSync(join(root, '.gitignore'), 'utf8')).toMatch(new RegExp(`^${dir}$`, 'm'));
+    expect(readFileSync(join(root, '.mcpbignore'), 'utf8')).toMatch(new RegExp(`^${dir}$`, 'm'));
+    expect(excludes(EXCLUDE_PATTERNS, record)).toBe(false);
+    expect(excludes(PACKER_PATTERNS, record)).toBe(true);
   });
 
   it.each(['manifest.json', 'package.json', 'dist/server.js', 'README.md', 'node_modules/zod/package.json'])(
