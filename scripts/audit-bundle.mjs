@@ -340,14 +340,7 @@ const version = manifest?.version ?? pkg?.version ?? null;
 
 // "Is there a name here", not "does it resolve". `existsSync` follows symlinks, so a dangling
 // artifact link reads as absent while still sitting in the directory under its publishable name.
-const present = (p) => {
-  try {
-    lstatSync(p);
-    return true;
-  } catch {
-    return false;
-  }
-};
+const present = (p) => lstatSync(p, { throwIfNoEntry: false }) !== undefined;
 
 // A stale artifact from an earlier, passing run must not survive a failing one — otherwise "no
 // artifact is published" holds only for the operator who never released this bundle before.

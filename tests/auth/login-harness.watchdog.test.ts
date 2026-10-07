@@ -5,7 +5,8 @@ import { settlesWithin } from './login-harness.js';
 // the watchdog could only fire if the test advanced the faked clock — and a test waiting on a hung
 // call is by definition not advancing it.
 //
-// THE RACE IS THE ASSERTION, not vitest's timeout. Written as a plain `rejects.toThrow()`, the
+// THE RACE IS THE ASSERTION, not vitest's timeout. 50 ms against a 2 s arbiter: a fortyfold
+// margin, because this file adds the one real-clock race the branch does not remove. Written as a plain `rejects.toThrow()`, the
 // ablated version does not fail, it HANGS, and dies on "Test timed out in 5000ms" — which names
 // nothing and is exactly the failure mode this helper exists to replace. So a real timer, captured
 // before the fake clock is installed, races the watchdog and the outcome is compared as a string.
@@ -17,7 +18,7 @@ describe('settlesWithin under a faked clock', () => {
     try {
       const never = new Promise<string>(() => {});
       const outcome = await Promise.race([
-        settlesWithin('the hung call', never, 300).then(
+        settlesWithin('the hung call', never, 50).then(
           () => 'it resolved',
           (err: unknown) => (err instanceof Error ? err.message : String(err)),
         ),
@@ -25,7 +26,7 @@ describe('settlesWithin under a faked clock', () => {
           realSetTimeout(() => r('the watchdog never fired: it is armed on the faked clock'), 2_000).unref?.();
         }),
       ]);
-      expect(outcome).toBe('the hung call never settled within 300ms');
+      expect(outcome).toBe('the hung call never settled within 50ms');
     } finally {
       vi.useRealTimers();
     }

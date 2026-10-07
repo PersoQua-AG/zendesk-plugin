@@ -14,10 +14,15 @@ export default defineConfig({
     // full name of every test behind, so the next occurrence can be classified instead of guessed
     // at. It is in the config rather than in a CI flag so that a local run, a QA worktree and CI
     // all produce it without anybody having to remember a flag. Read the failures back with:
-    //   node -e "for (const f of require('./test-results/vitest.json').testResults)
+    //   node -e "for (const f of require('./test-results/vitest-<pid>.json').testResults)
     //     for (const t of f.assertionResults) if (t.status === 'failed') console.log(f.name, t.fullName)"
+    //
+    // The pid is in the NAME because two overlapping runs — a QA worktree beside a local watch, or
+    // two CI jobs on one checkout — otherwise overwrite each other's evidence, which is the one
+    // thing this file exists to preserve. The directory is what .gitignore and .mcpbignore carry,
+    // so the name can vary freely.
     reporters: ['default', 'json'],
-    outputFile: { json: 'test-results/vitest.json' },
+    outputFile: { json: `test-results/vitest-${process.pid}.json` },
     // Runs once, after every file: the only place that can see what a SPAWNED child did to the machine.
     // A suite that creates a real Keychain item fails the run there — see the file for why it compares
     // before with after instead of demanding an empty keychain.

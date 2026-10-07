@@ -144,10 +144,12 @@ describe('what mcpb pack puts in the bundle', () => {
   // started refusing the bundle by default-deny — the exact trap the .mcpbignore line exists to
   // close, one level up.
   it('keeps the json run record out, which the packer defaults do not', () => {
-    const configured = /outputFile:\s*\{\s*json:\s*'([^']+)'/.exec(readFileSync(join(root, 'vitest.config.ts'), 'utf8'));
+    const configured = /outputFile:\s*\{\s*json:\s*['`]([^'`]+)['`]/.exec(readFileSync(join(root, 'vitest.config.ts'), 'utf8'));
     expect(configured, 'vitest.config.ts no longer configures a json outputFile').not.toBeNull();
     const record = configured![1];
-    const dir = `${record.split('/')[0]}/`;
+    // dirname(), not split('/')[0]: a record configured at the root has no directory segment, and
+    // the result goes into a RegExp, so it is escaped rather than interpolated raw.
+    const dir = `${dirname(record)}/`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     expect(readFileSync(join(root, '.gitignore'), 'utf8')).toMatch(new RegExp(`^${dir}$`, 'm'));
     expect(readFileSync(join(root, '.mcpbignore'), 'utf8')).toMatch(new RegExp(`^${dir}$`, 'm'));
     expect(excludes(EXCLUDE_PATTERNS, record)).toBe(false);

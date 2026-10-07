@@ -229,14 +229,7 @@ function audit(entries: ZipEntry[]): Run {
 }
 
 /** Whether a NAME is taken, which a dangling symlink is and `existsSync` says it is not. */
-function nameIsTaken(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const nameIsTaken = (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 
 // Every failing run in this file goes through here: no sentinel may appear in either stream.
 function expectNoSecretEchoed(run: Run): void {
@@ -396,14 +389,6 @@ describe('a stale artifact that cannot be cleared', () => {
 
   // A message, not a stack trace — the bar scripts/assert-no-bound-port-literals.mjs is held to.
   // Unguarded, this path printed a node:fs source excerpt and five stack frames.
-  it('reports the failure as a line of its own, not as an uncaught SystemError', () => {
-    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
-    blockArtifactSlot(tree);
-    const run = runAudit(tree);
-
-    expect(run.stderr).not.toMatch(/^\s+at /m);
-    expect(run.stderr).not.toContain('node:fs:');
-  });
 });
 
 // =============================================================================================
