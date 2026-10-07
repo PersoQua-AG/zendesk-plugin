@@ -29660,7 +29660,7 @@ function parseSecurityLevel(raw) {
   }
   if (SECURITY_LEVELS.includes(value)) return value;
   warnConfig(
-    `ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(" | ")} \u2014 using strict, the strictest level, rather than silently screening less.`
+    `ZENDESK_SECURITY_LEVEL ${JSON.stringify(raw)} is not one of ${SECURITY_LEVELS.join(" | ")} \u2014 using strict, the strictest level, rather than silently screening less.`
   );
   return "strict";
 }

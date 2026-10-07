@@ -68,6 +68,17 @@ describe('security level — an unrecognized value is never a silent downgrade',
     expect(warnings[0]).not.toContain('configuration field');
   });
 
+  // The value is attacker-adjacent text on the operator's own channel, so it is quoted rather than
+  // interpolated: measured, ZENDESK_SECURITY_LEVEL='str\nict' used to produce a forged second log
+  // line. Same injection class as the quoted token-error body in src/auth/oauth-flow.ts.
+  it('cannot forge a second log line out of a value that carries a newline', () => {
+    const { securityLevel, warnings } = build('str\nict');
+    expect(securityLevel).toBe('strict');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain('\n');
+    expect(warnings[0]).toContain('"str\\nict"');
+  });
+
   // stdout is the MCP stdio transport (server.ts connects StdioServerTransport to it); a warning
   // written there corrupts the protocol frame. The warning belongs on stderr and nowhere else.
   it('writes the warning to stderr only — never to stdout, which carries the MCP protocol', () => {

@@ -64,7 +64,9 @@ function parseSecurityLevel(raw) {
     }
     if (SECURITY_LEVELS.includes(value))
         return value;
-    warnConfig(`ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(' | ')} \u2014 using ` +
+    // JSON.stringify, not interpolation: it supplies the quotes AND escapes the breaks, so a value
+    // like 'str\nict' can no longer forge a second line on the channel that reports it.
+    warnConfig(`ZENDESK_SECURITY_LEVEL ${JSON.stringify(raw)} is not one of ${SECURITY_LEVELS.join(' | ')} \u2014 using ` +
         `strict, the strictest level, rather than silently screening less.`);
     return 'strict';
 }
