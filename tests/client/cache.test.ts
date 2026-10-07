@@ -99,6 +99,19 @@ describe('ResponseCache', () => {
     }
   });
 
+  // 0600 is read+write without traverse: no path under the directory can be reached at all, so the
+  // traverse bit is load-bearing and not only claimed by a comment.
+  it.skipIf(modeBitsIgnored)('throws EACCES at construction for a non-traversable directory (0600)', () => {
+    const noTraverse = join(dir, 'cache-0600');
+    mkdirSync(noTraverse);
+    chmodSync(noTraverse, 0o600);
+    try {
+      expect(() => new ResponseCache(noTraverse)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+    } finally {
+      chmodSync(noTraverse, 0o700);
+    }
+  });
+
   // The constructor's check goes stale (ENOSPC, EROFS, a quota, plain TOCTOU). save() must still
   // not hand Node's raw error — which carries the absolute path — to the tool result.
   it.skipIf(modeBitsIgnored)('reports a write failure by code, without the path', () => {
