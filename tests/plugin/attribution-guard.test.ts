@@ -155,6 +155,25 @@ describe('no-Claude-attribution guard (#86)', () => {
       expect(r.status).toBe(1);
       expect(r.stderr).toContain('Unknown mode');
     });
+
+    // A MODE WITHOUT ITS VALUE IS A USAGE ERROR, not a broken range. The arity check draws that
+    // line; without it `--range` alone reaches git as an undefined rev and is answered with
+    // "Cannot read the range", which tells the caller to fix a range they never named. Exit 1 like
+    // every other refusal here: this guard has one failure meaning — not checked, or checked and
+    // offending — so there is no second meaning for a second code to carry.
+    it('answers --range without a value as a usage error, not as an unreadable range', () => {
+      const r = run(['--range']);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('There is no default range');
+      expect(r.stderr).not.toContain('Cannot read the range');
+    });
+
+    it('ablated: without the arity check, --range alone is blamed on git instead', () => {
+      const ablated = mutate([['process.argv.length !== 4', 'false']]);
+      const r = run(['--range'], { guard: ablated });
+      expect(r.stderr).not.toContain('There is no default range');
+      expect(r.stderr).toContain('Cannot read the range');
+    });
   });
 
   // ONE ABLATION PER PATTERN: remove it from a copy of the guard and exactly the fixture that pins
