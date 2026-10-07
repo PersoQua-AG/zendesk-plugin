@@ -389,12 +389,15 @@ const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 // this script cannot release from, whatever the bundle contains. Carried in `problems` rather than
 // exiting here, so the quarantine still runs.
 let housekeepingFailed = false;
+// Counted apart from the rest so a failure here cannot read as a verdict on the bundle below.
+let housekeepingProblems = 0;
 if (artifactPath) {
   for (const stale of [artifactPath, checksumPath]) {
     try {
       rmSync(stale, { force: true });
     } catch (error) {
       housekeepingFailed = true;
+      housekeepingProblems += 1;
       problems.push(
         `could not clear the stale artifact ${basename(stale)}: ${error.message}` +
           ' — this tree cannot be released from until that path is gone',
@@ -502,8 +505,14 @@ if (bundle && entries.length > 0 && !bundledManifest) {
   }
 }
 
+// "This bundle is unfit" and "this tree cannot publish" are two facts; only the first may quarantine.
+const bundleIsUnfit = problems.length > housekeepingProblems;
+
 if (problems.length > 0) {
-  console.error(`Refusing to release ${basename(bundlePath)}: the bundle did not pass the audit.`);
+  console.error(
+    `Refusing to release ${basename(bundlePath)}: ` +
+      (bundleIsUnfit ? 'the bundle did not pass the audit.' : 'this tree cannot publish.'),
+  );
   for (const p of problems) console.error(`  - ${p}`);
   // Clearing only the versioned copy left the FILE package.json names sitting there with the
   // secret inside it — the one somebody would upload. It is renamed rather than deleted so the
@@ -517,7 +526,7 @@ if (problems.length > 0) {
   // the publishable name read as absent; a path this cannot stat at all counts as TAKEN, so the
   // quarantine is attempted and its own catch reports what happened.
   let quarantined = null;
-  if (nameIsTaken(bundlePath)) {
+  if (bundleIsUnfit && nameIsTaken(bundlePath)) {
     quarantined = `${bundlePath}.REJECTED`;
     try {
       rmSync(quarantined, { force: true });

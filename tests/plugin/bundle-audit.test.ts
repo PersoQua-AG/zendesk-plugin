@@ -391,6 +391,20 @@ describe('a stale artifact that cannot be cleared', () => {
     expect(existsSync(tree.checksum)).toBe(false);
   });
 
+  // A housekeeping failure is not a verdict on the bundle, so a bundle that passed keeps its name.
+  it('leaves a bundle that passed where it is, and does not call it contaminated', () => {
+    const tree = makeTree();
+    const before = readFileSync(tree.bundle);
+    blockArtifactSlot(tree);
+    const run = runAudit(tree);
+
+    expect(run.status).toBe(2);
+    expect(nameExists(`${tree.bundle}.REJECTED`), 'a clean bundle was quarantined').toBe(false);
+    expect(existsSync(tree.bundle), 'a clean bundle lost its publishable name').toBe(true);
+    expect(readFileSync(tree.bundle).equals(before), 'the quarantined copy is the clean bundle').toBe(true);
+    expect(run.stderr).not.toContain('CONTAMINATED');
+  });
+
   // A message, not a stack trace — the bar scripts/assert-no-bound-port-literals.mjs is held to.
   // Unguarded, this path printed a node:fs source excerpt and five stack frames.
   it('reports the failure as a line of its own, not as an uncaught SystemError', () => {
