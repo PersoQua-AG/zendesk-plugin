@@ -365,11 +365,11 @@ const MAX_ERROR_BODY_CHARS = 200;
 // CR gap closed in #42. U+001F (US) stays out: it is a separator in neither standard, and the
 // existing cases quote it as a removed control.
 const LINE_BREAK = /[\n\r\u000B\u000C\u001C-\u001E\u0085\u2028\u2029]/;
-// Controls and bidi overrides; the callback's error code loses them to NOT_NQCHAR above. The
-// zero-width and implicit-direction marks (U+200B\u2013U+200F, U+061C, U+FEFF) are not overrides \u2014 the
-// Trojan-Source set (CVE-2021-42574) is already covered by the two ranges before them \u2014 but they are
-// invisible, and an invisible character inside a quoted line is a word the reader cannot see.
-const CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+// Invisible by Unicode's own account, not by a named list: six literals left 4190 other ignorable
+// codepoints standing \u2014 U+2060 WORD JOINER, the standard replacement for the U+FEFF they did name,
+// and the whole tag block U+E0020\u2013U+E007F, which carries a readable instruction past a quote whose
+// purpose is to make foreign text safe. Cc is the controls, Cf the bidi overrides of CVE-2021-42574.
+const CONTROL_OR_BIDI = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
 // Returns '' for a blank body, so the caller can end the message at the status.
 function summarizeErrorBody(raw: string): string {
   // TAB is replaced BEFORE the strip rather than excluded from it, so it has exactly one fate:
