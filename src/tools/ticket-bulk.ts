@@ -84,12 +84,19 @@ export async function updateTicketsBulk(
   if (target !== undefined) {
     // → new is refused from every state, so the batch needs no read to settle it.
     const statuses = target === 'new' ? new Map<number, string | null>() : await readStatuses(client, params.ids);
-    // `?? null` is the fail-CLOSED half: an id show_many did not answer for has no known status,
-    // and transitionRefusal refuses rather than writing a ticket whose lifecycle it cannot check.
-    const refused = new Set(params.ids.filter((id) => transitionRefusal(statuses.get(id) ?? null, target)));
+    // Two causes, reported apart. An id show_many did not answer for (a deleted ticket, a truncated
+    // response, a record that did not parse) has no known status, so it is refused — but calling
+    // that "a forbidden status transition" sends the model to the linked-follow-up remedy for a
+    // ticket that may not exist. The lifecycle refusal is only for ids whose status was read.
+    const unreadable = target === 'new' ? [] : params.ids.filter((id) => !statuses.has(id) || statuses.get(id) === null);
+    const unreadableSet = new Set(unreadable);
+    const forbidden = params.ids.filter((id) => !unreadableSet.has(id) && transitionRefusal(statuses.get(id) ?? null, target));
+    const refused = new Set([...unreadable, ...forbidden]);
     if (refused.size > 0) {
       ids = params.ids.filter((id) => !refused.has(id));
-      refusedNote = ` Refused on a forbidden status transition to ${target}, not written: ${[...refused].join(', ')}.`;
+      refusedNote =
+        (forbidden.length > 0 ? ` Refused on a forbidden status transition to ${target}, not written: ${forbidden.join(', ')}.` : '') +
+        (unreadable.length > 0 ? ` Current status could not be read, so the lifecycle rules could not be checked and these were not written: ${unreadable.join(', ')}.` : '');
       if (ids.length === 0) throw new Error(`Refusing the bulk update — no ticket in the batch may move to ${target}.${refusedNote}`);
     }
   }

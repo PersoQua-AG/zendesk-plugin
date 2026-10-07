@@ -22880,7 +22880,7 @@ async function updateTicket(client, cache, params, securityLevel = "standard") {
   }
   const target = params.fields.status;
   if (target !== void 0) {
-    const refusal = transitionRefusal(target === "new" ? null : await readStatus(client, params.ticketId), target);
+    const refusal = target === "new" ? transitionRefusal(null, target) : transitionRefusal(await readStatus(client, params.ticketId), target);
     if (refusal) throw new Error(refusal);
   }
   const result = await safeUpdateWithConflict(client, cache, {
@@ -23006,10 +23006,13 @@ async function updateTicketsBulk(client, cache, params, poll = {}, securityLevel
   const target = params.fields.status;
   if (target !== void 0) {
     const statuses = target === "new" ? /* @__PURE__ */ new Map() : await readStatuses(client, params.ids);
-    const refused = new Set(params.ids.filter((id) => transitionRefusal(statuses.get(id) ?? null, target)));
+    const unreadable2 = target === "new" ? [] : params.ids.filter((id) => !statuses.has(id) || statuses.get(id) === null);
+    const unreadableSet = new Set(unreadable2);
+    const forbidden = params.ids.filter((id) => !unreadableSet.has(id) && transitionRefusal(statuses.get(id) ?? null, target));
+    const refused = /* @__PURE__ */ new Set([...unreadable2, ...forbidden]);
     if (refused.size > 0) {
       ids = params.ids.filter((id) => !refused.has(id));
-      refusedNote = ` Refused on a forbidden status transition to ${target}, not written: ${[...refused].join(", ")}.`;
+      refusedNote = (forbidden.length > 0 ? ` Refused on a forbidden status transition to ${target}, not written: ${forbidden.join(", ")}.` : "") + (unreadable2.length > 0 ? ` Current status could not be read, so the lifecycle rules could not be checked and these were not written: ${unreadable2.join(", ")}.` : "");
       if (ids.length === 0) throw new Error(`Refusing the bulk update \u2014 no ticket in the batch may move to ${target}.${refusedNote}`);
     }
   }

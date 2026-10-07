@@ -9,6 +9,10 @@ import { listTicketFields, listTicketForms } from '../tools/ticket-metadata.js';
 import { uploadAttachment, MAX_UPLOAD_BASE64_CHARS } from '../tools/uploads.js';
 // Single source of truth for ticket-field update validation, shared by single-update
 // and bulk-update so the two paths validate symmetrically.
+// `new` stays in the UPDATE enum although it has no reachable success path (#61): a schema
+// rejection would answer with a zod type error, while the tool answers with the sentence the skill
+// asks for — that `new` is the birth state and cannot be restored. The better message is worth the
+// value surviving in the enum.
 const ticketUpdateFieldsSchema = z.object({
     status: z.enum(['new', 'open', 'pending', 'hold', 'solved', 'closed']).optional(),
     priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),

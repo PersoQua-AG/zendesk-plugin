@@ -168,7 +168,13 @@ export async function updateTicket(
   // every state, so it skips the read; the terminal-closed rule is what needs one.
   const target = params.fields.status;
   if (target !== undefined) {
-    const refusal = transitionRefusal(target === 'new' ? null : await readStatus(client, params.ticketId), target);
+    // The read is skipped explicitly rather than by passing null and relying on the order of the
+    // checks inside transitionRefusal: → new is refused from every status, so its answer needs no
+    // current status, and a reordering of those checks must not silently change the reason reported.
+    const refusal =
+      target === 'new'
+        ? transitionRefusal(null, target)
+        : transitionRefusal(await readStatus(client, params.ticketId), target);
     if (refusal) throw new Error(refusal);
   }
   const result = await safeUpdateWithConflict(client, cache, {

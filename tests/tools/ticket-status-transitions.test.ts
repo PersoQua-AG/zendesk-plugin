@@ -19,30 +19,34 @@ const SKILL = readFileSync(
 
 // The expectation is TRANSCRIBED from the document, never retyped from the production rule: a test
 // that restates `transitionRefusal` agrees with it by construction and cannot notice a wrong rule.
-// The grid is parsed out of the markdown table at SKILL.md:37-44, one row per `from` status.
-function skillTable(): Record<Status, Record<Status, string>> {
-  const grid = {} as Record<Status, Record<Status, string>>;
-  for (const from of STATUSES) {
-    const row = SKILL.match(new RegExp(`^\\|\\s*\\*\\*${from}\\*\\*\\s*\\|(.*)\\|\\s*$`, 'm'));
-    if (!row) throw new Error(`SKILL.md has no lifecycle row for '${from}'`);
-    const cells = row[1].split('|').map((c) => c.trim());
-    if (cells.length !== STATUSES.length) throw new Error(`row '${from}' has ${cells.length} cells, not ${STATUSES.length}`);
-    grid[from] = Object.fromEntries(STATUSES.map((to, i) => [to, cells[i]])) as Record<Status, string>;
-  }
-  return grid;
-}
-const TABLE = skillTable();
+//
+// The table is read WHOLE — header row for the column order, body rows for the row order, both
+// checked against STATUSES. Taking the column order from a hardcoded list instead was measured to
+// leave all cases green while the document published `open → new ✅`, and reading only the rows we
+// already knew about left a seventh status added to the table silently untested.
+const CELLS = (line: string): string[] =>
+  line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+
+const TABLE_BLOCK = (SKILL.match(/^\| *From *\\ *To *\|.*(?:\n\|.*)*/m) ?? [''])[0].split('\n');
+const HEADER = CELLS(TABLE_BLOCK[0] ?? '').slice(1);
+const ROWS = new Map(
+  TABLE_BLOCK.slice(2).map((line) => {
+    const cells = CELLS(line);
+    return [cells[0].replaceAll('*', '').trim(), cells.slice(1)] as const;
+  }),
+);
 
 // The diagonal cell is `—` for every status, which on its own says "same status, not a transition".
 // For two of them the Rules prose beneath the table overrides that and refuses it outright, and the
 // owner confirmed both on 2026-10-07. The sentences are asserted below, so this list cannot drift
 // from the document either.
-const TERMINAL_SELF: Status[] = ['new', 'closed'];
+const TERMINAL_SELF: readonly string[] = ['new', 'closed'];
 
 // ❌ refuses. ✅ (with or without a parenthetical) and `via system` allow. `—` is the diagonal and
 // refuses only where a Rules line says the status takes no self-transition.
 function forbidden(from: Status, to: Status): boolean {
-  const cell = TABLE[from][to];
+  const cell = ROWS.get(from)?.[HEADER.indexOf(to)];
+  if (cell === undefined) throw new Error(`SKILL.md publishes no cell for ${from} → ${to}`);
   if (cell.startsWith('❌')) return true;
   if (cell.startsWith('✅') || cell === 'via system') return false;
   if (cell === '—') return TERMINAL_SELF.includes(to);
@@ -50,8 +54,14 @@ function forbidden(from: Status, to: Status): boolean {
 }
 
 describe('the transcribed table is the one the skill publishes', () => {
-  it('reads a full 6×6 grid of recognised cells', () => {
-    for (const from of STATUSES) for (const to of STATUSES) expect(typeof forbidden(from, to)).toBe('boolean');
+  // Both axes, in order. Either assertion failing means the grid below is reading other cells than
+  // the ones the document shows, which is the one way a transcription can lie.
+  it('publishes exactly these columns, in this order', () => {
+    expect(HEADER).toEqual([...STATUSES]);
+  });
+
+  it('publishes exactly these rows, in this order', () => {
+    expect([...ROWS.keys()]).toEqual([...STATUSES]);
   });
 
   // The two Rules lines that make the diagonal refuse, quoted from the document they come from.
@@ -182,7 +192,11 @@ describe('an unreadable current status refuses the write (#61, fail-closed)', ()
       },
     );
     expect(r.isError).toBe(false);
-    expect(r.text).toMatch(/not written: 1001/);
+    // The REASON matters: an id show_many did not answer for may be a deleted ticket, and calling
+    // that a forbidden transition sends the model to the linked-follow-up remedy for a ticket that
+    // does not exist. The two causes are reported apart.
+    expect(r.text).toMatch(/Current status could not be read[^.]*1001/);
+    expect(r.text).not.toMatch(/forbidden status transition/);
   });
 
   // Per RECORD, not per response: 1001 is malformed, 1002 is fine and must still be written.
@@ -201,7 +215,7 @@ describe('an unreadable current status refuses the write (#61, fail-closed)', ()
     );
     expect(r.isError).toBe(false);
     expect(r.calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
-    expect(r.text).toMatch(/not written: 1001/);
-    expect(r.text).not.toMatch(/not written:[^.]*1002/);
+    expect(r.text).toMatch(/Current status could not be read[^.]*1001/);
+    expect(r.text).not.toMatch(/1002/);
   });
 });

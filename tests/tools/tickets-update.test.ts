@@ -53,9 +53,14 @@ describe('updateTicket', () => {
     expect(client.request).toHaveBeenCalledTimes(3); // pre-read, PUT, conflict re-fetch
   });
 
+  // The pre-read SUCCEEDS and the write is what fails, or the case would pass on the pre-read's
+  // rejection and never reach the write-path passthrough it claims to pin.
   it('re-throws non-conflict errors unchanged', async () => {
-    const client = { request: vi.fn().mockRejectedValue(new Error('boom')) } as unknown as ZendeskHttpClient;
+    const client = {
+      request: vi.fn().mockResolvedValueOnce({ ticket: { id: 1, status: 'open' } }).mockRejectedValue(new Error('boom')),
+    } as unknown as ZendeskHttpClient;
     await expect(updateTicket(client, cacheStub(), { ticketId: 1, fields: { status: 'open' }, force: true })).rejects.toThrow('boom');
+    expect(client.request).toHaveBeenCalledTimes(2); // pre-read, then the PUT that threw
   });
 
   it('refuses a field update with neither updatedStamp nor force (safe-by-default, no clobber)', async () => {
