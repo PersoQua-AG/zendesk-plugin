@@ -227,8 +227,9 @@ function audit(entries: ZipEntry[]): Run {
   return runAudit(makeTree({ entries }));
 }
 
-/** Whether a NAME is taken, which a dangling symlink is and `existsSync` says it is not. */
-function nameIsTaken(path: string): boolean {
+/** Whether a NAME exists, which a dangling symlink does and `existsSync` says it does not. The
+ * script's own nameIsTaken() adds a directory rule on top of this; do not read them as the same. */
+function nameExists(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 }
 
@@ -419,8 +420,8 @@ describe('a bundle the audit could not read', () => {
     // `toBe(1)`, not `not.toBe(0)`: this commit's subject IS the 1-vs-2 split, and its sibling
     // below pins the 2 side exactly.
     expect(run.status).toBe(1);
-    expect(nameIsTaken(tree.bundle), 'the publishable name is still there').toBe(false);
-    expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'nothing was quarantined').toBe(true);
+    expect(nameExists(tree.bundle), 'the publishable name is still there').toBe(false);
+    expect(nameExists(`${tree.bundle}.REJECTED`), 'nothing was quarantined').toBe(true);
     expect(run.stderr).toContain('CONTAMINATED');
     expectNoSecretEchoed(run);
   });
@@ -438,7 +439,7 @@ describe('a bundle the audit could not read', () => {
 
     expect(run.status).not.toBe(0);
     expect(existsSync(join(tree.bundle, 'main.ts')), 'the directory was moved').toBe(true);
-    expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'a directory was quarantined').toBe(false);
+    expect(nameExists(`${tree.bundle}.REJECTED`), 'a directory was quarantined').toBe(false);
     expect(run.stderr).not.toContain('CONTAMINATED');
   });
 });
