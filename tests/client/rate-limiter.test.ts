@@ -42,7 +42,13 @@ describe('RateLimiter', () => {
       const sleep = vi.fn().mockImplementation(async (ms: number) => {
         now += ms;
       });
-      return { limiter: new RateLimiter({ requestsPerMinute: 400, now: () => now, sleep }), sleep };
+      return {
+        limiter: new RateLimiter({ requestsPerMinute: 400, now: () => now, sleep }),
+        sleep,
+        advance: (ms: number) => {
+          now += ms;
+        },
+      };
     }
 
     it.each([
@@ -57,6 +63,28 @@ describe('RateLimiter', () => {
       expect(sleep).toHaveBeenLastCalledWith(300_000);
       await limiter.acquire();
       expect(sleep).toHaveBeenLastCalledWith(SLOT_MS);
+    });
+
+    // #53: a second 429 arriving with a shorter header must not reopen a window Zendesk
+    // still holds shut, so the window extends and never contracts.
+    it('does not let a shorter later window shorten an active one', async () => {
+      const { limiter, sleep, advance } = steppedLimiter();
+      limiter.reportRetryAfter(120);
+      advance(1_000);
+      limiter.reportRetryAfter(5); // would have ended 114 s earlier
+      advance(1_000);
+      await limiter.acquire();
+      expect(sleep).toHaveBeenCalledWith(118_000);
+    });
+
+    // Regression guard, not an ablating test: a plain assignment passes this too.
+    it('still extends when the later window is longer', async () => {
+      const { limiter, sleep, advance } = steppedLimiter();
+      limiter.reportRetryAfter(5);
+      advance(1_000);
+      limiter.reportRetryAfter(120);
+      await limiter.acquire();
+      expect(sleep).toHaveBeenCalledWith(120_000);
     });
 
     it.each([0, -5])('adds no wait for %s', async (seconds) => {

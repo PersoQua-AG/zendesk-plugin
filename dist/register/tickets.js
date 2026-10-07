@@ -4,13 +4,14 @@ import { listTickets, getTicket, getTicketsMany, createTicket, updateTicket } fr
 import { addComment, listComments } from '../tools/ticket-comments.js';
 import { addTicketTags } from '../tools/ticket-tags.js';
 import { createTicketsBulk, updateTicketsBulk } from '../tools/ticket-bulk.js';
+import { TICKET_STATUSES } from '../tools/ticket-status.js';
 import { getTicketAudits } from '../tools/ticket-audits.js';
 import { listTicketFields, listTicketForms } from '../tools/ticket-metadata.js';
 import { uploadAttachment, MAX_UPLOAD_BASE64_CHARS } from '../tools/uploads.js';
-// Single source of truth for ticket-field update validation, shared by single-update
-// and bulk-update so the two paths validate symmetrically.
+// Shared by single-update and bulk-update so the two paths validate symmetrically. `new` stays in
+// the enum although #61 always refuses it: the tool's sentence beats a zod type error.
 const ticketUpdateFieldsSchema = z.object({
-    status: z.enum(['new', 'open', 'pending', 'hold', 'solved', 'closed']).optional(),
+    status: z.enum(TICKET_STATUSES).optional(),
     priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
     assignee_id: z.number().int().positive().optional(),
     group_id: z.number().int().positive().optional(),
@@ -22,15 +23,25 @@ const ticketUpdateFieldsSchema = z.object({
 // fields (subject required, a comment), so bulk-create validation is symmetric with the
 // single-create/-update tools instead of forwarding arbitrary objects to create_many. The only
 // escape valve is a custom field's `value`, which is genuinely open-typed.
-const bulkCreateTicketSchema = ticketUpdateFieldsSchema.extend({
+// #66: `.strict()` is the mechanism, not the declaration below. Both create surfaces already
+// PUBLISH additionalProperties:false, while the zod parse stripped an undeclared key and the tool
+// reported success — so a mistyped key name silently created an unlinked follow-up. Strict makes
+// the runtime keep the contract the schema advertises, for every field and not just this one.
+const bulkCreateTicketSchema = ticketUpdateFieldsSchema
+    .extend({
     subject: z.string().min(1),
-    comment: z.object({
+    comment: z
+        .object({
         body: z.string().min(1).optional(),
         html_body: z.string().min(1).optional(),
         public: z.boolean().optional(),
-    }),
+    })
+        .strict(),
     requester_id: z.number().int().positive().optional(),
-});
+    // Zendesk's write-only follow-up link (Tickets JSON format).
+    via_followup_source_id: z.number().int().positive().optional(),
+})
+    .strict();
 export function registerTicketTools(server, ctx) {
     const { httpClient, cache, securityLevel, markdownDefault } = ctx;
     server.registerTool('zendesk_list_tickets', {
@@ -44,18 +55,24 @@ export function registerTicketTools(server, ctx) {
     server.registerTool('zendesk_get_tickets_many', { description: 'Get multiple tickets by id (show_many, screened).', inputSchema: { ids: z.array(z.number().int().positive()).min(1) } }, async ({ ids }) => okWithHandle(await getTicketsMany(httpClient, cache, { ids }, securityLevel)));
     server.registerTool('zendesk_create_ticket', {
         description: 'Create a ticket. The comment is converted Markdown→HTML unless markdown:false.',
-        inputSchema: {
+        // A ZodObject rather than a raw shape, so `.strict()` reaches the top-level args too (#66).
+        inputSchema: z
+            .object({
             subject: z.string().min(1),
             comment: z.string().min(1),
             requesterId: z.number().int().positive().optional(),
             priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
-            status: z.enum(['new', 'open', 'pending', 'hold', 'solved']).optional(),
+            // A ticket is never created `closed`; the rest of the published set is derived, not retyped.
+            status: z.enum(TICKET_STATUSES).exclude(['closed']).optional(),
             tags: z.array(z.string()).optional(),
             groupId: z.number().int().positive().optional(),
             assigneeId: z.number().int().positive().optional(),
             markdown: z.boolean().optional(),
             public: z.boolean().optional(),
-        },
+            // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
+            followupSourceId: z.number().int().positive().optional(),
+        })
+            .strict(),
     }, async (args) => okWithHandle(await createTicket(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault })));
     server.registerTool('zendesk_update_ticket', {
         description: 'Update a ticket. Pass updatedStamp (from a prior read) for safe_update optimistic concurrency (409 → conflict result; do not overwrite without confirming). Set force:true to deliberately overwrite without a concurrency check.',

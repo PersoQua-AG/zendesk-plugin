@@ -1,81 +1,71 @@
 // scripts/assert-executor-safety.mjs
 // Structural guard for the defect class behind #9, not for its instance.
 //
-// What happened: `server.listen(port)` sat on the synchronous path of an INNER promise executor in
-// src/auth/oauth-flow.ts. A port outside 0–65535 makes node throw SYNCHRONOUSLY. The throw rejected
-// the INNER promise — which hung on a `.catch(() => {})` — while the OUTER promise's resolve/reject
-// were never called, so the promise the caller awaited never settled. Login is serialized, so every
-// later login hung forever. `server.on('error')` cannot help: a synchronous throw never becomes an
-// 'error' event. And 638 tests at 100% coverage on that file missed it, because v8 counts that a
-// statement RAN, not where its exits went.
+// THE RULE IS CHEAP. ITS EDGES AND THE CHOICE OF TREE ARE WHAT IS EXPENSIVE. The rule is one line
+// of code — `const inspect = nested || asyncExecutor` — and has not moved since #11. What the
+// rounds since have cost is everything AROUND it: where "synchronous path" stops (LIMITS), and
+// which directory the walk is pointed at (#76, #87). Read THE RULE once, then LIMITS and the
+// mark — that is where the surprises are.
 //
-// THE RULE. A synchronous throw in an executor is harmless exactly when the promise that absorbs it
-// is the promise the caller holds. The Promise constructor gives that for free in ONE case: a
-// plain, non-async executor at top level. Everywhere else the throw goes somewhere nobody is
-// watching, and the awaited promise never settles. So an executor is INSPECTED when it is
+// What happened (#9): `server.listen(port)` sat on the synchronous path of an INNER executor in
+// src/auth/oauth-flow.ts. An out-of-range port makes node throw SYNCHRONOUSLY; the throw rejected
+// the INNER promise, which hung on a `.catch(() => {})`, while the OUTER promise's resolve/reject
+// were never called. Login is serialized, so every later login hung forever. `server.on('error')`
+// cannot help — a synchronous throw never becomes an 'error' event — and 100% line coverage on
+// that file missed it, because v8 counts that a statement RAN, not where its exits went.
+//
+// THE RULE. A synchronous throw in an executor is harmless exactly when the promise that absorbs
+// it is the promise the caller holds. The Promise constructor gives that for free in ONE case: a
+// plain, non-async executor at top level. So an executor is INSPECTED when it is
 //
 //   - NESTED on the synchronous path of another executor — its throw rejects the inner promise; or
-//   - ASYNC — its throw lands in the async function's discarded return promise. Measured: the outer
-//     promise never settles and the process does NOT crash. Same symptom as #9, no nesting needed.
+//   - ASYNC — its throw lands in the async function's discarded return promise. Measured: the
+//     outer promise never settles and the process does NOT crash. Same symptom as #9, no nesting.
 //
-// and in an inspected executor every call on the synchronous path must sit inside a try whose catch
-// settles the promise that is actually awaited: an enclosing executor's resolve/reject when nested,
-// its own when it is an async top level. A bare `throw` is explicitly NOT enough — that is the bug.
+// In an inspected executor every call on the synchronous path must sit inside a try whose catch
+// settles the promise that is actually awaited: an enclosing executor's resolve/reject when
+// nested, its own when it is an async top level. A bare `throw` is NOT enough — that is the bug.
 //
-// DENY BY DEFAULT, and there is no allowlist. A curated list of dangerous callees would miss
-// precisely the thing that bit us twice: a foreign call nobody thought of. Yes, this reports
-// `console.log(n)` and `items.map(…).filter(…)` inside an inspected executor. That is the intended
-// pressure: wrapping the whole executor body in one try with a settling catch answers all of them
-// at once, and that is the shape the code should have.
+// DENY BY DEFAULT, no allowlist. A curated list of dangerous callees would miss precisely what bit
+// us twice: a foreign call nobody thought of. So yes, `console.log(n)` inside an inspected
+// executor is reported. That is the pressure: one try around the body answers all of them at once.
 //
-// BINDINGS, NOT NAMES. Settlers, own parameters and executor identity are resolved through the
-// TypeScript binder (symbol identity), so a nested `reject` that shadows an outer `reject` is not
-// mistaken for it, a local `function createServer` inherits no exemption, and `router.resolve(p)`
-// does not count as settling because a parameter happens to be called `resolve`.
-//
-// Zero new dependencies: `typescript` is already a devDependency. The program is built with
-// noLib/noResolve — the binder is all this needs, so no lib.d.ts and no node_modules are read.
+// BINDINGS, NOT NAMES. Settlers, own parameters and executor identity go through the TypeScript
+// binder, so a shadowing `reject` is not mistaken for the outer one, a local `function
+// createServer` inherits no exemption, and `router.resolve(p)` does not count as settling.
 //
 // LIMITS, named so the next reader does not think these were checked:
-//   - Only `new Promise(...)` written with the identifier `Promise`. Aliased through a variable
-//     (`const P = Promise; new P(…)`) it is invisible. That does not happen by accident.
-//   - Calls are not followed into callbacks, and the two outcomes there differ. A throw inside a
+//   - Only `new Promise(…)` written with the identifier `Promise`. Aliased through a variable it
+//     is invisible. That does not happen by accident.
+//   - Calls are not followed into callbacks, and the outcomes there differ. A throw in a
 //     `setTimeout`/emitter callback becomes an uncaughtException and kills the process — not a
-//     wedge, but not harmless either; src/auth/oauth-flow.ts records that exact incident. A throw
-//     inside a `.then` callback wedges the outer promise silently, measured: never settles, no
-//     crash. That is the same class as #9 and this walk does not see it.
-//   - A settling catch is credited to the whole try block, so a call added to that block later
-//     inherits the protection. That is the point of wrapping, not an oversight.
-//   - Inside a SETTLING CATCH BLOCK the settle expression is exempt as a whole, its arguments
-//     included, so a catch may write the honest `reject(err instanceof Error ? err : new
-//     Error(String(err)))`. That is the full extent of the exemption, and it is the full extent of
-//     its justification: a throw there is a programming error in the one place every review looks,
-//     on a path where something has already gone wrong. Everywhere ELSE a settle call is merely not
-//     a foreign call itself — its arguments are still walked, so `reject(load())` on the ordinary
-//     path is reported, because `load()` throwing there settles nothing.
-// THE CALLER NAMES THE TREE (#76). The scan root is argv[2] and there is no default. While the
-// default was 'src', a run aimed anywhere else still reported success: measured on 3ee1d43,
-// `node scripts/assert-executor-safety.mjs tests/util` printed "0 executors, 0 inspected" and
-// exited 0 — "scanned the wrong tree" and "found nothing" produced the same green.
+//     wedge, but not harmless; src/auth/oauth-flow.ts records that incident. A throw in a `.then`
+//     callback wedges the outer promise silently (measured: never settles, no crash), which is
+//     the same class as #9 and this walk does not see it.
+//   - A settling catch is credited to the whole try block, so a call added to it later inherits
+//     the protection. That is the point of wrapping, not an oversight.
+//   - Inside a SETTLING CATCH BLOCK the settle expression is exempt as a whole, arguments
+//     included. That is the one exemption in the file; it is justified where it is applied.
+//
+// THE CALLER NAMES THE TREE (#76). argv[2], no default. While the default was 'src' a run aimed
+// anywhere else still reported success, so "scanned the wrong tree" and "found nothing" produced
+// the same green.
 //
 // THE MARK OF THE GUARDED TREE: the root must DIRECTLY contain server.ts, the module `npm run
-// build` bundles. That is the tree this guard is for — the code that ships — and it is nothing
-// else here: measured on 3ee1d43 by running
+// build` bundles — the code that ships, and nothing else here. Count it with
 //   git ls-files '*/server.ts' 'server.ts'
-// → src/server.ts, 1 directory, out of the 27 that hold a tracked .ts file
-// (`git ls-files '*.ts' | xargs -n1 dirname | sort -u | wc -l` → measured on 3ee1d43: 27).
-// Why a mark at all, when this walk is RECURSIVE and a too-WIDE root therefore still inspects the
-// guarded file (measured on 3ee1d43: `node scripts/assert-executor-safety.mjs .` reports
-// `src/auth/oauth-flow.ts:149:54  (resolve, reject)  nested, inspected`)? Because the misedit that
-// hides something is the NARROW one, and narrow is silent: measured on 3ee1d43, `src/auth` → 2
-// executors and `tests/util` → 0 executors, both exited 0 before this mark existed. The counts are
-// printed in every outcome, but a count only reports; it cannot refuse, and a floor under it would
-// mean writing down a number that rots on the next merge.
-// AS IN THE SIBLING GUARD, THE MARK GATES SUCCESS, NOT THE SCAN: an unmarked tree is still walked
-// whole and every finding in it is still named by file and line — it just can never exit 0.
-// The one cost, named rather than discovered later: this hangs on a filename. Move or rename
-// src/server.ts and the guard refuses its own tree — loudly, and in the same commit that breaks
-// `npm run build`, which names that exact path, so it cannot drift silently.
+// measured on dd6e564: src/server.ts, 1 directory out of the 27 holding a tracked .ts file
+// (`git ls-files '*.ts' | xargs -n1 dirname | sort -u | wc -l`). That command is run by
+// tests/plugin/executor-safety-guard.test.ts, so the claim cannot rot on paper.
+//
+// Why a mark at all, when the walk is RECURSIVE and a too-WIDE root still inspects the guarded
+// file? Because the misedit that HIDES something is the narrow one, and narrow is silent:
+// `src/auth` and `tests/util` both exited 0 before this mark existed. A count cannot refuse, and
+// a floor under it would be a number that rots on the next merge. As in the sibling guard the
+// mark gates SUCCESS, not the scan — an unmarked tree is still walked whole and every finding
+// still named, it just never exits 0. The one cost: this hangs on a filename. Move or rename
+// src/server.ts and the guard refuses its own tree, loudly, in the same commit that breaks
+// `npm run build`, which names that exact path.
 import { lstatSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
@@ -87,9 +77,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Exactly one, not "at least one": a second root would be dropped without a word, so
 // `check:executors src src/bin` would have guarded half of what it named and said nothing.
-// The empty string is not a root: it resolves to the repo root and walks node_modules. Measured on
-// 3ee1d43 with `node scripts/assert-executor-safety.mjs ""`: 49 executors, 1 inspected, among them
-// node_modules/zod/src/v4/classic/tests/async-parsing.test.ts:337:29.
+// The empty string is not a root either: it resolves to the repo root and walks node_modules,
+// whose executors are nobody's business here. The sibling guard refuses it too.
 if (process.argv.length !== 3 || !process.argv[2]) {
   console.error(
     'Expected exactly one scan root, and not the empty string:' +
@@ -104,24 +93,25 @@ const target = resolvePath(root, process.argv[2]);
 const SOURCE = /\.(ts|tsx|mts|cts)$/;
 const DECLARATION = /\.d\.(ts|mts|cts)$/;
 
-// SYMLINKED DIRECTORIES ARE FOLLOWED, and a cycle is survived rather than broken. The previous
-// claim here — "does not descend into symlinked directories, so a symlink cycle cannot turn this
-// into an ELOOP stack trace" — is false. Re-measured on node 20.20.2 and 26.5.0 alike,
-// on a tree holding one nested-executor file plus `src/sub/loop -> src`:
+// SYMLINKED DIRECTORIES ARE FOLLOWED, and a cycle is survived rather than broken. An earlier
+// header claimed the opposite — that the walk does not descend, so no cycle could reach ELOOP —
+// and that was false on every runtime (#77, re-measured on node 20.20.2 and 26.5.0). It descends.
+// What saves it is the OS, not the walk: the open is refused once the symlink chain is too long
+// and node drops that branch silently, so the listing TERMINATES. The cost is the counts, not the
+// findings: a file behind a cycle is collected once per level, so executors and findings in it are
+// reported repeatedly. Nothing is hidden and the exit code is right; the inventory repeats. To see
+// it, build a tree of one nested-executor file plus `sub/loop -> .` and run this guard over it;
+// the entry count alone comes from
 //   node -e 'console.log(require("node:fs").readdirSync(process.argv[1],{recursive:true}).length)' <tree>
-// → 64 entries, including sub/loop, sub/loop/sub, sub/loop/sub/loop. It descends. What saves it is
-// not the walk: the OS refuses the open once the symlink chain is too long, and node drops that
-// branch silently, so the listing TERMINATES and no ELOOP reaches the caller. The cost is the
-// counts, not the findings: the same file is collected once per level, so that tree reports
-// 32 executors, 16 inspected for the 2 executors, 1 inspected it holds, and the wedge in it is
-// reported 16 times. Nothing is hidden and the exit code is right; the inventory just repeats.
 
 // A message, not a stack trace, and ONE sentence for every way a named root refuses to be read:
-// a missing directory (ENOENT), a FILE named as the root (ENOTDIR — measured on 3ee1d43: `node
-// scripts/assert-executor-safety.mjs src/server.ts` printed a node:fs source excerpt and a stack
-// trace), and a listable-but-unstattable root (EACCES), which reaches the lstat on the mark far
-// below rather than this walk. The last fallback is for a throw that is neither: `??` on `.code`
-// alone printed `(undefined)`. The sibling guard is held to the same bar.
+// a missing directory (ENOENT), a FILE named as the root (ENOTDIR — which used to print a node:fs
+// excerpt and a trace), and a listable-but-unstattable root (EACCES), which reaches the lstat on
+// the mark far below rather than this walk. The last fallback is for a throw that is neither:
+// `??` on `.code` alone printed `(undefined)`. Asserted by shape rather than by a frame count
+// (#91), in both guards' tests. The three-way fallback is THIS guard's alone: the sibling writes
+// `err.code ?? err.message`, which on a thrown null or undefined raises a TypeError of its own —
+// the stack trace this paragraph exists to prevent. Not fixed here; comments-only commit.
 const unreadable = (err) => {
   console.error(`Nothing to inspect: ${target} (${err?.code ?? err?.message ?? err}).`);
   process.exit(1);
@@ -138,6 +128,8 @@ const files = entries
   .sort()
   .map((f) => join(target, f));
 
+// noLib/noResolve: the binder is all this guard needs, so no lib.d.ts and no node_modules are
+// read. `typescript` was already a devDependency — this guard added no dependency.
 const program = ts.createProgram(files, {
   target: ts.ScriptTarget.Latest,
   allowJs: false,
@@ -287,8 +279,13 @@ for (const file of files) {
         if (executorOf(node)) return true;
         const settler = calleeSymbol(node);
         if (settler && (settlers.has(settler) || ownSymbols.has(settler))) {
-          // A settle call is never a foreign call. Stopping the descent into its ARGUMENTS is the
-          // narrow part: only inside a settling catch — see the header.
+          // A settle call is never a foreign call. THE ONE EXEMPTION, and this is its whole
+          // justification: inside a settling catch the arguments are exempt too, so a catch may
+          // write the honest `reject(err instanceof Error ? err : new Error(String(err)))`. A
+          // throw there is a programming error in the one place every review looks, on a path
+          // where something has already gone wrong. Everywhere ELSE the arguments are still
+          // walked, so `reject(load())` on the ordinary path is reported — `load()` throwing
+          // there settles nothing.
           return !within(settlingCatches, node);
         }
         if (within(safeRanges, node)) return true;
@@ -325,20 +322,18 @@ for (const file of files) {
 
 const show = relative(root, target) || target;
 
-// THE MARK IS A FILE THIS WALK COLLECTED, not a path that merely exists. `existsSync(join(target,
-// ENTRY))` said yes to three things that are not the module the build bundles, each measured on
-// 3ee1d43 at exit 0 over an otherwise empty tree: a DIRECTORY named server.ts; a `Server.ts`,
-// because existsSync case-folds on darwin — one tree, two verdicts by platform, green locally and
-// red on Linux CI, which disqualifies that form on its own; and a server.ts symlinked to a file
-// outside the scanned tree. Asking the collected list instead fixes the spelling for free, because
-// the entries carry the real on-disk name, and lstat — not stat — refuses the symlink without
-// following it. A DANGLING symlink was already refused and still is: lstat succeeds, isFile() is
-// false. Costs nothing extra: `files` is built above either way.
+// THE MARK IS A FILE THIS WALK COLLECTED, not a path that merely exists. `existsSync` said yes to
+// three things that are not the module the build bundles: a DIRECTORY named server.ts; a
+// `Server.ts`, because existsSync case-folds on darwin — one tree, two verdicts by platform,
+// green locally and red on Linux CI; and a server.ts symlinked outside the scanned tree. Asking
+// the collected list fixes the spelling for free, since the entries carry the real on-disk name,
+// and lstat — not stat — refuses the symlink without following it. A DANGLING symlink stays
+// refused: lstat succeeds, isFile() is false. Each of the four is a case in the guard's tests.
 const ENTRY_PATH = join(target, ENTRY);
 // lstat is the one read left outside the walk, so it is the one read that can still die on a root
 // the walk survived: `chmod 444` on a directory lists its names and refuses to stat its entries.
-// ts.createProgram above needs no such guard — losing the cwd, the case it was raised for, kills
-// node in bootstrap before this script's first line runs, so a catch there would be unreachable.
+// ts.createProgram above needs no such guard — losing the cwd kills node in bootstrap before this
+// script's first line, so a catch there would be unreachable.
 let marked = false;
 try {
   marked = files.includes(ENTRY_PATH) && lstatSync(ENTRY_PATH).isFile();
@@ -346,15 +341,12 @@ try {
   unreadable(err);
 }
 
-// Printed in EVERY outcome, pass or fail: a gate that only speaks when it is happy leaves a red
-// build with no record of what was actually looked at. THE STREAM IS KEYED ON THE MARK, NOT ON THE
-// EXIT CODE, and that is the whole claim: the inventory of the guarded tree is a true record of what
-// was inspected whether the verdict is green or red, while a summary of a tree that was never the
-// subject must not sit on stdout reading like one. Keying it on the verdict instead was tried and
-// dropped: it merges the inventory into the findings on one stream, where a reader — and three
-// assertions in tests/plugin/executor-safety-guard.test.ts that count `file:line:col` occurrences —
-// can no longer tell a finding from an inspected-executor entry (measured on 3ee1d43 + this fix:
-// the w8 'reports a call chain once' count went from 1 to 3).
+// Printed in EVERY outcome: a gate that only speaks when it is happy leaves a red build with no
+// record of what was looked at. THE STREAM IS KEYED ON THE MARK, NOT ON THE EXIT CODE: the
+// inventory of the GUARDED tree is a true record whether the verdict is green or red, while a
+// summary of a tree that was never the subject must not sit on stdout reading like one. Keying it
+// on the verdict was tried and dropped — it merges inventory and findings onto one stream, where
+// neither a reader nor the assertions that count `file:line:col` occurrences can tell them apart.
 const report = marked ? console.log : console.error;
 report(`Promise executors in ${show}/: ${inventory.length} executors, ${inspectedCount} inspected.`);
 for (const entry of inventory) report(`  - ${entry}`);
