@@ -21503,9 +21503,15 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
     });
     try {
       for (const binding of bindings) binding.server.listen(port, binding.address);
-    } catch {
+    } catch (err) {
       close();
-      throw new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`);
+      const kind = err instanceof Error && /^[A-Za-z]+Error$/.test(err.name) ? err.name : "an error";
+      throw err instanceof RangeError ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
+        cause: err
+      }) : new Error(
+        `OAuth callback server could not start on port ${port}: listen() threw ${kind} synchronously. The port is inside the allowed range, so the range rule is not the cause; the original error is attached as this error's cause.`,
+        { cause: err }
+      );
     }
   });
 }

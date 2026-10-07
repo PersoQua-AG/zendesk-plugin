@@ -329,7 +329,7 @@ export function startCallbackListener(
     // ELSE in that body (createServer, the emitter registrations) that #9 never looked at.
     try {
       for (const binding of bindings) binding.server.listen(port, binding.address);
-    } catch {
+    } catch (err) {
       // Cleanup and wording only, NOT liveness. Honest about its own reach: if the INNER executor
       // threw, `server` and `close` were never assigned, so listen() throws a TypeError here,
       // close() throws a second one, and both are swallowed because bindFailed() has already
@@ -337,7 +337,30 @@ export function startCallbackListener(
       // below provably does not run there. It carries on the path it was written for: a real
       // listener that refuses to bind.
       close();
-      throw new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`);
+      // ONE REASON PER CAUSE (#104). This used to answer EVERY synchronous throw with the port
+      // rule, and for anything but a RangeError that sentence is FALSE: the port is in range.
+      // Measured in PR #101 — a bind-time guard threw here and the caller was told
+      // `port 8976 (… must be a whole number between 1024 and 65535)`, so the reader went to check
+      // a number that was never the problem while the only description of the real cause was
+      // dropped on the floor.
+      //
+      // What does NOT change is why the replacement exists at all: node's own wording carries
+      // absolute paths and its stack carries frames, and neither may reach the MCP boundary
+      // (src/tools/login.ts reads err.message). So nothing from `err` is interpolated except its
+      // CLASS NAME, which is an identifier rather than text — and only when it looks like one, so
+      // a thrown object with a doctored `name` cannot smuggle a path in. The original is attached
+      // as `cause`, which a developer in the process can read and no tool response serializes.
+      const kind = err instanceof Error && /^[A-Za-z]+Error$/.test(err.name) ? err.name : 'an error';
+      throw err instanceof RangeError
+        ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
+            cause: err,
+          })
+        : new Error(
+            `OAuth callback server could not start on port ${port}: listen() threw ${kind} ` +
+              `synchronously. The port is inside the allowed range, so the range rule is not the ` +
+              `cause; the original error is attached as this error's cause.`,
+            { cause: err },
+          );
     }
   });
 }
