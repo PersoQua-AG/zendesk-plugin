@@ -173,7 +173,12 @@ describe('the bound-port guard as a script', () => {
     const { status, stderr } = runGuard(dir);
     expect(status).toBe(2);
     expect(stderr).toContain('Cannot read');
-    expect(stderr).not.toContain('at readFileSync');
+    // One rule, one spelling (#94): the same shape form its five siblings use since #77, rather
+    // than `not.toContain('at readFileSync')`. The literal was reachable — ablating the catch to
+    // print err.stack turned it red — but it only sees a leak whose frames happen to name that one
+    // fs call; this path throws from readFileSync today and need not tomorrow. The shape catches
+    // any node-internal frame, so it is strictly wider and costs nothing.
+    expect(stderr).not.toMatch(/^\s+at .*\(node:/m);
   });
 
   // AN ABORT IS NOT A MARK. The sweep's predicate used to read the ABSENCE of 'Not the guarded
