@@ -22,7 +22,8 @@ import { registerPrompts } from './register/prompts.js';
 import { parseReportConfig } from './tools/analytics/business-hours.js';
 import { argv } from 'node:process';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
 // Account-wide rate buckets (PRD §5 infra 1): everything shares 400/min; incremental export is
 // special-cased to 10/min.
 export const DEFAULT_RATE_LIMIT_RPM = 400;
@@ -264,7 +265,24 @@ export function createServer(rawEnv = process.env, deps = {}) {
 }
 // Connect stdio only when run as the process entrypoint (node dist/server.js), so importing this
 // module for tests does not attempt to open a transport.
-if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) {
+//
+// Compared as REAL paths rather than as URL strings (#63). For an ES module Node resolves symlinks
+// in import.meta.url but leaves argv[1] exactly as the host spelled it, so a CLAUDE_PLUGIN_ROOT
+// reached through a symlink made two names for one file compare unequal: the module loaded, no
+// transport was ever connected, and the process exited 0 with an empty stderr — the plugin's tools
+// simply never appeared. realpathSync throws when argv[1] is not an existing file, which is the same
+// answer as "this is not the entrypoint", so it is caught rather than guarded for.
+function startedAsEntrypoint() {
+    if (!argv[1])
+        return false;
+    try {
+        return realpathSync(argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+    }
+    catch {
+        return false;
+    }
+}
+if (startedAsEntrypoint()) {
     const { server } = createServer();
     await server.connect(new StdioServerTransport());
 }

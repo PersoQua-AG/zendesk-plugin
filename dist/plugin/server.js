@@ -29647,7 +29647,8 @@ function registerPrompts(server) {
 // src/server.ts
 import { argv } from "node:process";
 import { join as join3 } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { realpathSync } from "node:fs";
 var DEFAULT_RATE_LIMIT_RPM = 400;
 var INCREMENTAL_RATE_LIMIT_RPM = 10;
 var SECURITY_LEVELS = ["strict", "standard", "off"];
@@ -29779,7 +29780,15 @@ function createServer3(rawEnv = process.env, deps = {}) {
   registerPrompts(server);
   return { server, ctx, rateLimiter, incrementalRateLimiter };
 }
-if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) {
+function startedAsEntrypoint() {
+  if (!argv[1]) return false;
+  try {
+    return realpathSync(argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+if (startedAsEntrypoint()) {
   const { server } = createServer3();
   await server.connect(new StdioServerTransport());
 }
