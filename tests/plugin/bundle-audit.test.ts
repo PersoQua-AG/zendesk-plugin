@@ -1,7 +1,18 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -217,6 +228,16 @@ function audit(entries: ZipEntry[]): Run {
   return runAudit(makeTree({ entries }));
 }
 
+/** Whether a NAME is taken, which a dangling symlink is and `existsSync` says it is not. */
+function nameIsTaken(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Every failing run in this file goes through here: no sentinel may appear in either stream.
 function expectNoSecretEchoed(run: Run): void {
   for (const sentinel of SENTINELS) {
@@ -343,13 +364,13 @@ describe('a stale artifact that cannot be cleared', () => {
     expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
     expect(run.stderr).toContain('could not clear the stale artifact zendesk-1.0.0.mcpb');
     expect(run.stderr).toContain('CONTAMINATED');
+    // Exit 2, not 1: a tree to fix, not a bundle to fix. And a message, not a stack trace — the
+    // bar scripts/assert-no-bound-port-literals.mjs is held to. Unguarded, this path printed a
+    // node:fs source excerpt and five stack frames and still died with 1.
+    expect(run.status).toBe(2);
+    expect(run.stderr).not.toMatch(/^\s+at /m);
+    expect(run.stderr).not.toContain('node:fs:');
     expectNoSecretEchoed(run);
-  });
-
-  it('exits 2, so a tree to fix is not reported as a bundle to fix', () => {
-    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
-    blockArtifactSlot(tree);
-    expect(runAudit(tree).status).toBe(2);
   });
 
   it('leaves the ordinary refusal at exit 1, with no housekeeping complaint', () => {
@@ -403,6 +424,23 @@ describe('a bundle the audit could not read', () => {
     writeFileSync(join(tree.bundle, 'occupant'), 'not an archive');
   }
 
+  // `existsSync` follows the link, so a DANGLING bundle symlink read as absent and the publishable
+  // name stayed in the directory with nothing said about it. The question is whether a name is
+  // there for somebody to upload, not whether it resolves.
+  it('quarantines a dangling symlink standing under the publishable name', () => {
+    const tree = makeTree();
+    rmSync(tree.bundle);
+    symlinkSync(join(tree.dir, 'nothing-here.mcpb'), tree.bundle);
+    const run = runAudit(tree);
+
+    // lstat, not existsSync: a dangling link does not resolve, so `existsSync` is false for it
+    // either way and the assertion would read as passing before the fix and die on an ENOENT after.
+    expect(run.status).toBe(1);
+    expect(nameIsTaken(tree.bundle), 'the publishable name is still there').toBe(false);
+    expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'nothing was quarantined').toBe(true);
+    expect(run.stderr).toContain('CONTAMINATED');
+  });
+
   it('quarantines it anyway — a path it could not read is still a path somebody can upload', () => {
     const tree = makeTree();
     unreadableBundle(tree);
@@ -412,6 +450,55 @@ describe('a bundle the audit could not read', () => {
     expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
     expect(run.stderr).toContain('could not be read as a bundle');
     expect(run.stderr).toContain('CONTAMINATED');
+  });
+});
+
+// A CLEAN bundle on a tree that cannot be released from. The two questions the script answers —
+// "is this bundle fit to publish" and "can this tree publish anything" — were one list, so a bundle
+// that passed every rule was renamed to `.REJECTED` and announced as CONTAMINATED with "Fix the
+// cause (usually .mcpbignore)". Every word false for that tree, and the good bundle destroyed to
+// say it.
+describe('a clean bundle on a tree whose artifact slot is blocked', () => {
+  it('is left exactly where it is, and is never called contaminated', () => {
+    const tree = makeTree();
+    mkdirSync(tree.artifact);
+    writeFileSync(join(tree.artifact, 'occupant'), 'left by an earlier run');
+    const run = runAudit(tree);
+
+    expect(run.status).toBe(2);
+    expect(existsSync(tree.bundle)).toBe(true);
+    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(false);
+    expect(run.stderr).not.toContain('CONTAMINATED');
+    expect(run.stderr).not.toContain('did not pass the audit');
+    expect(run.stderr).toContain('this tree cannot be released from');
+    expect(existsSync(tree.checksum)).toBe(false);
+  });
+});
+
+// Clearing the slot succeeding does not mean writing into it will: `rmSync(stale, { force: true })`
+// suppresses the ENOENT of a path that is not there, and the write into the same unwritable parent
+// then throws. Unwrapped that was a node stack trace and exit 1 — a tree to fix reported as a
+// bundle to fix — on the one path with no assertion over it.
+describe('a tree whose artifact cannot be written', () => {
+  // Root ignores the mode bits, so this says so rather than passing for the wrong reason. GitHub's
+  // ubuntu-latest runners execute as `runner`, not root, so it runs in CI.
+  const asRoot = process.getuid?.() === 0;
+
+  it.skipIf(asRoot)('refuses with exit 2 and a message, and keeps the clean bundle', () => {
+    const tree = makeTree();
+    chmodSync(tree.dir, 0o555);
+    try {
+      const run = runAudit(tree);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('could not be written');
+      expect(run.stderr).not.toMatch(/^\s+at /m);
+      expect(run.stderr).not.toContain('node:fs:');
+      expect(run.stdout).not.toContain('Bundle audit passed');
+      expect(existsSync(tree.bundle)).toBe(true);
+      expect(existsSync(tree.checksum)).toBe(false);
+    } finally {
+      chmodSync(tree.dir, 0o755);
+    }
   });
 });
 

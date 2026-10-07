@@ -18,7 +18,7 @@
 // Zero deps — plain Node, including the ZIP reader (a .mcpb is a ZIP). It is excluded from the
 // bundle by .mcpbignore's `scripts/` line.
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -338,6 +338,17 @@ const pkg = readJson(join(root, 'package.json'), 'package.json', problems);
 const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', problems);
 const version = manifest?.version ?? pkg?.version ?? null;
 
+// "Is there a name here", not "does it resolve". `existsSync` follows symlinks, so a dangling
+// artifact link reads as absent while still sitting in the directory under its publishable name.
+const present = (p) => {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 // A stale artifact from an earlier, passing run must not survive a failing one — otherwise "no
 // artifact is published" holds only for the operator who never released this bundle before.
 const artifactPath = version ? join(dirname(bundlePath), `${basename(bundlePath, '.mcpb')}-${version}.mcpb`) : null;
@@ -351,16 +362,21 @@ const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 // It is a REFUSAL rather than a warning, and the measurement is why: the same directory makes the
 // `writeFileSync(artifactPath, bundle)` on the success path throw EISDIR too, after the run has
 // already printed that the audit passed. A tree whose artifact slot cannot be cleared is a tree
-// this script cannot release from, whatever the bundle contains. Carried in `problems` rather than
-// exiting here, so the quarantine still runs.
-let housekeepingFailed = false;
+// this script cannot release from, whatever the bundle contains.
+//
+// A SEPARATE LIST FROM `problems`, and that separation is load-bearing. These two answer different
+// questions — "is this bundle fit to publish" and "can this tree publish anything" — and while a
+// housekeeping failure sat in `problems`, a bundle that passed every single rule was renamed to
+// `.REJECTED` and announced as CONTAMINATED with "Fix the cause (usually .mcpbignore)". Every word
+// of that was false for the tree it was said about, and the good bundle was destroyed to say it.
+// The quarantine below now runs on `problems` alone; housekeeping decides only the exit code.
+const housekeeping = [];
 if (artifactPath) {
   for (const stale of [artifactPath, checksumPath]) {
     try {
       rmSync(stale, { force: true });
     } catch (error) {
-      housekeepingFailed = true;
-      problems.push(
+      housekeeping.push(
         `could not clear the stale artifact ${basename(stale)}: ${error.message}` +
           ' — this tree cannot be released from until that path is gone',
       );
@@ -467,9 +483,13 @@ if (bundle && entries.length > 0 && !bundledManifest) {
   }
 }
 
-if (problems.length > 0) {
-  console.error(`Refusing to release ${basename(bundlePath)}: the bundle did not pass the audit.`);
-  for (const p of problems) console.error(`  - ${p}`);
+if (problems.length > 0 || housekeeping.length > 0) {
+  console.error(
+    problems.length > 0
+      ? `Refusing to release ${basename(bundlePath)}: the bundle did not pass the audit.`
+      : `Refusing to release ${basename(bundlePath)}: this tree cannot be released from.`,
+  );
+  for (const p of [...problems, ...housekeeping]) console.error(`  - ${p}`);
   // Clearing only the versioned copy left the FILE package.json names sitting there with the
   // secret inside it — the one somebody would upload. It is renamed rather than deleted so the
   // evidence survives for whoever has to find out how it got in.
@@ -478,8 +498,12 @@ if (problems.length > 0) {
   // for every read that threw — EACCES, EISDIR, a mid-pack truncation — and on exactly those runs
   // the file is still sitting under its publishable name. Guarding on `bundle` skipped the
   // quarantine on the cases that need it most, which is the #90 defect one level down.
+  //
+  // `lstatSync`, not `existsSync`: `existsSync` follows the link, so a DANGLING `zendesk.mcpb`
+  // symlink answered false and the publishable name survived without a word about it. The question
+  // is whether a name is there for somebody to upload, not whether it resolves.
   let quarantined = null;
-  if (existsSync(bundlePath)) {
+  if (problems.length > 0 && present(bundlePath)) {
     quarantined = `${bundlePath}.REJECTED`;
     try {
       rmSync(quarantined, { force: true });
@@ -488,7 +512,7 @@ if (problems.length > 0) {
       quarantined = null;
       // A quarantine this script could not perform is housekeeping it could not do, so it exits 2
       // and not 1: the caller is being told to fix the TREE, by hand, before anything is uploaded.
-      housekeepingFailed = true;
+      housekeeping.push(`could not quarantine ${basename(bundlePath)} — DELETE IT BY HAND`);
       console.error(`  - could not quarantine ${basename(bundlePath)}: ${error.message} — DELETE IT BY HAND`);
     }
   }
@@ -502,13 +526,31 @@ if (problems.length > 0) {
   // Exit 2 is "this script could not do its own housekeeping", kept apart from exit 1, "the bundle
   // did not pass", the way scripts/assert-no-bound-port-literals.mjs:140 separates the two. The
   // caller needs the distinction: exit 1 is a bundle to fix, exit 2 is a tree to fix.
-  process.exit(housekeepingFailed ? 2 : 1);
+  process.exit(housekeeping.length > 0 ? 2 : 1);
 }
 
+// WRAPPED, because clearing the slot succeeding does not mean writing into it will. Measured on
+// node v26.5.0, a read-only parent lets `rmSync(stale, { force: true })` pass — the path is not
+// there, so ENOENT is suppressed — and answers this write with EACCES. Unwrapped that was a node
+// stack trace and exit 1: a tree to fix, reported as a bundle to fix, through the one path the
+// no-stack-trace bar does not cover. It is exit 2 for the same reason the cleanup failure is.
 const sha256 = createHash('sha256').update(bundle).digest('hex');
-writeFileSync(artifactPath, bundle);
-// `shasum -a 256 -c <file>.sha256` format: digest, two spaces, the name it applies to.
-writeFileSync(checksumPath, `${sha256}  ${basename(artifactPath)}\n`);
+try {
+  writeFileSync(artifactPath, bundle);
+  // `shasum -a 256 -c <file>.sha256` format: digest, two spaces, the name it applies to.
+  writeFileSync(checksumPath, `${sha256}  ${basename(artifactPath)}\n`);
+} catch (error) {
+  console.error(`Refusing to release ${basename(bundlePath)}: this tree cannot be released from.`);
+  console.error(
+    `  - the audit passed, but ${basename(artifactPath)} could not be written: ${error.message}` +
+      ' — this tree cannot be released from until that path is writable',
+  );
+  // The bundle is CLEAN, so it is left exactly where it is. Nothing is quarantined and nothing is
+  // called contaminated: the defect is the tree, and the packed bundle is the thing to keep.
+  rmSync(checksumPath, { force: true });
+  rmSync(artifactPath, { force: true });
+  process.exit(2);
+}
 
 const dependencies = accepted.filter((a) => a.rule === 'runtime-dependencies').length;
 console.log(`Accepted ${accepted.length} paths, of which ${dependencies} are node_modules/** [runtime-dependencies].`);
