@@ -81,5 +81,5 @@ jobs:
           else
             gh release create "v$VERSION" zendesk-plugin.zip \
               --title "v$VERSION" \
-              --notes "Zendesk plugin v$VERSION. Install it from the PersoQua plugin marketplace at https://plugins.persoqua.de; this archive is the same artifact, for manual installation."
+              --notes "Zendesk plugin v$VERSION. Customers install it from the PersoQua plugin marketplace at https://plugins.persoqua.de. This archive is the same artifact, kept for internal traceability \u2014 it is not a customer install path, since customers have no GitHub account and this repository is private."
           fi
