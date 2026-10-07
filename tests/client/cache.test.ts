@@ -5,6 +5,14 @@ import { join } from 'node:path';
 import { ResponseCache } from '../../src/client/cache.js';
 import { modeBitsIgnored } from '../setup/mode-bits.js';
 
+function thrownBy(fn: () => unknown): Error | undefined {
+  try {
+    fn();
+  } catch (err) {
+    return err as Error;
+  }
+}
+
 describe('ResponseCache', () => {
   let dir: string;
 
@@ -111,6 +119,47 @@ describe('ResponseCache', () => {
       expect((thrown?.cause as NodeJS.ErrnoException | undefined)?.code).toBe('EACCES');
     } finally {
       chmodSync(dir, 0o700);
+    }
+  });
+
+  // #54 names load() as well, and only save() was sanitized. The cache dir is NESTED so that a leak
+  // of either path segment is caught, and both names would appear inside Node's errno message.
+  it.skipIf(modeBitsIgnored)('reports an unreadable entry as a miss, by code, without the path', () => {
+    const nested = join(dir, 'deep', 'cache');
+    mkdirSync(nested, { recursive: true });
+    const cache = new ResponseCache(nested);
+    const entry = cache.save('zendesk_get_me', { a: 1 });
+    chmodSync(entry.path, 0o000);
+    try {
+      const thrown = thrownBy(() => cache.load(entry.handle));
+      expect(thrown?.message).toMatch(/not found/i);
+      expect(thrown?.message).toContain('EACCES');
+      expect(thrown?.message).not.toContain(dir);
+      expect(thrown?.message).not.toContain(nested);
+      expect(thrown?.message).not.toContain('.json');
+      expect((thrown?.cause as NodeJS.ErrnoException | undefined)?.code).toBe('EACCES');
+    } finally {
+      chmodSync(entry.path, 0o600);
+    }
+  });
+
+  // The reap of an expired entry can fail too — unlink needs the write bit on the directory.
+  it.skipIf(modeBitsIgnored)('reports an expired entry it cannot reap as a miss, without the path', () => {
+    const nested = join(dir, 'deep', 'cache');
+    mkdirSync(nested, { recursive: true });
+    const cache = new ResponseCache(nested, { ttlMs: 1000 });
+    const entry = cache.save('zendesk_get_me', { a: 1 });
+    const old = new Date(Date.now() - 10_000);
+    utimesSync(entry.path, old, old);
+    chmodSync(nested, 0o500);
+    try {
+      const thrown = thrownBy(() => cache.load(entry.handle));
+      expect(thrown?.message).toMatch(/not found/i);
+      expect(thrown?.message).not.toContain(dir);
+      expect(thrown?.message).not.toContain(nested);
+      expect(thrown?.message).not.toContain('.json');
+    } finally {
+      chmodSync(nested, 0o700);
     }
   });
 

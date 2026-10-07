@@ -21882,7 +21882,7 @@ var ZendeskHttpClient = class {
 };
 
 // src/client/cache.ts
-import { writeFileSync as writeFileSync2, readFileSync as readFileSync2, mkdirSync as mkdirSync2, existsSync as existsSync2, readdirSync, statSync, rmSync, accessSync, constants } from "node:fs";
+import { writeFileSync as writeFileSync2, readFileSync as readFileSync2, mkdirSync as mkdirSync2, readdirSync, statSync, rmSync, accessSync, constants } from "node:fs";
 import { join as join2, resolve, sep } from "node:path";
 import { randomBytes as randomBytes3 } from "node:crypto";
 var HANDLE_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -21925,11 +21925,12 @@ var ResponseCache = class {
   }
   load(handle) {
     const path = this.resolveHandlePath(handle);
-    if (!existsSync2(path) || this.isExpired(path)) {
-      rmSync(path, { force: true });
-      throw new Error(`Cache handle not found: ${handle}`);
+    try {
+      if (this.isExpired(path)) rmSync(path, { force: true });
+      return JSON.parse(readFileSync2(path, "utf8"));
+    } catch (err) {
+      throw new Error(`Cache handle not found: ${handle} (${errorCode(err)})`, { cause: err });
     }
-    return JSON.parse(readFileSync2(path, "utf8"));
   }
   isExpired(path) {
     return Date.now() - statSync(path).mtimeMs > this.ttlMs;

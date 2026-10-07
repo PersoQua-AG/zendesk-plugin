@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, accessSync, constants } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, readdirSync, statSync, rmSync, accessSync, constants } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { warnConfig } from '../util/warn-config.js';
@@ -63,12 +63,17 @@ export class ResponseCache {
     }
     load(handle) {
         const path = this.resolveHandlePath(handle);
-        // An expired entry is treated as missing (and reaped) — never served stale PII.
-        if (!existsSync(path) || this.isExpired(path)) {
-            rmSync(path, { force: true });
-            throw new Error(`Cache handle not found: ${handle}`);
+        try {
+            // An expired entry is treated as missing (and reaped) — never served stale PII.
+            if (this.isExpired(path))
+                rmSync(path, { force: true });
+            return JSON.parse(readFileSync(path, 'utf8'));
         }
-        return JSON.parse(readFileSync(path, 'utf8'));
+        catch (err) {
+            // An entry we cannot stat, reap, read or parse is a MISS, not a fatal store diagnosis (#54):
+            // the caller refetches, and Node's path-carrying message never reaches the model.
+            throw new Error(`Cache handle not found: ${handle} (${errorCode(err)})`, { cause: err });
+        }
     }
     isExpired(path) {
         return Date.now() - statSync(path).mtimeMs > this.ttlMs;
