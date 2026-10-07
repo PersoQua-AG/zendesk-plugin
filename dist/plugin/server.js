@@ -23126,13 +23126,11 @@ var bulkCreateTicketSchema = ticketUpdateFieldsSchema.extend({
     body: external_exports.string().min(1).optional(),
     html_body: external_exports.string().min(1).optional(),
     public: external_exports.boolean().optional()
-  }),
+  }).strict(),
   requester_id: external_exports.number().int().positive().optional(),
-  // Zendesk's write-only follow-up link (Tickets JSON format). Declared because a zod object
-  // strips undeclared keys, which silently dropped the link and created an UNLINKED ticket
-  // while the tool still reported success (#66).
+  // Zendesk's write-only follow-up link (Tickets JSON format).
   via_followup_source_id: external_exports.number().int().positive().optional()
-});
+}).strict();
 function registerTicketTools(server, ctx) {
   const { httpClient, cache, securityLevel, markdownDefault } = ctx;
   server.registerTool(
@@ -23162,7 +23160,8 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
     "zendesk_create_ticket",
     {
       description: "Create a ticket. The comment is converted Markdown\u2192HTML unless markdown:false.",
-      inputSchema: {
+      // A ZodObject rather than a raw shape, so `.strict()` reaches the top-level args too (#66).
+      inputSchema: external_exports.object({
         subject: external_exports.string().min(1),
         comment: external_exports.string().min(1),
         requesterId: external_exports.number().int().positive().optional(),
@@ -23176,7 +23175,7 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
         public: external_exports.boolean().optional(),
         // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
         followupSourceId: external_exports.number().int().positive().optional()
-      }
+      }).strict()
     },
     async (args) => okWithHandle(await createTicket(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault }))
   );

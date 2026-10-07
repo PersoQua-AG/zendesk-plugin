@@ -69,3 +69,44 @@ describe('follow-up tickets keep their link to the closed source ticket (#66)', 
     expect(Object.keys(ticket)).not.toContain('via_followup_source_id');
   });
 });
+
+// #66, QA round 2: the two instances were fixed, the MECHANISM was not. A zod object strips an
+// undeclared key and the tool still reports success, so the follow-up link silently went missing
+// whenever the model reached for the OTHER tool's name for it — measured as isError=false with a
+// body carrying no link and the message `Created ticket #99` / `Job completed`. Both create
+// surfaces refuse an undeclared key now, so a mistyped key is a loud input-validation error.
+describe('an undeclared create key is refused, not stripped (#66, mechanism)', () => {
+  // The mirror-image mistake on each tool: the key name the OTHER tool uses for the same link.
+  it('single: the bulk record\'s key name is refused instead of silently dropped', async () => {
+    const r = await once(
+      'zendesk_create_ticket',
+      { subject: 'Follow-up', comment: 'hi', via_followup_source_id: SOURCE },
+      singleReply,
+    );
+    expect(r.isError).toBe(true);
+    expect(r.calls).toEqual([]);
+    expect(r.text).toMatch(/via_followup_source_id/);
+  });
+
+  it('bulk: the single tool\'s key name is refused instead of silently dropped', async () => {
+    const r = await once(
+      'zendesk_create_tickets_bulk',
+      { tickets: [{ subject: 'Follow-up', comment: COMMENT, followupSourceId: SOURCE }] },
+      bulkReply,
+    );
+    expect(r.isError).toBe(true);
+    expect(r.calls).toEqual([]);
+    expect(r.text).toMatch(/followupSourceId/);
+  });
+
+  // Not only this key: any misspelling of any field is refused, which is what makes it a mechanism.
+  it.each([
+    ['zendesk_create_ticket', { subject: 'x', comment: 'hi', requester_id: 7 }],
+    ['zendesk_create_tickets_bulk', { tickets: [{ subject: 'x', comment: COMMENT, requesterId: 7 }] }],
+  ] as const)('%s refuses a misspelt field name', async (name, args) => {
+    const r = await once(name, args as Record<string, unknown>, name.endsWith('bulk') ? bulkReply : singleReply);
+    expect(r.isError).toBe(true);
+    expect(r.calls).toEqual([]);
+  });
+});
+

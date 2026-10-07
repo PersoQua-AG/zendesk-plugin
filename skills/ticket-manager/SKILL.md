@@ -52,7 +52,7 @@ Rules:
 
 ### Creating a follow-up for a closed ticket
 
-To carry a closed ticket's context forward, create a **linked** follow-up. Both create tools accept the link, so use the single-create tool unless you are creating several at once:
+To carry a closed ticket's context forward, create a **linked** follow-up. Both create tools accept the link, so use the single-create tool unless you are creating several at once. The two key names differ because a bulk record is a raw Zendesk ticket while every single-tool argument is camelCase — and neither tool drops a key it does not know: an undeclared or mistyped key comes back as an input-validation error, never as a ticket created without its link.
 
 ```
 zendesk_create_ticket  subject:"Follow-up: <original subject>"

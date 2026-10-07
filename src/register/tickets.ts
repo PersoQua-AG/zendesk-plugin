@@ -32,19 +32,25 @@ const ticketUpdateFieldsSchema = z.object({
 // fields (subject required, a comment), so bulk-create validation is symmetric with the
 // single-create/-update tools instead of forwarding arbitrary objects to create_many. The only
 // escape valve is a custom field's `value`, which is genuinely open-typed.
-const bulkCreateTicketSchema = ticketUpdateFieldsSchema.extend({
-  subject: z.string().min(1),
-  comment: z.object({
-    body: z.string().min(1).optional(),
-    html_body: z.string().min(1).optional(),
-    public: z.boolean().optional(),
-  }),
-  requester_id: z.number().int().positive().optional(),
-  // Zendesk's write-only follow-up link (Tickets JSON format). Declared because a zod object
-  // strips undeclared keys, which silently dropped the link and created an UNLINKED ticket
-  // while the tool still reported success (#66).
-  via_followup_source_id: z.number().int().positive().optional(),
-});
+// #66: `.strict()` is the mechanism, not the declaration below. Both create surfaces already
+// PUBLISH additionalProperties:false, while the zod parse stripped an undeclared key and the tool
+// reported success — so a mistyped key name silently created an unlinked follow-up. Strict makes
+// the runtime keep the contract the schema advertises, for every field and not just this one.
+const bulkCreateTicketSchema = ticketUpdateFieldsSchema
+  .extend({
+    subject: z.string().min(1),
+    comment: z
+      .object({
+        body: z.string().min(1).optional(),
+        html_body: z.string().min(1).optional(),
+        public: z.boolean().optional(),
+      })
+      .strict(),
+    requester_id: z.number().int().positive().optional(),
+    // Zendesk's write-only follow-up link (Tickets JSON format).
+    via_followup_source_id: z.number().int().positive().optional(),
+  })
+  .strict();
 
 export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
   const { httpClient, cache, securityLevel, markdownDefault } = ctx;
@@ -77,21 +83,24 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
     'zendesk_create_ticket',
     {
       description: 'Create a ticket. The comment is converted Markdown→HTML unless markdown:false.',
-      inputSchema: {
-        subject: z.string().min(1),
-        comment: z.string().min(1),
-        requesterId: z.number().int().positive().optional(),
-        priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
-        // A ticket is never created `closed`; the rest of the published set is derived, not retyped.
-        status: z.enum(TICKET_STATUSES).exclude(['closed']).optional(),
-        tags: z.array(z.string()).optional(),
-        groupId: z.number().int().positive().optional(),
-        assigneeId: z.number().int().positive().optional(),
-        markdown: z.boolean().optional(),
-        public: z.boolean().optional(),
-        // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
-        followupSourceId: z.number().int().positive().optional(),
-      },
+      // A ZodObject rather than a raw shape, so `.strict()` reaches the top-level args too (#66).
+      inputSchema: z
+        .object({
+          subject: z.string().min(1),
+          comment: z.string().min(1),
+          requesterId: z.number().int().positive().optional(),
+          priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
+          // A ticket is never created `closed`; the rest of the published set is derived, not retyped.
+          status: z.enum(TICKET_STATUSES).exclude(['closed']).optional(),
+          tags: z.array(z.string()).optional(),
+          groupId: z.number().int().positive().optional(),
+          assigneeId: z.number().int().positive().optional(),
+          markdown: z.boolean().optional(),
+          public: z.boolean().optional(),
+          // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
+          followupSourceId: z.number().int().positive().optional(),
+        })
+        .strict(),
     },
     async (args) => okWithHandle(await createTicket(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault })),
   );
