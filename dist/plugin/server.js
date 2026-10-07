@@ -22790,8 +22790,8 @@ var StatusSchema = external_exports.object({ status: external_exports.string().n
 var BatchStatusSchema = StatusSchema.extend({ id: external_exports.number() });
 async function readStatus(client, ticketId) {
   const raw = await client.request(`/tickets/${ticketId}.json`);
-  const parsed = external_exports.object({ ticket: StatusSchema }).safeParse(raw);
-  return parsed.success ? parsed.data.ticket.status ?? null : null;
+  const parsed = external_exports.object({ ticket: BatchStatusSchema }).safeParse(raw);
+  return parsed.success && parsed.data.ticket.id === ticketId ? parsed.data.ticket.status ?? null : null;
 }
 async function readStatuses(client, ids) {
   const raw = await client.request(`/tickets/show_many.json?ids=${encodeURIComponent(ids.join(","))}`);

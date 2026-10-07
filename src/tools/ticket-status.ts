@@ -45,11 +45,11 @@ export function transitionRefusal(current: string | null, target: string): strin
 const StatusSchema = z.object({ status: z.string().nullish() });
 const BatchStatusSchema = StatusSchema.extend({ id: z.number() });
 
-// The current status of one ticket, or null when the response does not carry one.
+// The current status of THE ticket asked for, or null — an answer about another id is not an answer.
 export async function readStatus(client: ZendeskHttpClient, ticketId: number): Promise<string | null> {
   const raw = await client.request<unknown>(`/tickets/${ticketId}.json`);
-  const parsed = z.object({ ticket: StatusSchema }).safeParse(raw);
-  return parsed.success ? parsed.data.ticket.status ?? null : null;
+  const parsed = z.object({ ticket: BatchStatusSchema }).safeParse(raw);
+  return parsed.success && parsed.data.ticket.id === ticketId ? parsed.data.ticket.status ?? null : null;
 }
 
 // Current statuses for a batch, by id. Parsed per RECORD, not per response: validating the whole

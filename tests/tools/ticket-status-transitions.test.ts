@@ -175,6 +175,20 @@ describe('an unreadable current status refuses the write (#61, fail-closed)', ()
     expect(r.calls.filter((c) => c.method === 'PUT')).toEqual([]);
   });
 
+  // readStatuses keys on the id in the RECORD, so the batch path never confused two tickets. The
+  // single path took whatever ticket the response carried, which let a status read for 9999 permit
+  // the write on 1001 — fail-OPEN on the one asymmetrically unguarded side.
+  it('refuses the single update when the pre-read answers for another ticket', async () => {
+    const r = await once(
+      'zendesk_update_ticket',
+      { ticketId: 1001, fields: { status: 'open' }, updatedStamp: STAMP },
+      (c: Call): Response => json(c.method === 'GET' ? { ticket: { id: 9999, status: 'open' } } : {}),
+    );
+    expect(r.isError).toBe(true);
+    expect(r.calls.filter((c) => c.method === 'PUT')).toEqual([]);
+    expect(r.text).toMatch(/could not be read/);
+  });
+
   it('drops a bulk id show_many did not answer for, instead of writing it', async () => {
     const r = await once(
       'zendesk_update_tickets_bulk',
