@@ -5,6 +5,9 @@
 // of its rule.
 import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { startCallbackListener } from '../../src/auth/oauth-flow.js';
 import { freePort } from '../auth/login-harness.js';
 import { allowForeignBind, swallowedRefusal, takeRefusals } from '../setup/acquired-ports.js';
@@ -151,6 +154,16 @@ describe('a fixed bind port is refused when it is bound', () => {
       new RegExp(`Refusing to bind the fixed port ${SHARED_STRANGER}`),
     );
     claimRefusal();
+  });
+
+  // THE NaN BRANCH OF portOf, which is what keeps a unix socket path from being read as a port.
+  // Unasserted until now: `Number('/tmp/x.sock')` is NaN and must reach node untouched, and the
+  // guard must say nothing about it. Routed here by `ponytail-reviewer`.
+  it('says nothing about a unix socket path, which is not a port', async () => {
+    const socket = join(mkdtempSync(join(tmpdir(), 'bind-guard-')), 's.sock');
+    const server = await listening(createServer().listen(socket));
+    expect(typeof server.address()).toBe('string');
+    rmSync(dirname(socket), { recursive: true, force: true });
   });
 
   // The product relies on node's own synchronous RangeError for an out-of-range port

@@ -30,9 +30,13 @@ function portOf(args: unknown[]): unknown {
   if (typeof raw !== 'string') return raw;
   // `Number()`, not /^\d+$/: node coerces the string the same way, so `listen('0x4650')` and
   // `listen('1.8e4')` both bind 18000 — measured — and both walked past a decimal-digits test while
-  // the header advertised exactly those shapes as caught. Only a NaN is a unix socket path.
-  const coerced = Number(raw);
-  return Number.isNaN(coerced) ? undefined : coerced;
+  // the header advertised exactly those shapes as caught.
+  //
+  // A unix socket path becomes NaN and needs no special case: `isFixedBindPort` asks
+  // `Number.isInteger`, which NaN fails. Measured — mapping NaN to `undefined` here changed no
+  // verdict, so the line is gone and the socket-path case in the guard's test pins the behaviour
+  // rather than this mapping.
+  return Number(raw);
 }
 
 // The frame that asked for the bind, not the frames of this file or of node's own internals — a
