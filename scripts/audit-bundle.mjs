@@ -18,7 +18,7 @@
 // Zero deps — plain Node, including the ZIP reader (a .mcpb is a ZIP). It is excluded from the
 // bundle by .mcpbignore's `scripts/` line.
 import { createHash } from 'node:crypto';
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -308,13 +308,94 @@ function lineOf(text, index) {
   return line;
 }
 
-function readJson(path, label, problems) {
+function readJson(path, label, faults) {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
-    problems.push(`${label} is missing or unreadable — the release version cannot be established`);
+    faults.push(`${label} is missing or unreadable — the release version cannot be established`);
     return null;
   }
+}
+
+// --------------------------------------------------------------------------------------------
+// TWO VERDICTS, TWO LISTS (#105). "This BUNDLE is unfit" and "this TREE cannot publish anything"
+// used to share one list, and that list is what moves files: an unreadable manifest.json, an
+// unreadable package.json, a bundle path that could not be read or a malformed --expect-version
+// each renamed a provably clean bundle to .REJECTED and announced it as CONTAMINATED, naming
+// .mcpbignore as the likely cause. Measured against a byte-identical bundle: readable manifests
+// gave exit 0 and an artifact, both manifests corrupt made the same bundle disappear.
+//
+// `problems` is now only ever about the archive. `treeFaults` is about this checkout, and nothing
+// in it moves anything.
+// --------------------------------------------------------------------------------------------
+
+// A path's name, with THREE answers rather than two (#105 AC9). 'unknown' is the one that was
+// missing: an lstat that throws EACCES used to collapse into "taken", which is what made the
+// quarantine fire on a path nobody had looked at. It collapses into neither side now.
+function nameState(path) {
+  try {
+    return lstatSync(path, { throwIfNoEntry: false }) === undefined ? 'free' : 'taken';
+  } catch {
+    // Not ENOENT — `throwIfNoEntry: false` already answered that. EACCES, ELOOP and the like mean
+    // this script cannot tell, and by owner decision (#105) cannot-tell is reported, not acted on.
+    return 'unknown';
+  }
+}
+
+// How many .REJECTED slots the search may try. BOUNDED, and the bound is named rather than
+// discovered: round 4 of PR #102's review measured an unbounded free-name search emit 67 MB of
+// stderr and 90,235 lines in under 20 seconds, with the contaminated bundle never quarantined and
+// the process only stopped by the reviewer's timeout. In CI that hangs the job. A hundred failed
+// runs with their evidence still on disk is an operator problem, not a loop condition.
+const QUARANTINE_SLOTS = 100;
+
+// The first free quarantine name, or the reason there is none. `extraSuffix` is for the symlink
+// case below, where TWO names have to be free in the same slot.
+function freeQuarantineSlot(base, extraSuffix) {
+  for (let n = 0; n <= QUARANTINE_SLOTS; n += 1) {
+    const candidate = n === 0 ? `${base}.REJECTED` : `${base}.REJECTED.${n}`;
+    const states = (extraSuffix ? [candidate, `${candidate}${extraSuffix}`] : [candidate]).map(nameState);
+    if (states.includes('unknown')) return { fault: `cannot tell whether ${basename(candidate)} is already there` };
+    if (states.every((state) => state === 'free')) return { name: candidate };
+  }
+  return { fault: `all ${QUARANTINE_SLOTS + 1} quarantine names next to ${basename(base)} are taken` };
+}
+
+const SHAPES = [
+  ['a directory', (s) => s.isDirectory()],
+  ['a FIFO', (s) => s.isFIFO()],
+  ['a socket', (s) => s.isSocket()],
+  ['a block device', (s) => s.isBlockDevice()],
+  ['a character device', (s) => s.isCharacterDevice()],
+];
+
+// WHAT IS UNDER THE PUBLISHABLE NAME, settled before anything reads it (#105 AC4, AC6).
+// `readFileSync` on a FIFO blocks in open(2) for as long as nobody writes, and this path has no
+// timeout: measured, the release gate produced no output at all and had to be killed after 6 s.
+// A directory was worse than a hang — `renameSync` moved the WHOLE DIRECTORY to .REJECTED and
+// called it contaminated. lstat and stat answer both questions without opening anything, so the
+// refusal is bounded by construction rather than by a timer.
+function bundleShape(path) {
+  let link;
+  try {
+    link = lstatSync(path, { throwIfNoEntry: false });
+  } catch (error) {
+    return { fault: `${basename(path)} cannot be examined: ${error.code ?? error.message}` };
+  }
+  if (link === undefined) return { fault: `there is nothing at ${path}` };
+  if (!link.isSymbolicLink()) {
+    const shape = SHAPES.find(([, is]) => is(link));
+    return shape ? { fault: `${basename(path)} is ${shape[0]}, not a packed bundle` } : {};
+  }
+  let target;
+  try {
+    target = statSync(path, { throwIfNoEntry: false });
+  } catch (error) {
+    return { fault: `${basename(path)} is a symlink this script cannot follow: ${error.code ?? error.message}` };
+  }
+  if (target === undefined) return { fault: `${basename(path)} is a symlink pointing at nothing` };
+  const shape = SHAPES.find(([, is]) => is(target));
+  return shape ? { fault: `${basename(path)} is a symlink to ${shape[0]}, not a packed bundle` } : { symlink: true };
 }
 
 // --------------------------------------------------------------------------------------------
@@ -327,41 +408,87 @@ for (let i = 0; i < argv.length; i++) {
   else positional.push(argv[i]);
 }
 
-const bundlePath = resolve(root, positional[0] ?? 'zendesk.mcpb');
+// A RELATIVE ARGUMENT IS THE CALLER'S (#105 AC5). `resolve(root, …)` resolved it against the
+// SCRIPT's tree, so from any other directory `node scripts/audit-bundle.mjs ./x.mcpb` silently
+// meant `<repo>/x.mcpb` — a file the caller never named, audited and, on a failure, quarantined.
+// An absolute argument is unaffected, and the default is still this repository's own bundle,
+// which is what package.json's `pack` script relies on.
+const bundlePath = positional[0] === undefined ? join(root, 'zendesk.mcpb') : resolve(positional[0]);
 const problems = [];
+const treeFaults = [];
 const accepted = [];
 // Counted for the coverage line the run prints, so the disclosure cannot go stale.
 let scannedEntries = 0;
 let scannedBytes = 0;
 
-const pkg = readJson(join(root, 'package.json'), 'package.json', problems);
-const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', problems);
+const pkg = readJson(join(root, 'package.json'), 'package.json', treeFaults);
+const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', treeFaults);
 const version = manifest?.version ?? pkg?.version ?? null;
 
 // A stale artifact from an earlier, passing run must not survive a failing one — otherwise "no
 // artifact is published" holds only for the operator who never released this bundle before.
 const artifactPath = version ? join(dirname(bundlePath), `${basename(bundlePath, '.mcpb')}-${version}.mcpb`) : null;
 const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
-if (artifactPath) for (const stale of [artifactPath, checksumPath]) rmSync(stale, { force: true });
+// `force: true` suppresses ENOENT and nothing else. A stale artifact that is a non-empty
+// directory makes this throw, and an unwritable parent makes it throw EACCES — unguarded, that
+// throw landed before the verdict below and the run ended as a stack trace. A tree whose artifact
+// slot cannot be cleared cannot be released from, whatever the bundle holds, so it is a TREE
+// fault: nothing about the archive is being claimed and nothing is moved.
+if (artifactPath) {
+  for (const stale of [artifactPath, checksumPath]) {
+    try {
+      rmSync(stale, { force: true });
+    } catch (error) {
+      treeFaults.push(
+        `the stale artifact ${basename(stale)} could not be cleared: ${error.code ?? error.message}` +
+          ' — this tree cannot be released from until that path is gone',
+      );
+    }
+  }
+}
 
 // TWO version families since #68, by owner decision: manifest.json is the MCPB extension, which that
 // issue does not change and which therefore stays at its own number, while package.json and the
 // Claude Code plugin manifests moved on. So the equality that used to stand here cannot: what the
 // bundle has to be right about is its OWN manifest, and that is asserted against manifest.json below
 // (`the bundled manifest.json says …`). package.json's number is not shipped inside the bundle.
+// A TREE fault, not a bundle one: the archive has not been looked at yet, and what disagrees is
+// what the caller asked for against what this checkout declares.
 if (expectedVersion !== null && version !== expectedVersion) {
-  problems.push(`version mismatch: the release was asked for ${expectedVersion || '(empty)'}, the tree declares ${version}`);
+  treeFaults.push(`version mismatch: the release was asked for ${expectedVersion || '(empty)'}, the tree declares ${version}`);
 }
+
+// THE SHAPE FIRST, THE READ SECOND, and the two faults are of different kinds.
+const shape = bundleShape(bundlePath);
+if (shape.fault) treeFaults.push(shape.fault);
 
 let bundle = null;
 let entries = [];
 let readable = false;
-try {
-  bundle = readFileSync(bundlePath);
-  entries = readArchive(bundle);
-  readable = true;
-} catch (error) {
-  problems.push(`${basename(bundlePath)} could not be read as a bundle: ${error.message}`);
+if (!shape.fault) {
+  try {
+    bundle = readFileSync(bundlePath);
+  } catch (error) {
+    // A PATH THIS SCRIPT CANNOT READ IS UNKNOWN, NOT CONTAMINATED — owner decision on #105.
+    // Quarantining it is what round 4 of PR #102's review measured destroying provably clean
+    // bundles. So it is a tree fault: reported, named, left exactly where it is.
+    treeFaults.push(
+      `${basename(bundlePath)} could not be read: ${error.code ?? error.message}` +
+        ' — unreadable is unknown, not contaminated, so nothing was moved',
+    );
+  }
+}
+// Everything from here down IS a verdict on the archive. The fail-closed reader family — an
+// encrypted entry, a data descriptor, ZIP64, a record count that contradicts the records, a file
+// present only in the local headers — belongs to `problems` and must keep quarantining, which is
+// what #90 exists for.
+if (bundle) {
+  try {
+    entries = readArchive(bundle);
+    readable = true;
+  } catch (error) {
+    problems.push(`${basename(bundlePath)} could not be read as a bundle: ${error.message}`);
+  }
 }
 
 // An empty archive passes every path rule there is. That is a vacuous pass, not a clean bundle.
@@ -413,7 +540,20 @@ for (const entry of entries) {
   }
   scannedEntries++;
   scannedBytes += content.length;
-  const text = content.toString('utf8');
+  // A declared entry above node's string limit (~512 MB) threw ERR_STRING_TOO_LONG here as a
+  // stack trace, which is an infrastructure failure standing where a release verdict belongs.
+  // It is a refusal: the credential scan could not read the entry, and an entry the scan cannot
+  // read is exactly what the NUL-byte rule above refuses too, for the same reason.
+  let text;
+  try {
+    text = content.toString('utf8');
+  } catch (error) {
+    problems.push(
+      `entry too large for the credential scan to read as text, refused: ${path}` +
+        ` (${content.length} bytes, ${error.code ?? error.message})`,
+    );
+    continue;
+  }
   for (const { rule, re, skip } of CREDENTIAL_PATTERNS) {
     // Every match is walked, not just the first: a carve-out that consumed the first hit would
     // otherwise hide a real secret further down the same file.
@@ -435,7 +575,11 @@ if (bundle && entries.length > 0 && !bundledManifest) {
 } else if (bundle && bundledManifest) {
   try {
     const bundledVersion = JSON.parse(readEntry(bundle, bundledManifest).toString('utf8')).version;
-    if (bundledVersion !== version) {
+    // ONLY WHEN THE TREE HAS A VERSION TO COMPARE WITH. This is the exact route by which a broken
+    // manifest.json destroyed a clean bundle: `version` fell to null, every bundle disagreed with
+    // null, and the disagreement was filed as contamination. A comparison against an unknown is
+    // not a finding about the archive; the unreadable manifest is already a tree fault above.
+    if (version !== null && bundledVersion !== version) {
       problems.push(`version mismatch: the bundled manifest.json says ${bundledVersion}, the tree declares ${version}`);
     }
   } catch (error) {
@@ -443,32 +587,71 @@ if (bundle && entries.length > 0 && !bundledManifest) {
   }
 }
 
+// THE TREE VERDICT. It moves nothing, it renames nothing, and it says so — because the price of
+// the owner's decision is that a path somebody could upload stays under its name, and a message
+// that hid that would make the decision worse than the defect it replaced.
+if (treeFaults.length > 0) {
+  console.error(`Cannot release from this tree: ${basename(bundlePath)} was not judged.`);
+  for (const fault of treeFaults) console.error(`  - ${fault}`);
+  console.error(
+    `\nThis is NOT a verdict on the bundle, and it is not a .mcpbignore problem. Nothing was` +
+      ` renamed and nothing was deleted: whatever is at ${bundlePath} is STILL THERE, under that` +
+      ' name, and could be uploaded. Fix the tree and run the audit again; until then the file is' +
+      ' the operator\'s to deal with.',
+  );
+}
+
 if (problems.length > 0) {
+  if (treeFaults.length > 0) console.error('');
   console.error(`Refusing to release ${basename(bundlePath)}: the bundle did not pass the audit.`);
   for (const p of problems) console.error(`  - ${p}`);
   // Clearing only the versioned copy left the FILE package.json names sitting there with the
   // secret inside it — the one somebody would upload. It is renamed rather than deleted so the
   // evidence survives for whoever has to find out how it got in.
+  // NO NAME CHECK HERE, and that is the design rather than an omission. PR #102 had to ask "is
+  // there a name" because the condition was `bundle` — the BUFFER, which is null for every read
+  // that threw, exactly the runs where the file is still under its publishable name. On this
+  // branch a read that threw is a TREE fault and the file is deliberately left alone (owner
+  // decision), and a shape that is not a regular file never got here either. Reaching this point
+  // means bundleShape() said "a regular file" and readFileSync() returned its bytes.
   let quarantined = null;
-  if (bundle) {
-    quarantined = `${bundlePath}.REJECTED`;
+  // THE PREVIOUS QUARANTINE SURVIVES. This used to `rmSync(quarantined, { force: true })` three
+  // lines under a comment promising the evidence would survive; measured over two failing runs,
+  // run 2 overwrote run 1's .REJECTED and the tokens.enc inside it was gone. A free slot is
+  // searched for instead, and the search is bounded — see QUARANTINE_SLOTS.
+  //
+  // A SYMLINK NEEDS BOTH NAMES. `renameSync` on a link moves the LINK; the target keeps the name
+  // it is reachable under, so "it cannot be uploaded by name" held for the link only. The target
+  // moves first — realpath is read before anything moves — and the link after it, so neither
+  // name resolves to an uploadable artifact.
+  const slot = freeQuarantineSlot(bundlePath, shape.symlink ? '.target' : undefined);
+  if (slot.fault) {
+    console.error(`  - could not quarantine ${basename(bundlePath)}: ${slot.fault} — DELETE IT BY HAND`);
+  } else {
     try {
-      rmSync(quarantined, { force: true });
-      renameSync(bundlePath, quarantined);
+      if (shape.symlink) renameSync(realpathSync(bundlePath), `${slot.name}.target`);
+      renameSync(bundlePath, slot.name);
+      quarantined = slot.name;
     } catch (error) {
-      quarantined = null;
       console.error(`  - could not quarantine ${basename(bundlePath)}: ${error.message} — DELETE IT BY HAND`);
     }
   }
   console.error('\nNo artifact and no checksum were produced.');
   if (quarantined) {
     console.error(
-      `${basename(bundlePath)} is CONTAMINATED and has been moved to ${basename(quarantined)} so it cannot be` +
-        ' uploaded by name. Do not publish it. Fix the cause (usually .mcpbignore) and pack again.',
+      `${basename(bundlePath)} is CONTAMINATED and has been moved to ${basename(quarantined)}` +
+        `${shape.symlink ? ` (and what it pointed at to ${basename(quarantined)}.target)` : ''} so it` +
+        ' cannot be uploaded by name. Do not publish it. Fix the cause (usually .mcpbignore) and' +
+        ' pack again.',
     );
   }
-  process.exit(1);
 }
+
+// Exit 2 is "this tree cannot publish", exit 1 is "this bundle did not pass" — the distinction
+// scripts/assert-no-bound-port-literals.mjs:140 draws between "could not look" and "looked and
+// found", here between a tree to fix and a bundle to fix. A tree fault wins the code, because a
+// run that could not establish the version has not judged the archive either way.
+if (treeFaults.length > 0 || problems.length > 0) process.exit(treeFaults.length > 0 ? 2 : 1);
 
 const sha256 = createHash('sha256').update(bundle).digest('hex');
 writeFileSync(artifactPath, bundle);

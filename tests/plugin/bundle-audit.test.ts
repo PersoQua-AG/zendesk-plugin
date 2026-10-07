@@ -1,11 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateRawSync } from 'node:zlib';
+import { constants as BUFFER_LIMITS } from 'node:buffer';
+
+const { MAX_STRING_LENGTH } = BUFFER_LIMITS;
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const AUDIT = join(root, 'scripts', 'audit-bundle.mjs');
@@ -207,8 +210,15 @@ function makeTree(opts: {
   };
 }
 
-function runAudit(tree: Tree, args: string[] = ['zendesk.mcpb']): Run {
-  const run = spawnSync('node', [join(tree.dir, 'scripts', 'audit-bundle.mjs'), ...args], { encoding: 'utf8' });
+// `cwd` IS THE TREE, and it has to be stated now rather than inherited (#105 AC5). A relative
+// positional argument used to be resolved against the SCRIPT's own tree, so this harness got the
+// fixture's bundle by accident while a real operator in any other directory got `<repo>/x.mcpb`.
+// The argument resolves against the caller's cwd now, so the caller here says where it stands.
+function runAudit(tree: Tree, args: string[] = ['zendesk.mcpb'], cwd: string = tree.dir): Run {
+  const run = spawnSync('node', [join(tree.dir, 'scripts', 'audit-bundle.mjs'), ...args], {
+    encoding: 'utf8',
+    cwd,
+  });
   return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
 }
 
@@ -400,10 +410,15 @@ describe('an archive that cannot be judged is refused', () => {
     expect(run.stderr).toContain('smaller than an empty ZIP archive');
   });
 
-  it('refuses a missing bundle, as a message and not a stack trace', () => {
+  // A NAME THAT IS NOT THERE IS NOT AN UNFIT BUNDLE (#105). It used to be reported as "could not
+  // be read as a bundle" in the same breath as a truncated ZIP, in the same list that moves files.
+  // It is a tree fault now: exit 2, named, and nothing touched.
+  it('refuses a missing bundle as a tree fault, as a message and not a stack trace', () => {
     const run = runAudit(makeTree(), ['no-such-bundle.mcpb']);
-    expect(run.status).not.toBe(0);
-    expect(run.stderr).toContain('could not be read as a bundle');
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('there is nothing at');
+    expect(run.stderr).toContain('Cannot release from this tree');
+    expect(run.stderr).not.toContain('CONTAMINATED');
     expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
   });
 
@@ -916,6 +931,268 @@ describe('the real packer', () => {
 });
 
 // =============================================================================================
+// Scenario (#105): "this BUNDLE is unfit" and "this TREE cannot publish" are different verdicts,
+// and only the first one moves a file. Every case here starts from a bundle that is provably
+// clean — `clean()`, the same fixture that exits 0 two hundred lines above — so that a refusal
+// cannot be read as a statement about the archive.
+// =============================================================================================
+describe('a tree that cannot publish is not a contaminated bundle', () => {
+  // The four tree defects named in #105, each measured to have renamed a clean bundle to
+  // .REJECTED and announced it as CONTAMINATED with .mcpbignore as the likely cause.
+  const TREE_DEFECTS: Array<[string, (t: Tree) => string[] | void, string]> = [
+    ['an unreadable manifest.json', (t) => void writeFileSync(join(t.dir, 'manifest.json'), '{ not json'), 'manifest.json is missing or unreadable'],
+    ['an unreadable package.json', (t) => void writeFileSync(join(t.dir, 'package.json'), '{ not json'), 'package.json is missing or unreadable'],
+    ['a bundle path that cannot be read', (t) => void chmodSync(t.bundle, 0o000), 'could not be read: EACCES'],
+    ['a malformed --expect-version', () => ['zendesk.mcpb', '--expect-version', 'not-a-version'], 'version mismatch'],
+    // The measured pair itself: with neither manifest readable the tree has no version at all,
+    // which is the state in which every bundle used to be declared contaminated.
+    [
+      'neither manifest readable',
+      (t) => {
+        writeFileSync(join(t.dir, 'manifest.json'), '{ not json');
+        writeFileSync(join(t.dir, 'package.json'), '{ not json');
+      },
+      'the release version cannot be established',
+    ],
+  ];
+
+  it.each(TREE_DEFECTS)('%s leaves the clean bundle exactly where it is', (_label, breakIt, expected) => {
+    const tree = makeTree();
+    const before = readFileSync(tree.bundle);
+    const args = breakIt(tree) ?? undefined;
+    const run = runAudit(tree, args);
+    try {
+      expect(run.status, run.stderr).toBe(2);
+      expect(run.stderr).toContain(expected);
+      expect(run.stderr).toContain('Cannot release from this tree');
+      expect(run.stderr).toContain('STILL THERE');
+      // Not one word of the bundle verdict, because no bundle verdict was reached.
+      expect(run.stderr).not.toContain('CONTAMINATED');
+      // The exact sentence #105 names as false for the affected tree. The message IS allowed to
+      // say that .mcpbignore is not the cause, which is the opposite claim.
+      expect(run.stderr).not.toContain('Fix the cause (usually .mcpbignore)');
+      expect(existsSync(`${tree.bundle}.REJECTED`), 'a tree fault renamed the bundle').toBe(false);
+      expect(existsSync(tree.bundle)).toBe(true);
+      expect(existsSync(tree.artifact)).toBe(false);
+    } finally {
+      chmodSync(tree.bundle, 0o644); // or afterEach cannot remove the tree
+    }
+    // Byte-identical, not merely present: the measurement in #105 was taken against a
+    // byte-identical bundle and the two runs disagreed about whether it survived.
+    expect(readFileSync(tree.bundle).equals(before)).toBe(true);
+  });
+
+  // The other half of AC1, and the one that makes it a cut rather than a blanket exemption: the
+  // archive verdict is untouched. An encrypted entry, a truncated ZIP, a planted credential — all
+  // still quarantine and all still exit 1.
+  it('still quarantines a contaminated bundle, with the same exit code as before', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const run = runAudit(tree);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('CONTAMINATED');
+    expect(existsSync(tree.bundle)).toBe(false);
+    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
+  });
+
+  // A bundle path this script cannot read is UNKNOWN, not contaminated — owner decision on #105,
+  // taken because round 4 of PR #102's review measured the opposite destroying clean bundles. The
+  // accepted price is stated out loud by the message, and that is asserted here: an operator who
+  // is not told the file is still there cannot act on it.
+  it('names the unreadable path, says it is still there, and does not move it', () => {
+    const tree = makeTree();
+    chmodSync(tree.bundle, 0o000);
+    try {
+      const run = runAudit(tree);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('unreadable is unknown, not contaminated');
+      expect(run.stderr).toContain(tree.bundle);
+      expect(run.stderr).toContain('STILL THERE');
+      expect(existsSync(tree.bundle)).toBe(true);
+    } finally {
+      chmodSync(tree.bundle, 0o644);
+    }
+  });
+
+  // The third answer of the name check, reached with a real EACCES rather than by injection: the
+  // directory holding the bundle cannot be listed, so lstat itself throws. "Cannot determine" must
+  // collapse into neither "fine" (release it) nor "contaminated" (move it). PR #102's two-valued
+  // check answered "taken" here and fired the quarantine on a path nobody had looked at.
+  it('reports a path it cannot even examine, and acts on nothing', () => {
+    const tree = makeTree();
+    const locked = join(tree.dir, 'locked');
+    mkdirSync(locked);
+    copyFileSync(tree.bundle, join(locked, 'zendesk.mcpb'));
+    chmodSync(locked, 0o000);
+    try {
+      const run = runAudit(tree, ['locked/zendesk.mcpb']);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('cannot be examined: EACCES');
+      expect(run.stderr).not.toContain('CONTAMINATED');
+      expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+});
+
+// =============================================================================================
+// Scenario (#105): what is under the publishable name decides whether it can be audited at all,
+// and that question is settled before anything opens it.
+// =============================================================================================
+describe('the publishable name has to hold a packed bundle', () => {
+  // A FIFO hung the release gate for ever: readFileSync blocks in open(2) while nobody writes and
+  // this path has no timeout. Measured in #105, aborted after 6 s with no output at all. The
+  // spawn below carries a timeout so that a regression is a RED test and not a hung suite.
+  it('refuses a FIFO within a bounded time instead of blocking in open(2)', () => {
+    const tree = makeTree();
+    rmSync(tree.bundle);
+    execFileSync('mkfifo', [tree.bundle]);
+    const run = spawnSync('node', [join(tree.dir, 'scripts', 'audit-bundle.mjs'), 'zendesk.mcpb'], {
+      encoding: 'utf8',
+      cwd: tree.dir,
+      timeout: 20_000,
+    });
+    expect(run.signal, 'the audit was still running when the timeout fired').toBe(null);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('is a FIFO, not a packed bundle');
+    expect(existsSync(tree.bundle)).toBe(true);
+  });
+
+  // `node scripts/audit-bundle.mjs ./some-directory` moved the WHOLE DIRECTORY to .REJECTED and
+  // called it contaminated.
+  it('refuses a directory and never moves it', () => {
+    const tree = makeTree();
+    const dir = join(tree.dir, 'a-directory');
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'someone-elses-file'), 'not a bundle');
+    const run = runAudit(tree, ['a-directory']);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('is a directory, not a packed bundle');
+    expect(existsSync(`${dir}.REJECTED`)).toBe(false);
+    expect(existsSync(join(dir, 'someone-elses-file'))).toBe(true);
+  });
+
+  it('refuses a character device, naming what it found', () => {
+    const run = runAudit(makeTree(), ['/dev/null']);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('is a character device, not a packed bundle');
+  });
+
+  it('refuses a symlink that points at nothing', () => {
+    const tree = makeTree();
+    rmSync(tree.bundle);
+    symlinkSync(join(tree.dir, 'gone.mcpb'), tree.bundle);
+    const run = runAudit(tree);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('is a symlink pointing at nothing');
+  });
+
+  // `renameSync` on a link moves the LINK. The target kept the name it was reachable under, so
+  // "it cannot be uploaded by name" held for the link only.
+  it('quarantines the target of a symlink, not only the link', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const real = join(tree.dir, 'real-bundle.mcpb');
+    copyFileSync(tree.bundle, real);
+    rmSync(tree.bundle);
+    symlinkSync(real, tree.bundle);
+    const run = runAudit(tree);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('CONTAMINATED');
+    expect(existsSync(real), 'the target kept its own uploadable name').toBe(false);
+    expect(existsSync(`${tree.bundle}.REJECTED.target`)).toBe(true);
+    // `lstat`, not `existsSync`: the quarantined LINK now dangles, which is the whole point —
+    // existsSync follows it and would report the name as absent.
+    expect(lstatSync(`${tree.bundle}.REJECTED`, { throwIfNoEntry: false })?.isSymbolicLink()).toBe(true);
+    // And the publishable name resolves to nothing at all any more.
+    expect(existsSync(tree.bundle)).toBe(false);
+  });
+});
+
+// =============================================================================================
+// Scenario (#105): the quarantine is evidence, and the search for a free name is bounded.
+// =============================================================================================
+describe('the quarantine keeps what the run before it found', () => {
+  // Measured over two failing runs: run 2 overwrote run 1's .REJECTED and the tokens.enc inside it
+  // was gone — three lines under a comment promising the evidence would survive.
+  it('does not overwrite the previous .REJECTED', () => {
+    const first = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'first run' }] });
+    expect(runAudit(first).status).toBe(1);
+    const kept = readFileSync(`${first.bundle}.REJECTED`);
+
+    writeFileSync(first.bundle, zip([...clean(), { name: 'tokens.enc', data: 'second run' }]));
+    expect(runAudit(first).status).toBe(1);
+    expect(readFileSync(`${first.bundle}.REJECTED`).equals(kept), 'run 1 evidence was overwritten').toBe(true);
+    expect(existsSync(`${first.bundle}.REJECTED.1`)).toBe(true);
+  });
+
+  // The bound, named rather than discovered: round 4 of PR #102's review measured an unbounded
+  // free-name search emit 67 MB of stderr and 90,235 lines in under 20 seconds, with the
+  // contaminated bundle never quarantined — in CI that hangs the job.
+  it('gives up after a bounded number of slots instead of searching forever', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    writeFileSync(`${tree.bundle}.REJECTED`, 'taken');
+    for (let n = 1; n <= 100; n += 1) writeFileSync(`${tree.bundle}.REJECTED.${n}`, 'taken');
+    const run = spawnSync('node', [join(tree.dir, 'scripts', 'audit-bundle.mjs'), 'zendesk.mcpb'], {
+      encoding: 'utf8',
+      cwd: tree.dir,
+      timeout: 20_000,
+    });
+    expect(run.signal).toBe(null);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('quarantine names next to zendesk.mcpb are taken');
+    expect(run.stderr).toContain('DELETE IT BY HAND');
+    expect(run.stderr.split('\n').length, 'the refusal printed a flood').toBeLessThan(60);
+    // Nothing was moved and nothing was overwritten, and the operator has been told so.
+    expect(existsSync(tree.bundle)).toBe(true);
+    expect(readFileSync(`${tree.bundle}.REJECTED`, 'utf8')).toBe('taken');
+  });
+});
+
+// =============================================================================================
+// Scenario (#105): a relative argument belongs to the caller, and a declared entry bigger than a
+// JavaScript string is a refusal rather than a stack trace.
+// =============================================================================================
+describe('the caller names the bundle', () => {
+  it('resolves a relative argument against the caller cwd, not the script tree', () => {
+    const tree = makeTree();
+    const elsewhere = mkdtempSync(join(tmpdir(), 'audit-cwd-'));
+    temps.push(elsewhere);
+    copyFileSync(tree.bundle, join(elsewhere, 'moved.mcpb'));
+    // From `elsewhere`, `./moved.mcpb` is the file there — and `zendesk.mcpb`, which exists in the
+    // script's tree and used to be what this resolved to, is not there at all.
+    expect(runAudit(tree, ['./moved.mcpb'], elsewhere).status).toBe(0);
+    const stray = runAudit(tree, ['./zendesk.mcpb'], elsewhere);
+    expect(stray.status).toBe(2);
+    expect(stray.stderr).toContain(join(elsewhere, 'zendesk.mcpb'));
+  });
+});
+
+describe('an entry too large to read as text', () => {
+  // The threshold is node's own: buffer.constants.MAX_STRING_LENGTH, 536 870 888 bytes on 64-bit.
+  // One byte past it, `content.toString('utf8')` throws ERR_STRING_TOO_LONG, and that used to
+  // leave the release gate as a stack trace where a verdict belongs.
+  //
+  // THE FIXTURE IS CHEAP DESPITE THE SIZE: 512 MiB of one repeated non-NUL byte DEFLATEs to about
+  // 510 KB, so the archive on disk is small. Measured on this host: 0.8 s to deflate, 0.3 s to
+  // inflate, ~1.9 GB peak RSS across the two processes. The byte is 'a' and not 0, because a NUL
+  // in the first 8192 bytes is refused one rule earlier and the case would pass for the wrong
+  // reason.
+  it('reports a refusal rather than throwing ERR_STRING_TOO_LONG', () => {
+    const oversized = Buffer.allocUnsafe(MAX_STRING_LENGTH + 1).fill(0x61);
+    const tree = makeTree({
+      entries: [...clean(), { name: 'dist/huge.js', data: oversized, method: 8 }],
+    });
+    const run = runAudit(tree);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('entry too large for the credential scan to read as text, refused: dist/huge.js');
+    expect(run.stderr).toContain('ERR_STRING_TOO_LONG');
+    expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
+    // A refusal, so the bundle is quarantined like any other contamination.
+    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
+  }, 180_000);
+});
+
+// =============================================================================================
 // Mutation coverage. Three times in the executor-guard ticket a negative test passed for a reason
 // other than the rule it claimed to pin. So the property is asserted directly: ablate one rule and
 // a fixture must change its verdict. A rule no fixture distinguishes fails HERE.
@@ -946,6 +1223,90 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     baseline: (r: Run, t: Tree) => void;
     ablated: (r: Run, t: Tree) => void;
   }> = [
+    // ---- #105. Each one of these distinguishes a rule this ticket added; the three that cannot
+    // ride this harness (a cwd other than the tree, a spawn timeout, a 512 MiB fixture) have their
+    // own ablation beneath it.
+    {
+      rule: 'a tree fault is not a bundle verdict and moves nothing',
+      mutate: [
+        [
+          "const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', treeFaults);",
+          "const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', problems);",
+        ],
+      ],
+      seed: (t) => writeFileSync(join(t.dir, 'manifest.json'), '{ not json'),
+      baseline: (r: Run, t: Tree) => {
+        expect(r.status).toBe(2);
+        expect(existsSync(t.bundle)).toBe(true);
+      },
+      ablated: (_r: Run, t: Tree) => expect(existsSync(t.bundle)).toBe(false),
+    },
+    {
+      // The exact route by which a broken manifest.json destroyed a provably clean bundle: version
+      // fell to null, every bundle disagreed with null, and the disagreement was filed as
+      // contamination.
+      rule: 'the bundled-version comparison needs a version to compare with',
+      mutate: [['    if (version !== null && bundledVersion !== version) {', '    if (bundledVersion !== version) {']],
+      // BOTH manifests, because `version` falls back from manifest.json to package.json; it is
+      // only null when neither can be read, and null is what every bundle disagreed with. This is
+      // the pair #105 measured: readable manifests gave exit 0 and an artifact, both corrupt made
+      // the same byte-identical bundle disappear.
+      seed: (t) => {
+        writeFileSync(join(t.dir, 'manifest.json'), '{ not json');
+        writeFileSync(join(t.dir, 'package.json'), '{ not json');
+      },
+      baseline: (r: Run, t: Tree) => {
+        expect(r.stderr).not.toContain('CONTAMINATED');
+        expect(existsSync(t.bundle)).toBe(true);
+      },
+      ablated: (r: Run, t: Tree) => {
+        expect(r.stderr).toContain('CONTAMINATED');
+        expect(existsSync(t.bundle)).toBe(false);
+      },
+    },
+    {
+      rule: 'the shape under the publishable name is what names the refusal',
+      mutate: [['const shape = bundleShape(bundlePath);', 'const shape = {};']],
+      args: ['a-directory'],
+      seed: (t) => mkdirSync(join(t.dir, 'a-directory')),
+      baseline: (r: Run) => expect(r.stderr).toContain('is a directory, not a packed bundle'),
+      ablated: (r: Run) => {
+        expect(r.stderr).not.toContain('not a packed bundle');
+        expect(r.stderr).toContain('could not be read: EISDIR');
+      },
+    },
+    {
+      rule: 'the quarantine takes a free slot instead of overwriting the one before it',
+      mutate: [
+        [
+          "  const slot = freeQuarantineSlot(bundlePath, shape.symlink ? '.target' : undefined);",
+          '  const slot = { name: `${bundlePath}.REJECTED` };',
+        ],
+      ],
+      entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
+      seed: (t) => writeFileSync(`${t.bundle}.REJECTED`, 'run one evidence'),
+      baseline: (_r: Run, t: Tree) => {
+        expect(readFileSync(`${t.bundle}.REJECTED`, 'utf8')).toBe('run one evidence');
+        expect(existsSync(`${t.bundle}.REJECTED.1`)).toBe(true);
+      },
+      ablated: (_r: Run, t: Tree) =>
+        expect(readFileSync(`${t.bundle}.REJECTED`, 'utf8')).not.toBe('run one evidence'),
+    },
+    {
+      rule: 'the quarantine reaches the target of a symlink, not only the link',
+      mutate: [
+        ['      if (shape.symlink) renameSync(realpathSync(bundlePath), `${slot.name}.target`);', '      void realpathSync;'],
+      ],
+      entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
+      seed: (t) => {
+        const real = join(t.dir, 'real-bundle.mcpb');
+        copyFileSync(t.bundle, real);
+        rmSync(t.bundle);
+        symlinkSync(real, t.bundle);
+      },
+      baseline: (_r: Run, t: Tree) => expect(existsSync(join(t.dir, 'real-bundle.mcpb'))).toBe(false),
+      ablated: (_r: Run, t: Tree) => expect(existsSync(join(t.dir, 'real-bundle.mcpb'))).toBe(true),
+    },
     {
       rule: 'the allowlist default is refusal',
       mutate: [
@@ -1041,7 +1402,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     },
     {
       rule: 'the bundled manifest must agree with the tree',
-      mutate: [['    if (bundledVersion !== version) {', '    if (false) {']],
+      mutate: [['    if (version !== null && bundledVersion !== version) {', '    if (false) {']],
       entries: clean('0.9.0'),
       baseline: (r) => expect(r.status).not.toBe(0),
       ablated: (r) => expect(r.status).toBe(0),
@@ -1056,10 +1417,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     {
       rule: 'a refusal clears an artifact left by an earlier run',
       mutate: [
-        [
-          'if (artifactPath) for (const stale of [artifactPath, checksumPath]) rmSync(stale, { force: true });',
-          '',
-        ],
+        ['      rmSync(stale, { force: true });', '      void stale;'],
       ],
       entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
       seed: (t) => writeFileSync(t.artifact, 'stale bundle from the run before'),
@@ -1355,7 +1713,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     },
     {
       rule: 'the refusal quarantines the unaudited bundle under a name nobody uploads',
-      mutate: [['      renameSync(bundlePath, quarantined);', '      void quarantined;']],
+      mutate: [['      renameSync(bundlePath, slot.name);', '      void slot;']],
       entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
       baseline: (_r: Run, t: Tree) => expect(existsSync(t.bundle)).toBe(false),
       ablated: (_r: Run, t: Tree) => expect(existsSync(t.bundle)).toBe(true),
@@ -1401,6 +1759,79 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
       ablated: (r: Run) => expect(r.status).not.toBe(0),
     })),
   ];
+
+  // ---- The three #105 rules the harness above cannot carry, each ablated by hand.
+
+  // A CWD OTHER THAN THE TREE. The harness always stands in the fixture, which is exactly the
+  // accident that hid this defect: `resolve(root, …)` happened to give the fixture's own bundle.
+  it('ablated: a relative argument resolved against the script tree misses the caller\'s file', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'audit-cwd-ablation-'));
+    temps.push(elsewhere);
+    const mutate: Array<[string, string]> = [
+      [
+        'const bundlePath = positional[0] === undefined ? join(root, \'zendesk.mcpb\') : resolve(positional[0]);',
+        "const bundlePath = resolve(root, positional[0] ?? 'zendesk.mcpb');",
+      ],
+    ];
+    for (const [label, opts] of [
+      ['baseline', {}],
+      ['ablated', { mutate }],
+    ] as const) {
+      const tree = makeTree(opts);
+      copyFileSync(tree.bundle, join(elsewhere, `${label}.mcpb`));
+      const run = runAudit(tree, [`./${label}.mcpb`], elsewhere);
+      if (label === 'baseline') expect(run.status, run.stderr).toBe(0);
+      else expect(run.stderr).toContain(join(tree.dir, `${label}.mcpb`));
+    }
+  });
+
+  // A SPAWN TIMEOUT, because the ablation of a bound does not terminate — that is the whole claim.
+  // Round 4 of PR #102's review measured the unbounded version emitting 67 MB of stderr and 90,235
+  // lines in under 20 seconds, and in CI it hangs the job. With a 15 s timeout the unbounded run is
+  // KILLED (a signal, no exit code) and the bounded one answers in milliseconds.
+  it('ablated: an unbounded free-name search never returns', () => {
+    const entries = [...clean(), { name: 'tokens.enc', data: 'x' }];
+    const mutate: Array<[string, string]> = [
+      ['for (let n = 0; n <= QUARANTINE_SLOTS; n += 1) {', 'for (let n = 0; ; n += 1) {'],
+      // Every candidate taken, without writing a hundred thousand files: the slot check is told
+      // the name is always there. The LOOP is what is on trial, not the filesystem.
+      ["return lstatSync(path, { throwIfNoEntry: false }) === undefined ? 'free' : 'taken';", "return 'taken';"],
+    ];
+    const bounded = makeTree({ entries, mutate: [mutate[1]] });
+    const boundedRun = spawnSync('node', [join(bounded.dir, 'scripts', 'audit-bundle.mjs'), 'zendesk.mcpb'], {
+      encoding: 'utf8',
+      cwd: bounded.dir,
+      timeout: 15_000,
+    });
+    expect(boundedRun.signal, 'the bounded search had to be killed').toBe(null);
+    expect(boundedRun.stderr).toContain('quarantine names next to zendesk.mcpb are taken');
+
+    const unbounded = makeTree({ entries, mutate });
+    const run = spawnSync('node', [join(unbounded.dir, 'scripts', 'audit-bundle.mjs'), 'zendesk.mcpb'], {
+      encoding: 'utf8',
+      cwd: unbounded.dir,
+      timeout: 15_000,
+    });
+    expect(run.signal, 'the unbounded search returned on its own').not.toBe(null);
+  }, 60_000);
+
+  // A 512 MiB FIXTURE, built once and audited twice. See the behaviour case above for the cost.
+  it('ablated: an unguarded toString leaves the release gate as a stack trace', () => {
+    const entries = [...clean(), { name: 'dist/huge.js', data: Buffer.allocUnsafe(MAX_STRING_LENGTH + 1).fill(0x61), method: 8 }];
+    const baseline = runAudit(makeTree({ entries }));
+    expect(baseline.stderr).toContain('entry too large for the credential scan to read as text');
+    expect(baseline.stderr).not.toMatch(/^\s+at .*\(node:/m);
+
+    const ablated = runAudit(
+      makeTree({
+        entries,
+        mutate: [["    text = content.toString('utf8');", "    text = content.toString('utf8'); void 0;"], ['  } catch (error) {\n    problems.push(\n      `entry too large', '  } catch (error) {\n    throw error;\n    problems.push(\n      `entry too large']],
+      }),
+    );
+    expect(ablated.stderr).toMatch(/ERR_STRING_TOO_LONG/);
+    expect(ablated.stderr).toMatch(/^\s+at /m);
+    expect(ablated.stderr).not.toContain('entry too large for the credential scan');
+  }, 240_000);
 
   it.each(CASES)('$rule', ({ mutate, entries, raw, zipOpts, tree, args, seed, baseline, ablated }) => {
     const plain = makeTree({ ...tree, entries, raw, zipOpts });
