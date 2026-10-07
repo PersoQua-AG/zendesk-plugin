@@ -21889,24 +21889,23 @@ var HANDLE_PATTERN = /^[A-Za-z0-9_-]+$/;
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
 var ResponseCache = class {
-  constructor(cacheDir, options = {}) {
-    this.cacheDir = cacheDir;
-    mkdirSync2(cacheDir, { recursive: true });
-    accessSync(cacheDir, constants.R_OK | constants.W_OK | constants.X_OK);
-    this.resolvedDir = resolve(cacheDir);
-    this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
-    this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-  }
-  cacheDir;
   resolvedDir;
   ttlMs;
   maxBytes;
+  constructor(cacheDir, options = {}) {
+    mkdirSync2(cacheDir, { recursive: true });
+    this.resolvedDir = resolve(cacheDir);
+    accessSync(this.resolvedDir, constants.R_OK | constants.W_OK | constants.X_OK);
+    this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+    this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  }
   save(toolName, data) {
     const handle = `${toolName}-${randomBytes3(6).toString("hex")}`;
-    const path = join2(this.cacheDir, `${handle}.json`);
+    const path = join2(this.resolvedDir, `${handle}.json`);
     try {
       writeFileSync2(path, JSON.stringify(data));
     } catch (err) {
+      rmSync(path, { force: true });
       throw new Error(
         `Caching the response failed (${errorCode(err)}). Make sure the extension's data directory is a writable directory with free space, then reload the extension.`,
         { cause: err }
@@ -21936,9 +21935,9 @@ var ResponseCache = class {
   // size is back under the cap. Cheap because a single MCP session holds few, small payloads.
   sweep() {
     const live = [];
-    for (const name of readdirSync(this.cacheDir)) {
+    for (const name of readdirSync(this.resolvedDir)) {
       if (!name.endsWith(".json")) continue;
-      const path = join2(this.cacheDir, name);
+      const path = join2(this.resolvedDir, name);
       const stat = statSync(path);
       if (Date.now() - stat.mtimeMs > this.ttlMs) {
         rmSync(path, { force: true });

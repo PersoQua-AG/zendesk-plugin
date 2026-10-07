@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, utimesSync, mkdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, utimesSync, mkdirSync, chmodSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ResponseCache } from '../../src/client/cache.js';
@@ -73,13 +73,7 @@ describe('ResponseCache', () => {
     mkdirSync(readOnly);
     chmodSync(readOnly, 0o500);
     try {
-      let code: unknown;
-      try {
-        new ResponseCache(readOnly);
-      } catch (err) {
-        code = (err as NodeJS.ErrnoException).code;
-      }
-      expect(code).toBe('EACCES');
+      expect(() => new ResponseCache(readOnly)).toThrow(expect.objectContaining({ code: 'EACCES' }));
     } finally {
       chmodSync(readOnly, 0o700);
     }
@@ -91,13 +85,7 @@ describe('ResponseCache', () => {
     mkdirSync(writeOnly);
     chmodSync(writeOnly, 0o300);
     try {
-      let code: unknown;
-      try {
-        new ResponseCache(writeOnly);
-      } catch (err) {
-        code = (err as NodeJS.ErrnoException).code;
-      }
-      expect(code).toBe('EACCES');
+      expect(() => new ResponseCache(writeOnly)).toThrow(expect.objectContaining({ code: 'EACCES' }));
     } finally {
       chmodSync(writeOnly, 0o700);
     }
@@ -127,6 +115,16 @@ describe('ResponseCache', () => {
   });
 
 
+  // sweep()'s own expired-reap branch, which the TTL case above exercises through load() instead.
+  it('reaps an expired entry on the next save, not only on load', () => {
+    const cache = new ResponseCache(dir, { ttlMs: 50 });
+    const stale = cache.save('zendesk_get_ticket', { a: 1 });
+    const old = new Date(Date.now() - 10_000);
+    utimesSync(stale.path, old, old);
+    cache.save('zendesk_get_me', { b: 2 });
+    expect(readdirSync(dir)).toHaveLength(1);
+  });
+
   // 0300 is write+traverse without read: the write lands, sweep()'s readdirSync throws. The entry
   // is on disk, so the caller must still get its handle instead of a "caching failed" error.
   it.skipIf(modeBitsIgnored)('returns the handle when only the sweep fails', () => {
@@ -137,6 +135,8 @@ describe('ResponseCache', () => {
       const entry = cache.save('zendesk_get_me', { a: 1 });
       expect(entry.handle).toMatch(/^zendesk_get_me-/);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
+      // The code, never the path — that is the whole reason errorCode exists.
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining(dir));
     } finally {
       chmodSync(dir, 0o700);
       warn.mockRestore();
