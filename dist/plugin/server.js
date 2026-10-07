@@ -21509,7 +21509,7 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
       throw err instanceof RangeError ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
         cause: err
       }) : new Error(
-        `OAuth callback server could not start on port ${port}: listen() threw ${kind} synchronously. The port is inside the allowed range, so the range rule is not the cause; the original error is attached as this error's cause.`,
+        `OAuth callback server could not start on port ${port}: listen() threw ${kind} synchronously. The port is inside the allowed range, so the range rule is not the cause.`,
         { cause: err }
       );
     }

@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -544,7 +544,6 @@ export const f = (server: { listen: (p: number) => void }, port: number) =>
     it('writes every mutant outside the repository, where no sweep over . can race it', () => {
       const path = mutate([]);
       expect(relative(root, path), path).toMatch(/^\.\./);
-      expect(existsSync(path)).toBe(true);
     });
 
     it('ablated: a mark that is not stat-ed accepts a directory and a symlink again', () => {

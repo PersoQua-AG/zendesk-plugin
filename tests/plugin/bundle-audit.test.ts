@@ -6,9 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateRawSync } from 'node:zlib';
-import { constants as BUFFER_LIMITS } from 'node:buffer';
-
-const { MAX_STRING_LENGTH } = BUFFER_LIMITS;
+import { constants } from 'node:buffer';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const AUDIT = join(root, 'scripts', 'audit-bundle.mjs');
@@ -942,7 +940,9 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
   const TREE_DEFECTS: Array<[string, (t: Tree) => string[] | void, string]> = [
     ['an unreadable manifest.json', (t) => void writeFileSync(join(t.dir, 'manifest.json'), '{ not json'), 'manifest.json is missing or unreadable'],
     ['an unreadable package.json', (t) => void writeFileSync(join(t.dir, 'package.json'), '{ not json'), 'package.json is missing or unreadable'],
-    ['a bundle path that cannot be read', (t) => void chmodSync(t.bundle, 0o000), 'could not be read: EACCES'],
+    // Owner decision on #105: unreadable is unknown, not contaminated. The row carries the whole
+    // claim — exit 2, the sentence, the file present and byte-identical, nothing renamed.
+    ['a bundle path that cannot be read', (t) => void chmodSync(t.bundle, 0o000), 'unreadable is unknown, not contaminated'],
     ['a malformed --expect-version', () => ['zendesk.mcpb', '--expect-version', 'not-a-version'], 'version mismatch'],
     // The measured pair itself: with neither manifest readable the tree has no version at all,
     // which is the state in which every bundle used to be declared contaminated.
@@ -966,6 +966,8 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
       expect(run.stderr).toContain(expected);
       expect(run.stderr).toContain('Cannot release from this tree');
       expect(run.stderr).toContain('STILL THERE');
+      // Named by its full path, so an operator can act on the file that is still sitting there.
+      expect(run.stderr).toContain(tree.bundle);
       // Not one word of the bundle verdict, because no bundle verdict was reached.
       expect(run.stderr).not.toContain('CONTAMINATED');
       // The exact sentence #105 names as false for the affected tree. The message IS allowed to
@@ -1012,25 +1014,6 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(run.stderr).not.toContain('STILL THERE');
     expect(existsSync(tree.bundle)).toBe(false);
     expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
-  });
-
-  // A bundle path this script cannot read is UNKNOWN, not contaminated — owner decision on #105,
-  // taken because round 4 of PR #102's review measured the opposite destroying clean bundles. The
-  // accepted price is stated out loud by the message, and that is asserted here: an operator who
-  // is not told the file is still there cannot act on it.
-  it('names the unreadable path, says it is still there, and does not move it', () => {
-    const tree = makeTree();
-    chmodSync(tree.bundle, 0o000);
-    try {
-      const run = runAudit(tree);
-      expect(run.status).toBe(2);
-      expect(run.stderr).toContain('unreadable is unknown, not contaminated');
-      expect(run.stderr).toContain(tree.bundle);
-      expect(run.stderr).toContain('STILL THERE');
-      expect(existsSync(tree.bundle)).toBe(true);
-    } finally {
-      chmodSync(tree.bundle, 0o644);
-    }
   });
 
   // The third answer of the name check, reached with a real EACCES rather than by injection: the
@@ -1187,31 +1170,6 @@ describe('the caller names the bundle', () => {
   });
 });
 
-describe('an entry too large to read as text', () => {
-  // The threshold is node's own: buffer.constants.MAX_STRING_LENGTH, 536 870 888 bytes on 64-bit.
-  // One byte past it, `content.toString('utf8')` throws ERR_STRING_TOO_LONG, and that used to
-  // leave the release gate as a stack trace where a verdict belongs.
-  //
-  // THE FIXTURE IS CHEAP DESPITE THE SIZE: 512 MiB of one repeated non-NUL byte DEFLATEs to about
-  // 510 KB, so the archive on disk is small. Measured on this host: 0.8 s to deflate, 0.3 s to
-  // inflate, ~1.9 GB peak RSS across the two processes. The byte is 'a' and not 0, because a NUL
-  // in the first 8192 bytes is refused one rule earlier and the case would pass for the wrong
-  // reason.
-  it('reports a refusal rather than throwing ERR_STRING_TOO_LONG', () => {
-    const oversized = Buffer.allocUnsafe(MAX_STRING_LENGTH + 1).fill(0x61);
-    const tree = makeTree({
-      entries: [...clean(), { name: 'dist/huge.js', data: oversized, method: 8 }],
-    });
-    const run = runAudit(tree);
-    expect(run.status).toBe(1);
-    expect(run.stderr).toContain('entry too large for the credential scan to read as text, refused: dist/huge.js');
-    expect(run.stderr).toContain('ERR_STRING_TOO_LONG');
-    expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
-    // A refusal, so the bundle is quarantined like any other contamination.
-    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
-  }, 180_000);
-});
-
 // =============================================================================================
 // Mutation coverage. Three times in the executor-guard ticket a negative test passed for a reason
 // other than the rule it claimed to pin. So the property is asserted directly: ablate one rule and
@@ -1298,10 +1256,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     {
       rule: 'the quarantine takes a free slot instead of overwriting the one before it',
       mutate: [
-        [
-          "  const slot = freeQuarantineSlot(bundlePath, shape.symlink ? '.target' : undefined);",
-          '  const slot = { name: `${bundlePath}.REJECTED` };',
-        ],
+        ['  const slot = freeQuarantineSlot(bundlePath);', '  const slot = { name: `${bundlePath}.REJECTED` };'],
       ],
       entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
       seed: (t) => writeFileSync(`${t.bundle}.REJECTED`, 'run one evidence'),
@@ -1817,15 +1772,8 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
       // the name is always there. The LOOP is what is on trial, not the filesystem.
       ["return lstatSync(path, { throwIfNoEntry: false }) === undefined ? 'free' : 'taken';", "return 'taken';"],
     ];
-    const bounded = makeTree({ entries, mutate: [mutate[1]] });
-    const boundedRun = spawnSync('node', [join(bounded.dir, 'scripts', 'audit-bundle.mjs'), 'zendesk.mcpb'], {
-      encoding: 'utf8',
-      cwd: bounded.dir,
-      timeout: 15_000,
-    });
-    expect(boundedRun.signal, 'the bounded search had to be killed').toBe(null);
-    expect(boundedRun.stderr).toContain('quarantine names next to zendesk.mcpb are taken');
-
+    // The bounded side is measured by "gives up after a bounded number of slots" above, with the
+    // same timeout and the same message; only the ablation belongs here.
     const unbounded = makeTree({ entries, mutate });
     const run = spawnSync('node', [join(unbounded.dir, 'scripts', 'audit-bundle.mjs'), 'zendesk.mcpb'], {
       encoding: 'utf8',
@@ -1835,11 +1783,24 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     expect(run.signal, 'the unbounded search returned on its own').not.toBe(null);
   }, 60_000);
 
-  // A 512 MiB FIXTURE, built once and audited twice. See the behaviour case above for the cost.
+  // A 512 MiB FIXTURE, built once and audited twice — this case carries #105 AC 7 whole, baseline
+  // and ablation, rather than repeating the baseline as a behaviour case of its own.
+  //
+  // The threshold is node's: buffer.constants.MAX_STRING_LENGTH, 536 870 888 bytes on 64-bit. One
+  // byte past it, `content.toString('utf8')` throws ERR_STRING_TOO_LONG, and that used to leave
+  // the release gate as a stack trace where a verdict belongs. The fixture is CHEAP despite the
+  // size: 512 MiB of one repeated non-NUL byte DEFLATEs to about 510 KB, so the archive on disk is
+  // small. Measured on this host: 0.8 s to deflate, 0.3 s to inflate, ~1.9 GB peak RSS across the
+  // two processes. The byte is 'a' and not 0, because a NUL in the first 8192 bytes is refused one
+  // rule earlier and the case would pass for the wrong reason.
   it('ablated: an unguarded toString leaves the release gate as a stack trace', () => {
-    const entries = [...clean(), { name: 'dist/huge.js', data: Buffer.allocUnsafe(MAX_STRING_LENGTH + 1).fill(0x61), method: 8 }];
-    const baseline = runAudit(makeTree({ entries }));
-    expect(baseline.stderr).toContain('entry too large for the credential scan to read as text');
+    const entries = [...clean(), { name: 'dist/huge.js', data: Buffer.allocUnsafe(constants.MAX_STRING_LENGTH + 1).fill(0x61), method: 8 }];
+    const baselineTree = makeTree({ entries });
+    const baseline = runAudit(baselineTree);
+    expect(baseline.status, 'a refusal, so the bundle is quarantined like any other').toBe(1);
+    expect(existsSync(`${baselineTree.bundle}.REJECTED`)).toBe(true);
+    expect(baseline.stderr).toContain('entry too large for the credential scan to read as text, refused: dist/huge.js');
+    expect(baseline.stderr).toContain('ERR_STRING_TOO_LONG');
     expect(baseline.stderr).not.toMatch(/^\s+at .*\(node:/m);
 
     const ablated = runAudit(

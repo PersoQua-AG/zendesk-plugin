@@ -294,7 +294,7 @@ const PROBE_TIMEOUT_MS = 2_000;
 // stranger can be listening on either. The strict contract — "I could not look" is never read as
 // an answer — stays exactly where it was measured to matter: on the addresses the CALLER names,
 // which is what tests/auth/foreign-listener-port.test.ts:92 pins with 192.0.2.1.
-function routableAddresses(): string[] {
+export function routableAddresses(): string[] {
   const found = Object.values(networkInterfaces())
     .flat()
     .filter((i) => i !== undefined && !i.internal && !(i.family === 'IPv6' && i.scopeid !== 0))

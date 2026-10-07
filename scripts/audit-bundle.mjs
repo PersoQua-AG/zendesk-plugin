@@ -349,18 +349,25 @@ function nameState(path) {
 // runs with their evidence still on disk is an operator problem, not a loop condition.
 const QUARANTINE_SLOTS = 100;
 
-// The first free quarantine name, or the reason there is none. `extraSuffix` is for the symlink
-// case below, where TWO names have to be free in the same slot.
-function freeQuarantineSlot(base, extraSuffix) {
+// The first free quarantine name, or the reason there is none. BOTH names of a slot are checked,
+// always: the symlink case below needs `<slot>.target` as well, and taking that unconditionally is
+// cheaper than a parameter one call site passes conditionally and no test distinguishes. A
+// non-symlink run never writes `.target`, so the only cost is stepping over a slot an earlier
+// symlink run left evidence in — which is the behaviour this function exists for anyway.
+function freeQuarantineSlot(base) {
   for (let n = 0; n <= QUARANTINE_SLOTS; n += 1) {
     const candidate = n === 0 ? `${base}.REJECTED` : `${base}.REJECTED.${n}`;
-    const states = (extraSuffix ? [candidate, `${candidate}${extraSuffix}`] : [candidate]).map(nameState);
+    const states = [candidate, `${candidate}.target`].map(nameState);
     if (states.includes('unknown')) return { fault: `cannot tell whether ${basename(candidate)} is already there` };
     if (states.every((state) => state === 'free')) return { name: candidate };
   }
   return { fault: `all ${QUARANTINE_SLOTS + 1} quarantine names next to ${basename(base)} are taken` };
 }
 
+// For the WORDING only. Whether the path is acceptable is decided by `isFile()` below, positively:
+// deciding it by "none of these five matched" would let an st_mode this list does not know pass as
+// a regular file, which is fail-open in a release gate. These are the five that have a name worth
+// printing; anything else gets the generic sentence.
 const SHAPES = [
   ['a directory', (s) => s.isDirectory()],
   ['a FIFO', (s) => s.isFIFO()],
@@ -383,9 +390,9 @@ function bundleShape(path) {
     return { fault: `${basename(path)} cannot be examined: ${error.code ?? error.message}` };
   }
   if (link === undefined) return { fault: `there is nothing at ${path}` };
+  const named = (stat) => SHAPES.find(([, is]) => is(stat))?.[0] ?? 'not a regular file';
   if (!link.isSymbolicLink()) {
-    const shape = SHAPES.find(([, is]) => is(link));
-    return shape ? { fault: `${basename(path)} is ${shape[0]}, not a packed bundle` } : {};
+    return link.isFile() ? {} : { fault: `${basename(path)} is ${named(link)}, not a packed bundle` };
   }
   let target;
   try {
@@ -394,8 +401,9 @@ function bundleShape(path) {
     return { fault: `${basename(path)} is a symlink this script cannot follow: ${error.code ?? error.message}` };
   }
   if (target === undefined) return { fault: `${basename(path)} is a symlink pointing at nothing` };
-  const shape = SHAPES.find(([, is]) => is(target));
-  return shape ? { fault: `${basename(path)} is a symlink to ${shape[0]}, not a packed bundle` } : { symlink: true };
+  return target.isFile()
+    ? { symlink: true }
+    : { fault: `${basename(path)} is a symlink to ${named(target)}, not a packed bundle` };
 }
 
 // --------------------------------------------------------------------------------------------
@@ -631,7 +639,7 @@ if (problems.length > 0) {
   // it is reachable under, so "it cannot be uploaded by name" held for the link only. The target
   // moves first — realpath is read before anything moves — and the link after it, so neither
   // name resolves to an uploadable artifact.
-  const slot = freeQuarantineSlot(bundlePath, shape.symlink ? '.target' : undefined);
+  const slot = freeQuarantineSlot(bundlePath);
   if (slot.fault) {
     console.error(`  - could not quarantine ${basename(bundlePath)}: ${slot.fault} — DELETE IT BY HAND`);
   } else {

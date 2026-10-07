@@ -7,18 +7,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:net';
-import { networkInterfaces } from 'node:os';
-import { freePort, portHeldOn } from './login-harness.js';
+import { freePort, portHeldOn, routableAddresses } from './login-harness.js';
 
 // The stranger is put on IPv4 specifically: it is the family the measurement was taken on and the
-// one dual-bind.test.ts asks about (firstNonLoopbackIPv4). A machine with none is SKIPPED by name
+// one dual-bind.test.ts asks about (firstNonLoopbackIPv4). The set is the harness's own, so the
+// test cannot drift from what portHeldOn actually probes. A machine with none is SKIPPED by name
 // rather than passed silently — a green assertion nobody could have made is the shape this whole
 // ticket is about.
-function routableIPv4(): string | undefined {
-  return Object.values(networkInterfaces())
-    .flat()
-    .find((i) => i !== undefined && !i.internal && i.family === 'IPv4')?.address;
-}
+const routableIPv4 = (): string | undefined => routableAddresses().find((a) => !a.includes(':'));
 
 describe('portHeldOn() and a stranger on a routable address', () => {
   const opened: Server[] = [];

@@ -374,46 +374,40 @@ describe('the bound-port guard as a script', () => {
   // The probe is still not named *.test.ts: vitest must not collect it and the guard must still
   // scan it, which is the "scans helper files too" rule. Nothing has to be removed in a `finally`
   // any more, so a killed process leaves no residue in the repository at all.
-  function withProbe<T>(relDir: string, source: string, body: (scanRoot: string) => T): T {
+  // Returns the scan root to point the guard at. No callback: cleanup is `temps`/`afterEach`, so
+  // there is nothing for a `finally` to do. `tests/tools` is not a parameter — every case wants a
+  // directory the wired root only reaches by recursing, and that is the one.
+  function plantProbe(source: string): string {
     const dir = mkdtempSync(join(tmpdir(), 'port-guard-tree-'));
     temps.push(dir);
     cpSync(join(root, 'tests'), join(dir, 'tests'), { recursive: true });
-    writeFileSync(join(dir, relDir, 'zz-port-guard-probe.ts'), source);
-    return body(join(dir, 'tests'));
+    writeFileSync(join(dir, 'tests', 'tools', 'zz-port-guard-probe.ts'), source);
+    return join(dir, 'tests');
   }
 
   // #106, fourth instance, as a position rather than a race — the same assertion shape that holds
   // the mutant files in tests/plugin/executor-safety-guard.test.ts. Red the moment a probe goes
   // back under the repository root.
   it('plants its probe outside the repository, where no other suite can race it', () => {
-    withProbe('tests/tools', '// nothing to find here\n', (scanRoot) => {
-      expect(relative(root, scanRoot), scanRoot).toMatch(/^\.\./);
-    });
+    const scanRoot = plantProbe('// nothing to find here\n');
+    expect(relative(root, scanRoot), scanRoot).toMatch(/^\.\./);
   });
 
   // ACCEPTANCE CRITERION 1, with its control. Before #82 this file was simply not looked at:
   // measured on b9f0615, `npm run check:ports` with this exact probe in tests/tools printed
   // "Bound port literals in tests/auth/: 50 files scanned." and exited 0.
   it('fails and names file and line for a bound literal OUTSIDE tests/auth', () => {
-    withProbe('tests/tools', `${ACQUIRES}\nexport const start = () => ${BOUND};\n`, (scanRoot) => {
-      const run = runGuard(scanRoot);
-      expect(run.status).toBe(1);
-      // The scan root is outside the repository, so the guard names it by its way out (`../…`) —
-      // that is its own documented rule for a temp tree. The part that matters is the depth.
-      expect(run.stderr).toContain(`tools/zz-port-guard-probe.ts:3 ${BOUND}`);
-    });
+    const run = runGuard(plantProbe(`${ACQUIRES}\nexport const start = () => ${BOUND};\n`));
+    expect(run.status).toBe(1);
+    // The scan root is outside the repository, so the guard names it by its way out (`../…`) —
+    // that is its own documented rule for a temp tree. The part that matters is the depth.
+    expect(run.stderr).toContain(`tools/zz-port-guard-probe.ts:3 ${BOUND}`);
   });
 
   it('passes the same file once the port is acquired instead of written', () => {
-    withProbe(
-      'tests/tools',
-      `${ACQUIRES}\nexport const start = () => ${BIND('freePort()')};\n`,
-      (scanRoot) => {
-        const run = runGuard(scanRoot);
-        expect(run.stderr).toBe('');
-        expect(run.status).toBe(0);
-      },
-    );
+    const run = runGuard(plantProbe(`${ACQUIRES}\nexport const start = () => ${BIND('freePort()')};\n`));
+    expect(run.stderr).toBe('');
+    expect(run.status).toBe(0);
   });
 
   // The empty string is a root only in the sense that resolve() accepts it, and recursion is what
