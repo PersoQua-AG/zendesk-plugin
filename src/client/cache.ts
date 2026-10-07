@@ -19,6 +19,10 @@ export interface ResponseCacheOptions {
   maxBytes?: number;
 }
 
+// What tools actually use. ToolContext carries THIS, not the class: ResponseCache is nominal
+// (private fields), so a degraded stub could only be passed by a cast the compiler cannot check.
+export type CacheStore = Pick<ResponseCache, 'save' | 'load'>;
+
 export class ResponseCache {
   private readonly resolvedDir: string;
   private readonly ttlMs: number;

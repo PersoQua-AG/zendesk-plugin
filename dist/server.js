@@ -105,7 +105,8 @@ function resolveOrDegrade(env, security) {
         };
     }
 }
-// mkdir can throw (EACCES/ENOSPC/ENOTDIR); tokens share the dir, so degrade like a bad config.
+// Opening the cache can throw (EACCES/ENOSPC/ENOTDIR — the dir is created AND checked writable);
+// tokens share the dir, so degrade like a bad config. The stub answers every tool with the reason.
 function openCacheOrDegrade(auth) {
     try {
         return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')), cacheOk: true };
@@ -118,9 +119,7 @@ function openCacheOrDegrade(auth) {
         const fail = () => {
             throw new Error(reason);
         };
-        // ResponseCache is nominal (private fields); tools only call save/load.
-        const stub = { save: fail, load: fail };
-        const cache = stub;
+        const cache = { save: fail, load: fail };
         return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
     }
 }

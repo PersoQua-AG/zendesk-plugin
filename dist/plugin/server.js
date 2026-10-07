@@ -21700,40 +21700,9 @@ var TokenStore = class {
   }
 };
 
-// src/client/rate-limiter.ts
-var MAX_RETRY_AFTER_SECONDS = 300;
-var RateLimiter = class {
-  requestsPerMinute;
-  // the configured account bucket size, for wiring inspection
-  intervalMs;
-  now;
-  sleepFn;
-  nextAvailableAt;
-  retryAfterUntil = 0;
-  constructor(options) {
-    this.requestsPerMinute = options.requestsPerMinute;
-    this.intervalMs = 6e4 / options.requestsPerMinute;
-    this.now = options.now ?? Date.now;
-    this.sleepFn = options.sleep ?? ((ms) => new Promise((resolve2) => setTimeout(resolve2, ms)));
-    this.nextAvailableAt = this.now();
-  }
-  async acquire() {
-    const current = this.now();
-    const waitUntil = Math.max(this.nextAvailableAt, this.retryAfterUntil, current);
-    this.nextAvailableAt = waitUntil + this.intervalMs;
-    const delay = waitUntil - current;
-    if (delay > 0) {
-      await this.sleepFn(delay);
-    }
-  }
-  reportRetryAfter(seconds) {
-    const capped = seconds < MAX_RETRY_AFTER_SECONDS ? seconds : MAX_RETRY_AFTER_SECONDS;
-    this.retryAfterUntil = this.now() + capped * 1e3;
-  }
-};
-
 // src/client/errors.ts
 var DEFAULT_RETRY_AFTER_SECONDS = 60;
+var MAX_RETRY_AFTER_SECONDS = 300;
 var ZendeskApiError = class extends Error {
   constructor(message, status) {
     super(message);
@@ -21771,10 +21740,10 @@ var ZendeskValidationError = class extends ZendeskApiError {
 function parseRetryAfter(header, now = Date.now) {
   if (header == null) return DEFAULT_RETRY_AFTER_SECONDS;
   const trimmed = header.trim();
-  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+  if (/^\d+$/.test(trimmed)) return Math.min(Number(trimmed), MAX_RETRY_AFTER_SECONDS);
   const dateMs = Date.parse(trimmed);
   if (!Number.isNaN(dateMs)) {
-    return Math.max(0, Math.ceil((dateMs - now()) / 1e3));
+    return Math.min(Math.max(0, Math.ceil((dateMs - now()) / 1e3)), MAX_RETRY_AFTER_SECONDS);
   }
   return DEFAULT_RETRY_AFTER_SECONDS;
 }
@@ -21793,6 +21762,37 @@ async function mapErrorResponse(response) {
       return new ZendeskApiError(`Zendesk API error ${response.status}: ${bodyText}`, response.status);
   }
 }
+
+// src/client/rate-limiter.ts
+var RateLimiter = class {
+  requestsPerMinute;
+  // the configured account bucket size, for wiring inspection
+  intervalMs;
+  now;
+  sleepFn;
+  nextAvailableAt;
+  retryAfterUntil = 0;
+  constructor(options) {
+    this.requestsPerMinute = options.requestsPerMinute;
+    this.intervalMs = 6e4 / options.requestsPerMinute;
+    this.now = options.now ?? Date.now;
+    this.sleepFn = options.sleep ?? ((ms) => new Promise((resolve2) => setTimeout(resolve2, ms)));
+    this.nextAvailableAt = this.now();
+  }
+  async acquire() {
+    const current = this.now();
+    const waitUntil = Math.max(this.nextAvailableAt, this.retryAfterUntil, current);
+    this.nextAvailableAt = waitUntil + this.intervalMs;
+    const delay = waitUntil - current;
+    if (delay > 0) {
+      await this.sleepFn(delay);
+    }
+  }
+  reportRetryAfter(seconds) {
+    const capped = seconds < MAX_RETRY_AFTER_SECONDS ? seconds : MAX_RETRY_AFTER_SECONDS;
+    this.retryAfterUntil = Math.max(this.retryAfterUntil, this.now() + capped * 1e3);
+  }
+};
 
 // src/client/http-client.ts
 var MAX_RATE_LIMIT_RETRIES = 3;
@@ -29697,8 +29697,7 @@ function openCacheOrDegrade(auth) {
     const fail = () => {
       throw new Error(reason);
     };
-    const stub = { save: fail, load: fail };
-    const cache = stub;
+    const cache = { save: fail, load: fail };
     return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
   }
 }

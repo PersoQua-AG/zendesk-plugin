@@ -5,7 +5,7 @@
 // every path — list, preview, and apply — via the field-agnostic deep screen.
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../../client/http-client.js';
-import type { ResponseCache } from '../../client/cache.js';
+import type { CacheStore } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
 import { makeScreener, screenRecordDeep, makeDescribe, screenNote } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from '../cbp-list.js';
@@ -31,7 +31,7 @@ const describeMacro = makeDescribe<Macro>('macro', (m) => `#${m.id} ${m.title ??
 
 export async function listMacros(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -58,7 +58,7 @@ const MacroApplyResultSchema = z.object({ result: z.record(z.unknown()) });
 
 export async function previewMacro(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { macroId: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -82,7 +82,7 @@ const TicketScopedMacroSchema = z.object({ result: z.object({ ticket: z.record(z
 
 export async function applyMacroToTicket(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ticketId: number; macroId: number; confirm?: boolean; updatedStamp?: string; force?: boolean },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ApplyMacroResult> {
