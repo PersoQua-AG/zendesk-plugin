@@ -115,6 +115,5 @@ export function summariseCsat(ratings) {
         else if (r.score === 'bad')
             bad += 1;
     }
-    const rated = good + bad;
-    return { good, bad, rated, scorePct: rated === 0 ? null : Math.round((good / rated) * 100) };
+    return { good, bad, rated: good + bad };
 }

@@ -14,22 +14,23 @@ describe('ticket-manager: safe update (SKILL.md:26-31)', () => {
     expect(r.text).toMatch(/updatedStamp/);
   });
 
+  // Since #61 a status change pre-reads the current status (GET) before the PUT.
   it('TM-2 happy: with a stamp the PUT carries safe_update and updated_stamp', async () => {
-    const r = await once('zendesk_update_ticket', { ticketId: 42, fields: { status: 'pending' }, updatedStamp: STAMP }, () => json({ ticket: { id: 42 } }));
+    const r = await once('zendesk_update_ticket', { ticketId: 42, fields: { status: 'pending' }, updatedStamp: STAMP }, () => json({ ticket: { id: 42, status: 'open' } }));
     expect(r.text).toMatch(/^UPDATED/);
-    expect(r.calls.map((c) => c.method)).toEqual(['PUT']);
-    const body = JSON.parse(r.calls[0].body ?? '{}');
+    expect(r.calls.map((c) => c.method)).toEqual(['GET', 'PUT']);
+    const body = JSON.parse(r.calls[1].body ?? '{}');
     expect(body.ticket).toMatchObject({ status: 'pending', safe_update: true, updated_stamp: STAMP });
   });
 
   // Any follow-up request "succeeds", as a stamp-less re-PUT would in Zendesk: only the METHOD of
   // the second call separates a re-fetch from a blind overwrite (S0 finding 3).
   it('TM-3 failcheck: a stale stamp yields a conflict and no second write', async () => {
-    const r = await once('zendesk_update_ticket', { ticketId: 42, fields: { status: 'solved' }, updatedStamp: STAMP }, (_c, n) =>
-      n === 1 ? json({ error: 'conflict' }, 409) : json({ ticket: { id: 42, status: 'open', subject: 'Now edited', updated_at: '2026-07-21T00:00:00Z' } }),
+    const r = await once('zendesk_update_ticket', { ticketId: 42, fields: { status: 'solved' }, updatedStamp: STAMP }, (c) =>
+      c.method === 'PUT' ? json({ error: 'conflict' }, 409) : json({ ticket: { id: 42, status: 'open', subject: 'Now edited', updated_at: '2026-07-21T00:00:00Z' } }),
     );
     expect(r.text).toMatch(/^CONFLICT/);
-    expect(r.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['PUT /api/v2/tickets/42.json', 'GET /api/v2/tickets/42.json']);
+    expect(r.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /api/v2/tickets/42.json', 'PUT /api/v2/tickets/42.json', 'GET /api/v2/tickets/42.json']);
     expect(r.calls.filter((c) => c.method !== 'GET')).toHaveLength(1);
   });
 });

@@ -206,7 +206,7 @@ Claude Code plugin they are environment variables (`ZENDESK_SUBDOMAIN`,
 | `oauth_client_id` | string | yes | From step 1 |
 | `oauth_client_secret` | string (sensitive) | yes | From step 1 — stored in the macOS Keychain when the setup page collects it, never on disk in the clear |
 | `oauth_callback_port` | number | no | Localhost redirect port (default `8976`) |
-| `security_level` | `strict`\|`standard`\|`off` | no | Prompt-injection screening. Fixed at `standard` in the installed plugin — only a hand-started server reads `ZENDESK_SECURITY_LEVEL`, see [Security](#security) |
+| `security_level` | `strict`\|`standard`\|`off` | no | Prompt-injection screening. Fixed at `standard` in the installed plugin — only a hand-started server or a remote-connector deployment reads `ZENDESK_SECURITY_LEVEL`, see [Security](#security) |
 | `markdown_conversion` | boolean | no | Markdown→HTML on writes (default `true`) |
 | `timezone` | string | no | IANA tz for business-hours metrics (e.g. `Europe/Berlin`) |
 | `work_hours` | JSON | no | `{"start":"09:00","end":"17:00"}` |

@@ -25,7 +25,9 @@ afterEach(() => {
 function serverEnv(): NodeJS.ProcessEnv {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-placeholder-'));
   dirs.push(dataDir);
-  return { ...fullEnv(), ZENDESK_DATA_DIR: dataDir };
+  // ZENDESK_SECURITY_LEVEL is set so the #93 absence notice never fires: the cases below assert
+  // that NOTHING warned, which is stronger than filtering down to the warnings they expected.
+  return { ...fullEnv(), ZENDESK_DATA_DIR: dataDir, ZENDESK_SECURITY_LEVEL: 'standard' };
 }
 
 describe('unsubstituted ${user_config.*} placeholders', () => {
@@ -65,12 +67,15 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
     expect(config.clientSecret).toBeUndefined();
   });
 
+  // Silenced: an unsubstituted ZENDESK_SECURITY_LEVEL re-fires the #93 absence notice.
   it('a placeholder security level and markdown flag fall back to the shipped defaults', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { ctx } = createServer({
       ...serverEnv(),
       ZENDESK_SECURITY_LEVEL: '${user_config.security_level}',
       ZENDESK_MARKDOWN_CONVERSION: '${user_config.markdown_conversion}',
     }, { security: keychain() });
+    warn.mockRestore();
     expect(ctx.securityLevel).toBe('standard');
     expect(ctx.markdownDefault).toBe(true);
   });
@@ -120,7 +125,8 @@ describe('markdown conversion — an unreadable value is never read as a silent 
     expect(markdownDefault).toBe(true);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(`ZENDESK_MARKDOWN_CONVERSION "${value}"`);
-    expect(warnings[0]).toContain('"markdown_conversion"');
+    // …and no configuration field, same as the screening level: the installed plugin declares none.
+    expect(warnings[0]).not.toContain('configuration field');
   });
 
   it('stays silent and true when the variable is absent', () => {

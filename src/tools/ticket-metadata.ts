@@ -1,7 +1,7 @@
 // src/tools/ticket-metadata.ts
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import { ZendeskPermissionError } from '../client/errors.js';
 
 const FieldsSchema = z.object({ ticket_fields: z.array(z.object({ id: z.number(), title: z.string(), type: z.string() })) });
@@ -9,7 +9,7 @@ const FormsSchema = z.object({ ticket_forms: z.array(z.object({ id: z.number(), 
 
 export async function listTicketFields(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
 ): Promise<{ summary: string; cacheHandle: string }> {
   const raw = await client.request<unknown>('/ticket_fields.json');
   const parsed = FieldsSchema.safeParse(raw);
@@ -20,7 +20,7 @@ export async function listTicketFields(
 
 export async function listTicketForms(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
 ): Promise<{ available: boolean; summary: string; cacheHandle: string | null }> {
   try {
     const raw = await client.request<unknown>('/ticket_forms.json');

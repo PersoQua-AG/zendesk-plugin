@@ -55,7 +55,11 @@ describe('report (composite)', () => {
     expect(r.summary).toContain('First reply time — calendar: avg 15m');
     expect(r.summary).toContain('First reply time — business: avg 15m');
     expect(r.summary).toContain('SLA breaches (total 1)');
-    expect(r.summary).toContain('CSAT: 100%');
+    // T5 (#65): the tool's own summary states counts and carries no percentage anywhere. The same
+    // all-good data runs through the real tool here, so `100` is asserted at the shipped boundary.
+    expect(r.summary).toMatch(/^CSAT: 1 good \/ 0 bad \/ 1 rated$/m);
+    expect(r.summary).not.toMatch(/%/);
+    expect(r.summary).not.toMatch(/100/);
 
     const [toolName, cached] = (cache.save as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(toolName).toBe('zendesk_report');
@@ -63,6 +67,10 @@ describe('report (composite)', () => {
     expect(cached.ticket_metric_events).toHaveLength(3);
     expect(cached.satisfaction_ratings).toHaveLength(1);
     expect(cached.report.slaBreachTotal).toBe(1);
+    // T5 (#65): the CACHED report is what zendesk_query replays, so it must be percentage-free too.
+    expect(cached.report.csat).toEqual({ good: 1, bad: 0, rated: 1 });
+    expect(Object.keys(cached.report.csat).filter((k) => /pct|percent|ratio|score/i.test(k))).toEqual([]);
+    expect(JSON.stringify(cached.report)).not.toContain('%');
   });
 
   it('defaults endTime to the injected clock', async () => {
