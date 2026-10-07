@@ -7,7 +7,6 @@ import {
   readFileSync,
   rmSync,
   statSync,
-  truncateSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -195,6 +194,28 @@ describe('the sweep that reclaims the band', () => {
     return ino;
   }
 
+  /**
+   * Plants a claim body and pins its inode, retrying if the two steps are raced.
+   *
+   * Every vitest worker sweeps at module load (login-harness.ts:149), so between writing an
+   * ownerless or dead-owner body and taking the pin link, another worker can reclaim the name —
+   * measured here as `nothing to pin: …/25203 was already gone before the sweep`. The old code hid
+   * that race by returning null and letting the assertion degrade to nothing. Replanting is the
+   * honest answer: the case is about what THIS sweep does, and a foreign sweep getting there first
+   * simply means there is nothing yet to observe.
+   */
+  function plantAndPin(claim: string, body: string): number {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      writeFileSync(claim, body);
+      try {
+        return pinInode(claim);
+      } catch {
+        // Swept between the write and the link. Plant it again.
+      }
+    }
+    throw new Error(`could not plant and pin ${claim}: a concurrent sweep removed it ten times over`);
+  }
+
   let pins: string | null = null;
   const pinDir = (): string => (pins ??= mkdtempSync(join(tmpdir(), 'claim-inode-pins-')));
 
@@ -253,8 +274,7 @@ describe('the sweep that reclaims the band', () => {
   it('reclaims a claim that names no owner', () => {
     const port = freePort();
     const claim = portClaimPath(port);
-    truncateSync(claim, 0);
-    const before = pinInode(claim);
+    const before = plantAndPin(claim, '');
     sweepDeadClaims();
     expectReclaimed(claim, '', before);
   });
@@ -266,8 +286,7 @@ describe('the sweep that reclaims the band', () => {
   it('holds the pinned inode across the sweep, which is the only thing that makes the check real', () => {
     const port = freePort();
     const claim = portClaimPath(port);
-    truncateSync(claim, 0);
-    const before = pinInode(claim);
+    const before = plantAndPin(claim, '');
     const pin = planted[planted.length - 1];
 
     sweepDeadClaims();
@@ -282,9 +301,8 @@ describe('the sweep that reclaims the band', () => {
 
     const abandonedPort = freePort();
     const abandoned = portClaimPath(abandonedPort);
-    writeFileSync(abandoned, String(dead.pid));
     const ours = portClaimPath(freePort());
-    const before = pinInode(abandoned);
+    const before = plantAndPin(abandoned, String(dead.pid));
 
     sweepDeadClaims();
 
