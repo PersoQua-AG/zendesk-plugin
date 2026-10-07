@@ -35,21 +35,16 @@ export function recordAcquiredPort(port: number): number {
 // through the product's own retry.
 const foreign = new Set<number>();
 
-export function allowForeignBind(port: number, _why: string): number {
+export function allowForeignBind(port: number, _why: string): void {
   foreign.add(port);
-  return port;
 }
 
 export function isDeclaredPort(port: number): boolean {
   return acquired.has(port) || foreign.has(port);
 }
 
-// A REFUSAL THAT WAS SWALLOWED MUST STILL FAIL THE RUN. The guard throws at the bind, and the one
-// real bind path in the product catches everything around its `listen` and replaces the error with
-// its own wording (src/auth/oauth-flow.ts). Measured on this branch before this register existed:
-// the case reported PASSED while the process exited 1 and the refusal arrived as an unhandled
-// error — #74 scenario 1 unmet on the only path where it matters. So every refusal is written down
-// here as well, and an afterEach in the setup file fails the case unless somebody has claimed it.
+// A REFUSAL THAT WAS SWALLOWED MUST STILL FAIL THE RUN — why, and what was measured, is on
+// swallowedRefusal() below, which is the one place that argument is written out.
 const refusals: string[] = [];
 
 export function recordRefusal(message: string): void {

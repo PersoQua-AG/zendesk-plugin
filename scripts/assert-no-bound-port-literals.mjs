@@ -29,14 +29,11 @@
 // Production ports belong to a configuration review, not to this script.
 //
 // AND THE TREE MUST PROVE IT IS THE RIGHT ONE. A wrong root is silent, so success is gated on a
-// mark: the tree must CONTAIN the definition of freePort(), not merely mention it. That is the one
-// false pass this guard has had — "some file here calls freePort()" lasted a day before PR #71 put
-// 53 callers in and three wrong roots exited 0. The mark, the command that counts the defining
-// directories, and the cost the mark brings are at DEFINES_FREE_PORT.
-//
-// WHAT THE GUARD DELIBERATELY CANNOT SEE. It reads source text and is evadable by construction;
-// the classes it misses are listed at BIND_CALL, where the regex they evade is, and catching them
-// needs a parser or a runtime check (#74).
+// mark: the tree must CONTAIN the definition of freePort(), not merely mention it. The mark, the
+// one false pass it replaced, the command that counts the defining directories and the cost the
+// mark brings are all at DEFINES_FREE_PORT; what the scan deliberately cannot see is at BIND_CALL,
+// on the regex that is evaded. Pointers rather than second copies — the header grew every round
+// because each paragraph restated the block it pointed at (#79).
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';

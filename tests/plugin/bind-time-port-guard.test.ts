@@ -57,21 +57,15 @@ describe('a fixed bind port is refused when it is bound', () => {
   // written. It earns its place by refusing a bind in a file nothing ever executes, which a runtime
   // guard by construction cannot, and by naming file and line at review time rather than at bind
   // time. On SPELLING it is strictly the weaker of the two.
-  // Split, because a bare `17_000` immediately after `listen(` is the one shape the source scan
-  // DOES match, and this file sits inside the tree that scan walks. Measured: as a const it is not
-  // matched — the pattern needs the literal at the call site — but the split keeps the row honest
-  // about being an expression rather than relying on that.
-  const FIRST_OPERAND = Number(`17${'000'}`);
+  // ONE ROW PER BRANCH OF THE GUARD, not per spelling. `17_000 + 1_000`, `18e3` and `0x4650` all
+  // reach the patched listen() as the number 18000 — the guard cannot tell them apart and does not
+  // try; only the regex can, and the regex is pinned in bound-port-literals-guard.test.ts. Of the
+  // string spellings `'0x4650'` is the one that fails a digits-only test (it binds 18000, measured,
+  // while `/^\d+$/` read it as a unix socket path), so `'18002'` and `'1.8e4'` add nothing to it.
   it.each([
-    ['an expression', () => createServer().listen(FIRST_OPERAND + 1_000)],
-    ['exponent notation', () => createServer().listen(18e3)],
-    ['a hex literal', () => createServer().listen(0x4650)],
+    ['a number no literal wrote', () => createServer().listen(18e3)],
     ['an option bag', () => createServer().listen({ port: 18_001 })],
-    ['a numeric string', () => createServer().listen('18002')],
-    // Binds 18000 — measured — while a decimal-digits test read it as a unix socket path and waved
-    // it through, with the header above advertising exactly that shape as caught. `'1.8e4'` is the
-    // same decision through the same branch, so one row carries both.
-    ['a hex string', () => createServer().listen('0x4650')],
+    ['a string node coerces', () => createServer().listen('0x4650')],
   ])('catches %s too', (_label, bind) => {
     expect(bind).toThrow(/Refusing to bind the fixed port/);
     claimRefusal();
@@ -105,14 +99,11 @@ describe('a fixed bind port is refused when it is bound', () => {
   // correctly asserted `toThrow(/Refusing/)` go red, and made a case that merely let the refusal
   // propagate fail twice — the second time claiming something had swallowed it.
   describe('a swallowed refusal fails the case, and only a swallowed one', () => {
-    // Split, like every other fixed port in this file: a bare literal at the call site is the one
-    // shape the source scan DOES match, and this file sits inside the tree that scan walks.
-    const PROVOKED = Number(`180${'04'}`);
-    const PROVOKED_TOO = Number(`180${'05'}`);
-    afterEach(() => {
-      takeRefusals();
-    });
-
+    // Plain consts, not split: measured against `BIND_CALL`, a const initializer is never matched
+    // — the pattern needs a bind-call NAME immediately before the digits — which is why `PORT`
+    // above is written plainly too.
+    const PROVOKED = 18_004;
+    const PROVOKED_TOO = 18_005;
     it('names the swallowed refusal when the case passed', () => {
       expect(() => createServer().listen(PROVOKED)).toThrow(/Refusing/);
       const error = swallowedRefusal(true);
@@ -148,7 +139,7 @@ describe('a fixed bind port is refused when it is bound', () => {
   // the refusal for that number for every case that ran afterwards in the same worker — including
   // files that never asked. These two run in order inside one file, which is what makes it
   // observable: the second one asks for the same port without declaring it.
-  const SHARED_STRANGER = Number(`180${'03'}`);
+  const SHARED_STRANGER = 18_003;
   it('lets a declared stranger bind, in the case that declared it', async () => {
     allowForeignBind(SHARED_STRANGER, 'a stranger declared by this case alone');
     const server = await listening(createServer().listen(SHARED_STRANGER, '127.0.0.1'));
@@ -169,12 +160,6 @@ describe('a fixed bind port is refused when it is bound', () => {
     expect(() => createServer().listen(70_000)).toThrow(RangeError);
   });
 
-  it('lets a declared foreign bind through, which is the only way past it', async () => {
-    const port = freePort() + 1;
-    allowForeignBind(port, 'a stranger this case puts up on purpose');
-    const server = await listening(createServer().listen(port, '127.0.0.1'));
-    expect((server.address() as { port: number }).port).toBe(port);
-  });
 
   // Scenario 3 of #74: the non-binding uses stay legal. The const above is read into a string here
   // exactly as tests/auth/token-request-timeout.test.ts reads its own, and nothing is reported,

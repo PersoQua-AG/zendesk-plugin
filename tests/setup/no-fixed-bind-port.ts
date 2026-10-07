@@ -59,9 +59,8 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
       '  const port = freePort();\n' +
       'A listener that is deliberately NOT ours — the foreign-listener cases — declares itself:\n' +
       "  allowForeignBind(port, 'why this one is a stranger');\n";
-    // Written down BEFORE it is thrown, because the throw alone is not enough: the product's only
-    // real bind path wraps its `listen` in a catch-everything that replaces the error with its own
-    // wording (src/auth/oauth-flow.ts). The afterEach below is what makes the refusal survive that.
+    // Written down BEFORE it is thrown: the throw alone is not enough. Why, and what was measured,
+    // is on swallowedRefusal() in ./acquired-ports.ts.
     recordRefusal(message);
     throw new Error(message);
   }
@@ -86,9 +85,8 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
   return result;
 } as typeof realListen;
 
-// A refusal the code under test swallowed still fails the case that produced it, and ONLY then:
-// a refusal that became the failure needs nothing added, and a case that asserted on one claims it
-// with takeRefusals(). The decision is in acquired-ports.ts so its failing branch can be tested.
+// A refusal the code under test swallowed still fails the case that produced it, and ONLY then.
+// The decision, and the reason it is a pure function, are on swallowedRefusal().
 //
 // THE HOOK ORDER MATTERS AND IS NOT DECLARED ANYWHERE ELSE: vitest's `sequence.hooks` default is
 // "stack", so a setup file's afterEach runs AFTER the test file's own — which is what lets a bind
