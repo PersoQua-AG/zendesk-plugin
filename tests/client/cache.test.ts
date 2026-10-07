@@ -114,10 +114,9 @@ describe('ResponseCache', () => {
     }
   });
 
-
   // sweep()'s own expired-reap branch, which the TTL case above exercises through load() instead.
   it('reaps an expired entry on the next save, not only on load', () => {
-    const cache = new ResponseCache(dir, { ttlMs: 50 });
+    const cache = new ResponseCache(dir, { ttlMs: 1000 });
     const stale = cache.save('zendesk_get_ticket', { a: 1 });
     const old = new Date(Date.now() - 10_000);
     utimesSync(stale.path, old, old);

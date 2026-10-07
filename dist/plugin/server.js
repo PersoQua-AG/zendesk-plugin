@@ -21905,7 +21905,10 @@ var ResponseCache = class {
     try {
       writeFileSync2(path, JSON.stringify(data));
     } catch (err) {
-      rmSync(path, { force: true });
+      try {
+        rmSync(path, { force: true });
+      } catch {
+      }
       throw new Error(
         `Caching the response failed (${errorCode(err)}). Make sure the extension's data directory is a writable directory with free space, then reload the extension.`,
         { cause: err }

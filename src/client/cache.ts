@@ -56,10 +56,15 @@ export class ResponseCache {
     } catch (err) {
       // A write that failed PARTWAY (ENOSPC, EDQUOT — writeFileSync loops on write(2)) leaves a
       // truncated file that nothing else unlinks, and it counts against maxBytes until its TTL
-      // expires. Deliberately untested: every failure this suite can produce — EACCES, EISDIR,
-      // EROFS — fails at open(2) and creates nothing, so no test here can tell this line apart
-      // from its absence. Kept because the cleanup is unconditionally correct and two lines.
-      rmSync(path, { force: true });
+      // expires. Deliberately untested: every failure this suite can produce fails at open(2) and
+      // creates nothing, so no test here can tell this line apart from its absence. Best-effort,
+      // not unconditional: `force` only swallows ENOENT, and the cleanup must never replace the
+      // sanitized message below with a raw fs error that carries the path.
+      try {
+        rmSync(path, { force: true });
+      } catch {
+        /* the original failure is the one worth reporting */
+      }
       throw new Error(
         `Caching the response failed (${errorCode(err)}). Make sure the extension's data ` +
           'directory is a writable directory with free space, then reload the extension.',
