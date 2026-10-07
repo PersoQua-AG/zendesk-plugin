@@ -174,9 +174,17 @@ describe('a fixed bind port is refused when it is bound', () => {
 
   // `listen(cb)` asks for an ephemeral port and was missed, so the OS-chosen port went unrecorded
   // and a later legitimate re-bind of it was refused.
+  //
+  // THE FIRST LISTENER IS CLOSED BEFORE THE SECOND BINDS, and that is not tidiness. `listen(cb)`
+  // binds the WILDCARD address, so on Linux re-binding the same port on 127.0.0.1 is EADDRINUSE —
+  // measured: this case passed on darwin and failed in CI with
+  // `listen EADDRINUSE: address already in use 127.0.0.1:40869`. It is the platform difference #48
+  // was about and the reason #74 asks for both. What is under test is whether the number was
+  // RECORDED, so the second bind only has to be allowed, not simultaneous.
   it('records the port the OS chose for a callback-only listen', async () => {
     const server = await listening(createServer().listen(() => {}));
     const chosen = (server.address() as { port: number }).port;
+    await new Promise<void>((done) => server.close(() => done()));
     const again = await listening(createServer().listen(chosen, '127.0.0.1'));
     expect((again.address() as { port: number }).port).toBe(chosen);
   });
