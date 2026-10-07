@@ -310,7 +310,7 @@ export function routableAddresses(): string[] {
     // alias this adds nothing but 127.0.0.1 and ::1, which the dedupe below removes.
     .filter((i) => i !== undefined && !(i.family === 'IPv6' && i.scopeid !== 0))
     .map((i) => i!.address);
-  return [...new Set(found)].filter((a) => !(PROBE_ADDRESSES as readonly string[]).includes(a));
+  return [...new Set(found)];
 }
 
 // How many candidates may be PROBED in one pass of freePort() before it moves on. Not how many may
@@ -341,9 +341,16 @@ export const MAX_PROBES_PER_ACQUISITION = 64;
 export function portHeldOn(port: number, addresses: readonly string[] = PROBE_ADDRESSES): string {
   // [host, strict] — strict hosts throw on a bind error that is not EADDRINUSE, discovered ones
   // are skipped. See routableAddresses() above for why the two classes differ.
+  // The de-duplication subtracts what THE CALLER named, not the default constant. Subtracting
+  // PROBE_ADDRESSES contradicted the invariant above: `portHeldOn(p, ['127.0.0.1'])` dropped `::1`
+  // from the discovered set because it is in the constant, and an `::1` holder was then reported
+  // FREE — measured on darwin, the 127.0.0.1 probe binds beside it and sees nothing. A narrowed
+  // STRICT set may not narrow what is probed.
   const hosts = [
     ...addresses.map((h) => [h, true] as const),
-    ...routableAddresses().map((h) => [h, false] as const),
+    ...routableAddresses()
+      .filter((h) => !addresses.includes(h))
+      .map((h) => [h, false] as const),
   ];
   const probe =
     `const n=require('node:net'),{writeSync}=require('node:fs'),{once}=require('node:events');` +

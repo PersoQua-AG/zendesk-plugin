@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateRawSync } from 'node:zlib';
 import { constants } from 'node:buffer';
@@ -946,6 +946,10 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     ['a malformed --expect-version', () => ['zendesk.mcpb', '--expect-version', 'not-a-version'], 'version mismatch'],
     // The measured pair itself: with neither manifest readable the tree has no version at all,
     // which is the state in which every bundle used to be declared contaminated.
+    // NOTE for whoever reads the artifact-survival assertions below: four of these five rows pin
+    // the clearing guard. This one cannot — with neither manifest readable there is no version,
+    // so no artifact path, so nothing for `clearStaleArtifact()` to clear. Measured: ablating the
+    // guard reddens exactly 4 of the 5 rows. Named rather than left to look like coverage.
     [
       'neither manifest readable',
       (t) => {
@@ -1008,6 +1012,116 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
   });
 
+  // THE VERSION IS A PATH COMPONENT, so it is validated — and round 2 of this review showed that
+  // the whole validation was deletable with the suite green. These three cases are why it cannot
+  // be deleted any more. Each one was a live blocker before it was pinned.
+  describe('the declared version has to be usable as a file name', () => {
+    it('refuses a version with path segments, and deletes nothing outside the tree', () => {
+      const tree = makeTree();
+      // Four levels above the tree, which is where `../../../../VICTIM` pointed.
+      const victim = join(tree.dir, 'VICTIM-1.0.0.mcpb');
+      writeFileSync(victim, 'somebody else\'s file');
+      writeFileSync(join(tree.dir, 'manifest.json'), JSON.stringify({ name: 't', version: '../VICTIM' }));
+      writeFileSync(join(tree.dir, 'package.json'), JSON.stringify({ name: 't', version: '../VICTIM' }));
+      const run = runAudit(tree);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('is not a usable file-name component');
+      expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
+      expect(readFileSync(victim, 'utf8')).toBe('somebody else\'s file');
+      expect(existsSync(tree.bundle)).toBe(true);
+    });
+
+    // The manifests PARSE here, so readJson raises nothing. This is what reached
+    // `writeFileSync(null, bundle)` — ERR_INVALID_ARG_TYPE as a stack trace, under exit 1, for a
+    // bundle that had passed every rule.
+    it('refuses manifests that parse but declare no version, without a stack trace', () => {
+      const tree = makeTree();
+      writeFileSync(join(tree.dir, 'manifest.json'), JSON.stringify({ name: 't' }));
+      writeFileSync(join(tree.dir, 'package.json'), JSON.stringify({ name: 't' }));
+      const run = runAudit(tree);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('neither manifest.json nor package.json declares a version');
+      expect(run.stderr).not.toMatch(/ERR_INVALID_ARG_TYPE|^\s+at .*\(node:/m);
+      expect(existsSync(tree.bundle)).toBe(true);
+    });
+
+    it('says a non-string version is not a string, rather than blaming the file name', () => {
+      const tree = makeTree();
+      writeFileSync(join(tree.dir, 'manifest.json'), JSON.stringify({ name: 't', version: 100 }));
+      writeFileSync(join(tree.dir, 'package.json'), JSON.stringify({ name: 't', version: 100 }));
+      const run = runAudit(tree);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('is number, not a string');
+      expect(run.stderr).not.toContain('not a usable file-name component');
+    });
+
+    // Every legitimate semver shape still releases. A validation that bricks a real release would
+    // be worse than the traversal it prevents.
+    it.each(['1.0.0', '1.0.0-rc.1', '1.0.0+build.5', '1.0.0-rc.1+exp.sha.5114f85'])(
+      'still releases version %s',
+      (v) => {
+        const tree = makeTree({ manifestVersion: v, packageVersion: v, entries: clean(v) });
+        const run = runAudit(tree);
+        expect(run.status, run.stderr).toBe(0);
+        expect(existsSync(tree.artifact)).toBe(true);
+      },
+    );
+  });
+
+  // A partial clearing is the round-1 blocker one window narrower: the artifact goes, the checksum
+  // slot refuses, the failure becomes a tree fault — and the paragraph then claimed nothing had
+  // been deleted while the operator's artifact was already gone. Measured.
+  it('names what it already deleted when the clearing fails half way', () => {
+    const tree = makeTree();
+    writeFileSync(tree.artifact, 'the release this tree published');
+    // The checksum slot is a non-empty directory, which `rmSync(force)` cannot remove.
+    mkdirSync(tree.checksum);
+    writeFileSync(join(tree.checksum, 'in-the-way'), 'x');
+    const run = runAudit(tree);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('could not be cleared');
+    expect(existsSync(tree.artifact), 'the artifact was removed, as the code intends').toBe(false);
+    // The sentence has to match the disk.
+    expect(run.stderr).not.toContain('Nothing was deleted');
+    expect(run.stderr).toContain('was already removed before this was found');
+    expect(run.stderr).toContain(basename(tree.artifact));
+  });
+
+  // "No artifact and no checksum were produced" is the only line an operator reads about
+  // artifacts, and on a tree-fault run the clearing is skipped on purpose, so a complete
+  // uploadable pair from an earlier passing run survives. It gets named.
+  it('names a surviving artifact pair instead of letting the summary imply there is none', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    writeFileSync(join(tree.dir, 'package.json'), '{ not json');
+    writeFileSync(tree.artifact, 'an earlier passing run wrote this');
+    writeFileSync(tree.checksum, 'and this');
+    const run = runAudit(tree);
+    expect(run.status).toBe(1);
+    expect(existsSync(tree.artifact)).toBe(true);
+    expect(run.stderr).toContain('from an earlier run is STILL THERE and uploadable');
+    expect(run.stderr).toContain(basename(tree.checksum));
+  });
+
+  // The success path used to write unguarded, so an unwritable checkout, a full disk or a slot
+  // that is a directory each ended a PASSING audit as a stack trace under exit 1 — the code that
+  // means "this bundle did not pass".
+  it('reports a write it cannot perform instead of throwing on a bundle that passed', () => {
+    const tree = makeTree();
+    // A read-only checkout, which is the ordinary form of this: the clearing has nothing to remove
+    // and succeeds, the audit passes, and only the write fails. A slot that is a directory trips
+    // the clearing first and is a different case.
+    chmodSync(tree.dir, 0o555);
+    try {
+      const run = runAudit(tree);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('PASSED the audit, and this tree could not write the artifact');
+      expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
+      expect(existsSync(tree.bundle), 'the bundle is fine and stays where it is').toBe(true);
+    } finally {
+      chmodSync(tree.dir, 0o755); // or afterEach cannot remove it
+    }
+  });
+
   // The other half of AC1, and the one that makes it a cut rather than a blanket exemption: the
   // archive verdict is untouched. An encrypted entry, a truncated ZIP, a planted credential — all
   // still quarantine and all still exit 1.
@@ -1033,7 +1147,10 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     // quarantined, so the bundle verdict is the one the caller has to act on; exit 2 is reserved
     // for a run that reached no bundle verdict at all.
     expect(run.status, 'the bundle verdict wins the exit code when there is one').toBe(1);
-    expect(run.stderr).toContain('Cannot release from this tree');
+    // The header no longer says "was not judged" in a run that judged it — that was the other half
+    // of the same contradiction.
+    expect(run.stderr).toContain('This tree cannot publish, whatever zendesk.mcpb contains');
+    expect(run.stderr).not.toContain('was not judged');
     expect(run.stderr).toContain('package.json is missing or unreadable');
     expect(run.stderr).toContain('The archive was judged on its own, below.');
     expect(run.stderr).toContain('CONTAMINATED');
@@ -1196,11 +1313,22 @@ describe('the caller names the bundle', () => {
     writeFileSync(theirs, 'the operator released this');
     writeFileSync(`${theirs}.sha256`, 'and this is its checksum');
 
-    expect(runAudit(tree, ['./zendesk.mcpb'], elsewhere).status).toBe(0);
+    // And the operator's release of that same number inside THIS tree, which is where the slot is.
+    writeFileSync(tree.artifact, 'the release this tree published');
+    writeFileSync(tree.checksum, 'and the checksum of that');
+
+    const run = runAudit(tree, ['./zendesk.mcpb'], elsewhere);
+    expect(run.status, run.stderr).toBe(0);
     expect(readFileSync(theirs, 'utf8')).toBe('the operator released this');
     expect(readFileSync(`${theirs}.sha256`, 'utf8')).toBe('and this is its checksum');
-    // It went into the tree that declared the number instead.
-    expect(existsSync(tree.artifact)).toBe(true);
+    // NEITHER DIRECTORY. Moving the slot into `root` moved the destruction with it rather than
+    // removing it: a PASSING audit of a downloaded bundle overwrote this tree's published release
+    // of that version and rewrote its checksum to match a file that came from somewhere else.
+    // A foreign bundle is audited and reported on; it does not get to claim this tree's name.
+    expect(readFileSync(tree.artifact, 'utf8')).toBe('the release this tree published');
+    expect(readFileSync(tree.checksum, 'utf8')).toBe('and the checksum of that');
+    expect(run.stdout).toContain('No artifact was written');
+    expect(run.stdout).toContain("is not this tree's own bundle");
   });
 
   it('resolves a relative argument against the caller cwd, not the script tree', () => {

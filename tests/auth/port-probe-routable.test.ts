@@ -7,14 +7,25 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:net';
-import { freePort, portHeldOn, routableAddresses } from './login-harness.js';
+import { networkInterfaces } from 'node:os';
+import { freePort, portHeldOn } from './login-harness.js';
 
-// The stranger is put on IPv4 specifically: it is the family the measurement was taken on and the
-// one dual-bind.test.ts asks about (firstNonLoopbackIPv4). The set is the harness's own, so the
-// test cannot drift from what portHeldOn actually probes. A machine with none is SKIPPED by name
-// rather than passed silently — a green assertion nobody could have made is the shape this whole
-// ticket is about.
-const routableIPv4 = (): string | undefined => routableAddresses().find((a) => !a.includes(':'));
+// THE GUARD MAY NOT BE DERIVED FROM THE SUBJECT, and briefly it was. Reusing the harness's
+// `routableAddresses()` here looked like the right de-duplication and made the whole file report
+// GREEN when that function was ablated to `[]` — it skipped itself. Measured:
+//   ABLATION A: routableAddresses() -> []   ->   Tests  1 skipped (1)
+// So the address comes from an independent walk. It is deliberately NOT shared with the harness:
+// a control whose precondition is computed by the code under test controls nothing.
+//
+// Non-internal IPv4 specifically: it is the family the measurement was taken on and the one
+// dual-bind.test.ts asks about (firstNonLoopbackIPv4), and excluding internal keeps a loopback
+// alias such as 127.0.0.2 from being tested under the name "a routable address". A machine with
+// none is SKIPPED by name rather than passed silently.
+function routableIPv4(): string | undefined {
+  return Object.values(networkInterfaces())
+    .flat()
+    .find((i) => i !== undefined && !i.internal && i.family === 'IPv4')?.address;
+}
 
 describe('portHeldOn() and a stranger on a routable address', () => {
   const opened: Server[] = [];

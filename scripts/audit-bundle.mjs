@@ -312,7 +312,11 @@ function readJson(path, label, faults) {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
-    faults.push(`${label} is missing or unreadable — the release version cannot be established`);
+    // NO CLAIM ABOUT THE VERSION HERE. `version` falls back from manifest.json to package.json, so
+    // an unreadable package.json next to a good manifest.json established the version perfectly
+    // well and the run still printed "the release version cannot be established". The version
+    // claim belongs to the version check, which makes it only when there is no version.
+    faults.push(`${label} is missing or unreadable, so this tree cannot be trusted to describe a release`);
     return null;
   }
 }
@@ -461,16 +465,19 @@ const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', treeFaul
 //    `rmSync` then deleted files four levels above it while the run announced the clean bundle as
 //    contaminated. Semver characters only, no separator, no dot-segment.
 const declaredVersion = manifest?.version ?? pkg?.version ?? null;
-const version =
-  typeof declaredVersion === 'string' && /^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(declaredVersion) && !declaredVersion.includes('..')
-    ? declaredVersion
-    : null;
-if (version === null && treeFaults.length === 0) {
+// The charset does the escaping work on its own: no `/`, no `\`, so nothing that passes can leave
+// `root`. A separate `..` clause was belt over braces and only rejected strings like `1..2`, which
+// are not versions anyway.
+const version = typeof declaredVersion === 'string' && /^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(declaredVersion) ? declaredVersion : null;
+if (version === null) {
   treeFaults.push(
     declaredVersion === null || declaredVersion === undefined
       ? 'neither manifest.json nor package.json declares a version — the release version cannot be established'
-      : `the declared version ${JSON.stringify(String(declaredVersion))} cannot be a file name, so no` +
-          ' artifact path can be built from it — the release version cannot be established',
+      : typeof declaredVersion !== 'string'
+        ? `the declared version ${JSON.stringify(declaredVersion)} is ${typeof declaredVersion}, not a string` +
+            ' — the release version cannot be established'
+        : `the declared version ${JSON.stringify(declaredVersion)} is not a usable file-name component` +
+            ' (letters, digits, dot, plus and hyphen only) — the release version cannot be established',
   );
 }
 
@@ -493,15 +500,24 @@ const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 // NOTHING deletes nothing — see clearStaleArtifact() at the verdict below. Measured before the
 // move: `--expect-version` with a typo printed "Nothing was renamed and nothing was deleted" and
 // had already deleted the operator's previously published artifact and its checksum.
+// A FOREIGN BUNDLE IS READ-ONLY TO THIS TREE. The artifact slot is this tree's, so auditing a
+// downloaded bundle must neither clear it nor write it: clearing destroyed the operator's release
+// on a run that was only ever going to report, and writing re-pointed this tree's release name at
+// a file from somewhere else. Both measured. One rule, both ends.
+const ownBundle = dirname(bundlePath) === root;
+
+const staleRemoved = [];
 function clearStaleArtifact() {
-  if (!artifactPath) return;
+  if (!artifactPath || !ownBundle) return;
   for (const stale of [artifactPath, checksumPath]) {
+    const wasThere = nameState(stale) === 'taken';
     try {
       // `force: true` suppresses ENOENT and nothing else. A stale artifact that is a non-empty
       // directory makes this throw, and an unwritable parent makes it throw EACCES — unguarded,
       // that throw ended the run as a stack trace. A tree whose artifact slot cannot be cleared
       // cannot be released from, whatever the bundle holds.
       rmSync(stale, { force: true });
+      if (wasThere) staleRemoved.push(stale);
     } catch (error) {
       treeFaults.push(
         `the stale artifact ${basename(stale)} could not be cleared: ${error.code ?? error.message}` +
@@ -672,7 +688,11 @@ if (treeFaults.length === 0) clearStaleArtifact();
 // price of the owner's decision is that a path somebody could upload stays under its name, and a
 // message that hid that would make the decision worse than the defect it replaced.
 if (treeFaults.length > 0) {
-  console.error(`Cannot release from this tree: ${basename(bundlePath)} was not judged on this.`);
+  console.error(
+    problems.length > 0
+      ? `This tree cannot publish, whatever ${basename(bundlePath)} contains:`
+      : `Cannot release from this tree: ${basename(bundlePath)} was not judged on this.`,
+  );
   for (const fault of treeFaults) console.error(`  - ${fault}`);
   // THE SENTENCE DEPENDS ON WHAT THE RUN THEN DID. A tree fault moves nothing by itself, but the
   // archive can still have been judged on its own and quarantined below — and a message that
@@ -683,9 +703,20 @@ if (treeFaults.length > 0) {
       ? '\nNone of that is a verdict on the bundle, and none of it is a .mcpbignore problem. The' +
           ' archive was judged on its own, below.'
       : `\nThis is NOT a verdict on the bundle, and it is not a .mcpbignore problem. Nothing was` +
-          ` renamed and nothing was deleted: whatever is at ${bundlePath} is STILL THERE, under` +
-          ` that name${shape.fault ? '' : ', and can still be uploaded under it'}. Fix the tree and` +
-          ' run the audit again; until then the file is the operator\'s to deal with.',
+          ` renamed: whatever is at ${bundlePath} is STILL THERE, under that name` +
+          `${shape.fault ? '' : ', and can still be uploaded under it'}.` +
+          // WHAT WAS ACTUALLY REMOVED, named. The clearing runs only on a sound tree, but it can
+          // succeed on the artifact and then FAIL on the checksum, which is itself a tree fault —
+          // and the sentence then stood here claiming nothing had been deleted while the
+          // operator's artifact was already gone. Measured. The same sentence, the same file, the
+          // same loss as the round-1 blocker, one window narrower.
+          `${
+            staleRemoved.length === 0
+              ? ' Nothing was deleted either.'
+              : ` ${staleRemoved.map((f) => basename(f)).join(' and ')} ${staleRemoved.length > 1 ? 'were' : 'was'} already removed before this was found, and ${staleRemoved.length > 1 ? 'are' : 'is'} NOT coming back.`
+          }` +
+          ' Fix the tree and run the audit again; until then the file is the operator\'s to deal' +
+          ' with.',
   );
 }
 
@@ -724,7 +755,18 @@ if (problems.length > 0) {
       console.error(`  - could not quarantine ${basename(bundlePath)}: ${error.message} — DELETE IT BY HAND`);
     }
   }
-  console.error('\nNo artifact and no checksum were produced.');
+  console.error('\nNo artifact and no checksum were produced by this run.');
+  // AND WHAT IS STILL THERE FROM AN EARLIER ONE. The clearing is skipped on a tree fault, on
+  // purpose, so on a run with both a tree fault and a bundle finding a complete, uploadable
+  // artifact pair from an earlier passing run survives — and "no artifact was produced" is the
+  // only line an operator reads about artifacts. Named rather than left to the source comment.
+  if (artifactPath && nameState(artifactPath) === 'taken') {
+    console.error(
+      `  - ${basename(artifactPath)} from an earlier run is STILL THERE and uploadable` +
+        `${nameState(checksumPath) === 'taken' ? `, with ${basename(checksumPath)} beside it` : ''}.` +
+        ' It was not cleared because this tree cannot publish; it is not this run\'s output.',
+    );
+  }
   if (quarantined) {
     console.error(
       `${basename(bundlePath)} is ${problems.length > versionProblems ? 'CONTAMINATED' : 'NOT THE RELEASE THIS TREE DESCRIBES'}` +
@@ -732,7 +774,7 @@ if (problems.length > 0) {
         `${shape.symlink ? ` (and what it pointed at to ${basename(quarantined)}.target)` : ''} so it` +
         ' cannot be uploaded by name. Do not publish it.' +
         (problems.length > versionProblems
-          ? ' Fix the cause (usually .mcpbignore) and pack again.'
+          ? ' Fix the cause the findings above name — a refused path is usually .mcpbignore — and pack again.'
           : ' Nothing is in it that should not be — it is the wrong build. Pack it again from this tree.'),
     );
   }
@@ -749,9 +791,39 @@ if (problems.length > 0) process.exit(1);
 if (treeFaults.length > 0) process.exit(2);
 
 const sha256 = createHash('sha256').update(bundle).digest('hex');
-writeFileSync(artifactPath, bundle);
-// `shasum -a 256 -c <file>.sha256` format: digest, two spaces, the name it applies to.
-writeFileSync(checksumPath, `${sha256}  ${basename(artifactPath)}\n`);
+
+// ONLY THIS TREE'S OWN BUNDLE GETS AN ARTIFACT. The slot is in `root` because the version is, and
+// that moved the destruction rather than removing it: auditing a DOWNLOADED bundle that passed
+// overwrote this checkout's published release of that version and rewrote its `.sha256` to match a
+// file that came from somewhere else. Measured. A bundle handed in from elsewhere is audited and
+// reported on; it does not get to claim this tree's release name.
+if (!ownBundle) {
+  console.log(`Bundle audit passed: ${bundlePath}`);
+  console.log(`  sha256    ${sha256}`);
+  console.log(
+    `\nNo artifact was written. ${basename(bundlePath)} is not this tree's own bundle` +
+      ` (it is not in ${root}), and the artifact slot ${basename(artifactPath)} belongs to the` +
+      " release THIS tree declares. Pack from this tree to produce one.",
+  );
+  process.exit(0);
+}
+
+// GUARDED, because an unwritable checkout, a full disk or an artifact slot that is a directory all
+// landed here as a stack trace — under exit 1, the code that means "this bundle did not pass",
+// for a bundle that had passed every rule. Measured with the tree at mode 0555.
+try {
+  writeFileSync(artifactPath, bundle);
+  // `shasum -a 256 -c <file>.sha256` format: digest, two spaces, the name it applies to.
+  writeFileSync(checksumPath, `${sha256}  ${basename(artifactPath)}\n`);
+} catch (error) {
+  console.error(`${basename(bundlePath)} PASSED the audit, and this tree could not write the artifact.`);
+  console.error(`  - ${basename(artifactPath)}: ${error.code ?? error.message}`);
+  console.error(
+    '\nThe bundle is fine and is still under its own name. This is the tree: fix the path and run' +
+      ' the audit again.',
+  );
+  process.exit(2);
+}
 
 const dependencies = accepted.filter((a) => a.rule === 'runtime-dependencies').length;
 console.log(`Accepted ${accepted.length} paths, of which ${dependencies} are node_modules/** [runtime-dependencies].`);

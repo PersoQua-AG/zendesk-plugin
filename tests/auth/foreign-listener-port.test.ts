@@ -118,9 +118,19 @@ describe('freePort() and a foreign listener in the band', () => {
         write.mockRestore();
       }
       expect(port).not.toBe(foreign);
-      expect(skips.join(''), `freePort() never examined ${foreign}`).toContain(
-        `skipping band port ${foreign}`,
-      );
+      // EITHER PROOF, and the disjunction is the honest shape rather than a weakening. The case is
+      // non-vacuous when freePort() reached `foreign` and said so. It can legitimately answer from
+      // BELOW `foreign` instead — the walk steps over ports other runs have claimed, and a
+      // concurrent worker exiting in between frees one of them (`sweepDeadClaims()` runs at module
+      // load in every worker). Demanding the skip line in that case would turn the old vacuous
+      // pass into a flake, which is the opposite of this ticket. So: it examined the stranger and
+      // skipped it, or it never got that far — and never getting that far is observable as
+      // `port < foreign`, not assumed.
+      const examined = skips.join('').includes(`skipping band port ${foreign}`);
+      expect(
+        examined || port < foreign,
+        `freePort() returned ${port}, did not examine ${foreign}, and did not answer from below it`,
+      ).toBe(true);
       opened.push(await bind(port));
     });
   }

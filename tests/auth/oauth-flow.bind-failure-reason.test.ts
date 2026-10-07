@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Server } from 'node:http';
 import { startCallbackListener } from '../../src/auth/oauth-flow.js';
+import { MIN_CALLBACK_PORT } from '../../src/auth/config.js';
 import { freePort, settlesWithin, setupLoginHarness } from './login-harness.js';
 
 setupLoginHarness('login-bind-reason-');
@@ -45,7 +46,7 @@ describe('the reason a failed callback bind states', () => {
     expect(err.message).toContain(`could not start on port ${port}`);
     // The sentence the measurement in PR #101 produced for an in-range port. It must be gone.
     expect(err.message).not.toContain('must be a whole number between');
-    expect(err.message).toContain('not node');
+    expect(err.message).toContain("not node's own port validation");
     expect(err.message).toContain('TypeError');
   });
 
@@ -55,10 +56,16 @@ describe('the reason a failed callback bind states', () => {
   // "the port is inside the allowed range" is as false as the range rule it replaced. The message
   // may make no claim about the range in either direction.
   it.each([0, 80, 1023])('claims nothing about the range for port %i, which is outside the rule', async (port) => {
+    // The parameter list carries the claim, so it is asserted: these are ports the rule forbids
+    // and node's listen() accepts, which is the gap the false sentence lived in. Without this the
+    // case stayed green with [2000, 30000, 65535] and pinned nothing about privileged ports.
+    expect(port, 'this case is about ports the callback rule forbids').toBeLessThan(MIN_CALLBACK_PORT);
     throwsOnListen(new TypeError('a bind-time guard refused this call'));
     const err = await bindFailure(port);
     expect(err.message).not.toMatch(/inside the allowed range|within the allowed range/);
     expect(err.message).not.toContain('must be a whole number between');
+    // And no claim about the RULE either, which the second rewrite of this sentence still made.
+    expect(err.message).not.toMatch(/callback port rule|oauth_callback_port/);
     expect(err.message).toContain(`could not start on port ${port}`);
   });
 
@@ -96,7 +103,7 @@ describe('the reason a failed callback bind states', () => {
     throwsOnListen(disguised);
     const err = await bindFailure(port);
     expect(err.message).not.toContain('/Users/');
-    expect(err.message).toContain('threw an error synchronously');
+    expect(err.message).toContain('threw an error, which');
   });
 
   // `name` is writable, so a long one is as much a leak as a wrong one: 200 000 characters reached
@@ -107,7 +114,7 @@ describe('the reason a failed callback bind states', () => {
     shouting.name = `${'A'.repeat(200_000)}Error`;
     throwsOnListen(shouting);
     const err = await bindFailure(port);
-    expect(err.message).toContain('threw an error synchronously');
+    expect(err.message).toContain('threw an error, which');
     expect(err.message.length).toBeLessThan(400);
   });
 
@@ -115,7 +122,7 @@ describe('the reason a failed callback bind states', () => {
     const port = freePort();
     throwsOnListen('a string, thrown');
     const err = await bindFailure(port);
-    expect(err.message).toContain('threw an error synchronously');
+    expect(err.message).toContain('threw an error, which');
     expect(err.cause).toBe('a string, thrown');
   });
 });
