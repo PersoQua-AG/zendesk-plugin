@@ -206,7 +206,6 @@ describe('a fixed bind port is refused when it is bound', () => {
     expect(() => createServer().listen(70_000)).toThrow(RangeError);
   });
 
-
   // Scenario 3 of #74: the non-binding uses stay legal. The const above is read into a string here
   // exactly as tests/auth/token-request-timeout.test.ts reads its own, and nothing is reported,
   // because nothing binds. A guard that fired on the VALUE rather than on the bind would make that

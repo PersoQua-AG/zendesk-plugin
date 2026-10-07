@@ -74,10 +74,7 @@ const SOURCE = /\.(ts|tsx|mts|cts|js|mjs|cjs)$/;
 //
 // THE FALSE PASS IT REPLACED, kept because it is the measurement that makes the mark worth having:
 // "some file here CALLS freePort()" did not survive one day — PR #71 added 53 files that call it,
-// and three wrong roots then exited 0. A mention travels with every caller; the definition does
-// not. Count the directories that carry it with
-//   git ls-files '*.ts' | xargs grep -lE '\bexport (async )?function freePort\(' \
-//     | xargs -n1 dirname | sort -u
+// and three wrong roots then exited 0.
 //
 // The one cost, named rather than discovered later: this hangs on a name and a spelling. Renaming
 // freePort(), or rewriting it as `export const freePort = () =>`, makes the guard refuse its own

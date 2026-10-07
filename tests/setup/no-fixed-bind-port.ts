@@ -22,11 +22,6 @@ function isFixedBindPort(port: unknown): port is number {
   return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65_535;
 }
 
-// A bag whose handle or fd decides the bind, so whatever `port` it also carries is not the port.
-// Distinct from `undefined`, which means "no port was named at all" — the two used to be one value
-// and that is what registered a handle's FIXED port as if the OS had chosen it.
-const HANDLE = Symbol('bound by handle or fd');
-
 // listen(port), listen(port, host), listen({ port }), listen('8976'), listen(path), listen(handle).
 // A non-numeric string is a unix socket path, not a port.
 function portOf(args: unknown[]): unknown {
@@ -34,12 +29,16 @@ function portOf(args: unknown[]): unknown {
   // `handle` and `fd` WIN over a port in the same bag, because node binds the handle and ignores
   // options.port — reading the port there falsely refused `listen({ handle, port: 18996 })`.
   //
+  // Returning `undefined` rather than a distinct sentinel is enough: nothing downstream asks
+  // whether `portOf` answered nothing. `wantsEphemeral` reads the ARGUMENTS, which is what closed
+  // the mis-registration a sentinel was briefly added for as well.
+  //
   // A VALUE CHECK, NOT `in`. `'handle' in bag` is true of `{ handle: undefined, port: 18931 }`,
   // which is an ordinary optional-handle shape and which node binds on 18931: measured, it BOUND
   // 18931 with the guard silent. node's own test is `options.fd >= 0` / `options.handle` being
   // truthy, and so is this.
   const bag = typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : null;
-  if (bag && (bag.handle != null || bag.fd != null)) return HANDLE;
+  if (bag && (bag.handle != null || bag.fd != null)) return undefined;
   const raw = bag && 'port' in bag ? bag.port : first;
   if (typeof raw !== 'string') return raw;
   // `Number()`, not /^\d+$/: node coerces the string the same way, so `listen('0x4650')` and
