@@ -1,9 +1,21 @@
 // scripts/assert-no-bound-port-literals.mjs
-// A fixed port on a bind call collides with a concurrent `vitest run` (#23); use freePort().
+//
+// THE RULE IS CHEAP. CHOOSING THE TREE IS WHAT IS EXPENSIVE.
+//
+// The rule is one regex at BIND_CALL, unchanged since PR #72; which DIRECTORY it is pointed at has
+// since cost three rounds, two blockers and an owner decision. So: changing what counts as a bind
+// is a small edit next to one constant, while changing what gets scanned means reading all of
+// "choosing the tree" first — every paragraph in it is a wrong root that shipped.
+//
+// THE RULE. A fixed port on a bind call collides with a concurrent `vitest run` (#23); use
+// freePort().
+//
+// CHOOSING THE TREE, AND WHAT IT COST.
 //
 // ONE ROOT, NAMED BY THE CALLER (#73). The scan root is argv[2] and there is no default, because a
 // guard that picks its own directory reports "scanned the wrong tree" and "found nothing" the same
-// way (measured on PR #72, mutation M3).
+// way (measured on PR #72, mutation M3). Exactly one, and not the empty string; the argument check
+// below records both refusals and which spellings are let through anyway.
 //
 // EVERY TEST, AT EVERY DEPTH (#82). The root was tests/auth and the scan was one directory deep, so
 // 142 of 190 test files were never looked at. The gap is closed by widening what ONE root means:
@@ -15,20 +27,30 @@
 // — a statement about test parallelism, which production code is not subject to. src/ legitimately
 // carries a default to fall back on: src/auth/config.ts:13, `DEFAULT_CALLBACK_PORT = 8976`.
 // Production ports belong to a configuration review, not to this script.
+//
+// AND THE TREE MUST PROVE IT IS THE RIGHT ONE. A wrong root is silent, so success is gated on a
+// mark: the tree must CONTAIN the definition of freePort(), not merely mention it. That is the one
+// false pass this guard has had — "some file here calls freePort()" lasted a day before PR #71 put
+// 53 callers in and three wrong roots exited 0. The mark, the command that counts the defining
+// directories, and the cost the mark brings are at DEFINES_FREE_PORT.
+//
+// WHAT THE GUARD DELIBERATELY CANNOT SEE. Last, because it is reference rather than orientation,
+// and it sits next to the regex it describes: this reads source text and is evadable by
+// construction. The classes it misses are listed above BIND_CALL; catching them needs a parser or
+// a runtime check (#74).
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 
-// This reads source text, so it is evadable by construction. Blind spots, all deliberate: only the
-// call names listed below are matched; only a decimal literal written at the call site is read, so
-// a const, a variable, 18e3, 0x4650, a computed port and an option bag such as
-// `listen({ port: 8976 })` are not traced; and an expression is reported by its FIRST literal, so
-// `17_000 + 1_000` is flagged as 17_000 — the call site wins over the number, because tightening
-// the match would trade a loud wrong number for silence and for new misses on `18000 as Port`.
-// A literal in a comment or a string counts, which since #82 puts the guard's own test file inside
-// the scanned tree: its samples are written split, and so is the one in executor-safety-guard
-// .test.ts. A .d.ts is deliberately NOT excluded — `listen(18000)` in a doc comment is a literal
-// someone will copy. Catching the rest needs a parser or a runtime check (out of scope, #74).
+// THE BLIND SPOTS IN FULL (summarised in the header). Only the call names listed below match, and
+// only a decimal literal at the call site is read — a const, a variable, 18e3, 0x4650, a computed
+// port and an option bag such as `listen({ port: 8976 })` all pass. An expression is reported by
+// its FIRST literal, so `17_000 + 1_000` is flagged as 17_000: the call site wins over the number,
+// because tightening the match would trade a loud wrong number for silence and for new misses on
+// `18000 as Port`. A literal in a comment or a string counts, which since #82 puts the guard's own
+// test file inside the scanned tree: its samples are written split, and so is the one in
+// executor-safety-guard.test.ts. A .d.ts is deliberately NOT excluded — `listen(18000)` in a doc
+// comment is a literal someone will copy.
 const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|listen|rebind|config|deps)\(\s*(\d[\d_]*)\b/g;
 
 // EVERY SPELLING A TEST SOURCE CARRIES (#82 follow-up). The filter was `.ts`, and the promise is
@@ -39,11 +61,9 @@ const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|li
 // in this tree and the sibling's list would have left out precisely the file that prompted this.
 const SOURCE = /\.(ts|tsx|mts|cts|js|mjs|cjs)$/;
 
-// THE MARK OF THE GUARDED TREE: the tree that CONTAINS the definition of the port allocator, not
-// one that merely mentions it. "Some file here CALLS freePort()" did not survive one day — PR #71
-// added 53 files that call it and three wrong roots then exited 0. A mention travels with every
-// caller; the definition does not. The mark is recursive like the scan, so the marked roots are
-// the defining directory and its ancestors. Count the directories carrying the definition with
+// THE MARK OF THE GUARDED TREE (why it is the definition and not a mention: see the header). A
+// mention travels with every caller; the definition does not. The mark is recursive like the scan,
+// so the marked roots are the defining directory and its ancestors. Count them with
 //   git ls-files '*.ts' | xargs grep -lE '\bexport (async )?function freePort\(' \
 //     | xargs -n1 dirname | sort -u
 // Measured on b9f0615: **1**, tests/auth, in login-harness.ts — against 4 that match the weaker
