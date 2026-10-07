@@ -6,6 +6,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { listenLoopback } from './harness.js';
 import { settlesWithin } from '../auth/login-harness.js';
+import { allowForeignBind } from '../setup/acquired-ports.js';
 
 // #13, second site of the same class: a port reservation that is not exclusive.
 //
@@ -32,6 +33,9 @@ function track<T extends Server>(server: T): T {
 }
 
 function bindLoopback(port: number): Promise<Server> {
+  // Declared to the bind-time guard (#74): this binds a port ANOTHER listener already holds, on
+  // purpose — the EADDRINUSE it provokes is the assertion.
+  allowForeignBind(port, 'a second bind of a held port, to prove the reservation');
   const server = track(createServer());
   return new Promise((bound, failed) => {
     server.on('error', failed);
@@ -71,6 +75,9 @@ describe('the port a remote test server is put on', () => {
     const taken = track(createServer());
     await new Promise<void>((r) => taken.listen(0, '127.0.0.1', r));
     const occupied = (taken.address() as AddressInfo).port;
+    // Declared to the bind-time guard (#74): the OS chose this one through listen(0) above, so it
+    // is not written anywhere, and re-binding it is how the refused bind is staged.
+    allowForeignBind(occupied, 'an ephemeral port already held by this test, re-bound to fail');
     // An app whose listen ignores the port it is given and walks into an EADDRINUSE.
     const refusing = { listen: (_p: number, host: string) => track(createServer()).listen(occupied, host) };
 

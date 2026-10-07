@@ -7,7 +7,10 @@ export default defineConfig({
     // A suite that can reach the internet does not fail, it lies: three of the two-step login cases
     // run without an `exchange` stub, and on a regression they would POST to the real
     // acme.zendesk.com instead of turning red. The guard rejects every non-loopback fetch.
-    setupFiles: ['tests/setup/no-network.ts'],
+    // no-fixed-bind-port is the runtime half of #23: the source scan in
+    // scripts/assert-no-bound-port-literals.mjs cannot see a port that reaches listen() through a
+    // const or an expression, and this refuses it at the bind instead of at the spelling.
+    setupFiles: ['tests/setup/no-network.ts', 'tests/setup/no-fixed-bind-port.ts'],
     // Runs once, after every file: the only place that can see what a SPAWNED child did to the machine.
     // A suite that creates a real Keychain item fails the run there — see the file for why it compares
     // before with after instead of demanding an empty keychain.
