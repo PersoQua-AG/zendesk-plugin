@@ -563,6 +563,86 @@ export const f = (server: { listen: (p: number) => void }, port: number) =>
     });
   });
 
+  // #85. The scan ROOT refusals above are about pointing the guard at the wrong tree. These are
+  // about the right tree with a file missing from it: the file is collected, counted as scanned,
+  // and never walked. The wedge in each fixture is the same nested unguarded `danger()` that w1
+  // reports normally, so a verdict of 0 executors here is the guard crediting a file it never read.
+  describe('#85 — a file the walk never saw is refused, not counted clean', () => {
+    const WEDGE = 'export const p = new Promise((a, b) => { new Promise((r) => { danger(); r(1); }); a(1); });\n';
+
+    // chmod 000 on the file, not on the directory: the walk lists it, ts.createProgram cannot open
+    // it, and getSourceFile returns undefined. The 0o000 is restored so afterEach can remove it.
+    function withUnreadableFile(run: (target: string) => Run): Run {
+      const target = fixtureDir(WEDGE, 'w.ts');
+      const file = join(target, 'w.ts');
+      chmodSync(file, 0o000);
+      try {
+        return run(target);
+      } finally {
+        chmodSync(file, 0o644);
+      }
+    }
+
+    it('refuses a tree holding a file the compiler could not open, and names that file', () => {
+      const run = withUnreadableFile((t) => spawnSync('node', [GUARD, t], { encoding: 'utf8' }) as Run);
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('could not be read');
+      expect(run.stderr).toContain('w.ts');
+      expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
+    });
+
+    // An unterminated template literal on line 1: the AST stops there, so the executor below it is
+    // not merely unflagged, it is absent. The position is asserted because "somewhere in this file"
+    // is not enough to act on.
+    it('refuses a tree holding a file that does not parse, and names the file and the position', () => {
+      const run = runGuard(`const s = \`unterminated\n${WEDGE}`, 'broken.ts');
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('did not parse');
+      expect(run.stderr).toMatch(/broken\.ts:\d+:\d+/);
+      expect(run.stderr).toContain('Unterminated template literal');
+    });
+
+    // The same breakage in the MARKED file itself, which is the case that would otherwise read as
+    // the most trustworthy run there is: the tree carries its mark and reports nothing.
+    it('refuses it in server.ts itself, the file the mark points at', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'executor-guard-'));
+      temps.push(dir);
+      writeFileSync(join(dir, 'server.ts'), `const s = \`unterminated\n${WEDGE}`);
+      const run = spawnSync('node', [GUARD, dir], { encoding: 'utf8' });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('did not parse');
+      expect(run.stderr).toContain('server.ts');
+    });
+
+    // Semantic diagnostics are deliberately not consulted: the program runs with noLib/noResolve,
+    // so src/ itself carries hundreds of them. A tree that only offends the type checker must pass.
+    it('does not refuse a file that merely fails the type checker', () => {
+      const run = runGuard('export const n: number = "not a number";\n');
+      expect(run.stderr).not.toContain('did not parse');
+      expect(run.status).toBe(0);
+    });
+
+    // Dropping the file instead of naming it IS the pre-#85 code: the old `if (!source) continue;`
+    // by another spelling. Measured state it restores: 0 executors, exit 0, the wedge unseen.
+    it('ablated: without the unread-file refusal, the unreadable file is credited clean', () => {
+      const ablated = mutate([
+        ['  unread.push(`${relative(root, file)}  (could not be read)`);', '  void 0;'],
+      ]);
+      const run = withUnreadableFile((t) => spawnSync('node', [ablated, t], { encoding: 'utf8' }) as Run);
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain('0 executors, 0 inspected');
+    });
+
+    it('ablated: without the syntactic-diagnostic refusal, the wedge below the breakage is gone', () => {
+      const ablated = mutate([['for (const d of program.getSyntacticDiagnostics()) {', 'for (const d of []) {']]);
+      const run = spawnSync('node', [ablated, fixtureDir(`const s = \`unterminated\n${WEDGE}`, 'broken.ts')], {
+        encoding: 'utf8',
+      });
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain('0 executors, 0 inspected');
+    });
+  });
+
   describe('the tree it guards', () => {
     it('passes src/ and reports every executor it found, with its real parameter names', () => {
       const { status, stdout } = runGuard();

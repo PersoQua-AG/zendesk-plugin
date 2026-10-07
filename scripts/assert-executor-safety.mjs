@@ -53,6 +53,12 @@
 //     on a path where something has already gone wrong. Everywhere ELSE a settle call is merely not
 //     a foreign call itself — its arguments are still walked, so `reject(load())` on the ordinary
 //     path is reported, because `load()` throwing there settles nothing.
+// AND IT REFUSES A TREE IT COULD NOT FULLY READ (#85). Two kinds of unread, both refused by name
+// before the walk starts, both measured green-at-exit-0 before this: a collected file the compiler
+// could not OPEN, and a collected file that does not PARSE — where the AST stops at the breakage
+// and every executor below it is invisible. Semantic diagnostics are NOT part of that; the numbers
+// and the reason are at the check itself.
+//
 // THE CALLER NAMES THE TREE (#76). The scan root is argv[2] and there is no default. While the
 // default was 'src', a run aimed anywhere else still reported success: measured on 3ee1d43,
 // `node scripts/assert-executor-safety.mjs tests/util` printed "0 executors, 0 inspected" and
@@ -146,6 +152,74 @@ const program = ts.createProgram(files, {
 });
 const checker = program.getTypeChecker();
 
+// A FILE THE WALK NEVER SAW MAY NOT BE COUNTED CLEAN (#85). Two ways a collected file drops out of
+// the walk without a trace, both measured on dd6e564 over a marked tree holding one wedged
+// executor, both printing "0 executors, 0 inspected" and exiting 0:
+//
+//   1. `chmod 000 w.ts` — ts.createProgram cannot open it, getSourceFile returns undefined, and the
+//      old `if (!source) continue;` dropped it in silence.
+//   2. an unterminated template literal on line 1 of hidden.ts — the file parses into an AST that
+//      simply stops, and every executor below the breakage is gone from the walk. Reproduced with
+//      the same content in server.ts itself, i.e. in the marked file.
+//
+// So both are refused here, before the walk, and each names what was unread. SYNTACTIC diagnostics
+// only: the program runs with noLib/noResolve and no project tsconfig, so every semantic
+// diagnostic is expected noise. Measured over this repo's own src/ (77 files, dd6e564):
+// getSyntacticDiagnostics() → 0, getSemanticDiagnostics() → 933, of which TS2304 "cannot find
+// name" 413, TS2583 161, TS2339 173, TS2792 104 — all of them the absence of lib.d.ts and of
+// module resolution, on a tree `npm run build` compiles clean. Refusing on those would make the
+// guard unrunnable, so the semantic list is deliberately not consulted.
+//
+// ONLY REGULAR FILES ARE THIS CHECK'S BUSINESS. `readdirSync` lists directories too, so a DIRECTORY
+// named server.ts is collected and getSourceFile returns undefined for it — but that tree's defect
+// is its mark, not an unread file, and the mark check below already names it ("Not the guarded
+// tree"). Same for a dangling symlink. Answering those here instead would replace a precise verdict
+// with a vaguer one, and it broke the three cases #76/#77 pinned when this check was first written
+// without the lstat. That lstat is reached only by a file that already failed to load, so a healthy
+// tree pays nothing for it; when the lstat itself dies — `chmod 444` on the root lists names and
+// refuses to stat entries — that is the root-unreadable case #77 raised, handed to its own refusal.
+// Every collected entry leaves here in exactly one of three states — walked, refused by name, or
+// explicitly not a file. There is no fourth, and that is the whole point: the silent skip was it.
+const unread = [];
+const sources = [];
+for (const file of files) {
+  const source = program.getSourceFile(file);
+  if (source) {
+    sources.push([file, source]);
+    continue;
+  }
+  let stats;
+  try {
+    stats = lstatSync(file);
+  } catch (err) {
+    unreadable(err);
+  }
+  if (!stats.isFile()) continue;
+  unread.push(`${relative(root, file)}  (could not be read)`);
+}
+for (const d of program.getSyntacticDiagnostics()) {
+  const at =
+    d.file && d.start !== undefined
+      ? (({ line, character }) => `:${line + 1}:${character + 1}`)(
+          d.file.getLineAndCharacterOfPosition(d.start),
+        )
+      : '';
+  const where = d.file ? relative(root, d.file.fileName) : '(no file)';
+  unread.push(`${where}${at}  ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`);
+}
+if (unread.length > 0) {
+  console.error(
+    `Refusing the tree: ${unread.length} file(s) under ${relative(root, target) || target} could` +
+      ' not be read or did not parse, so the walk never saw what is in them.',
+  );
+  for (const entry of unread) console.error(`  - ${entry}`);
+  console.error(
+    '\nA guard that denies by default must not credit a file it never read. Fix the permission or' +
+      '\nthe syntax error and run again; there is no way to pass with a file missing from the walk.',
+  );
+  process.exit(1);
+}
+
 // Function boundaries for the synchronous walk. Classes are NOT a boundary: a `static {}` block and
 // a property initializer run synchronously, so they belong to the path. Their methods do not.
 const isFunctionBoundary = (node) =>
@@ -215,9 +289,7 @@ const inventory = [];
 let inspectedCount = 0;
 const visited = new Set();
 
-for (const file of files) {
-  const source = program.getSourceFile(file);
-  if (!source) continue;
+for (const [file, source] of sources) {
   const where = (node) => {
     const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
     return `${relative(root, file)}:${line + 1}:${character + 1}`;
