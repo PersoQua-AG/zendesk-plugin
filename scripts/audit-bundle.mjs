@@ -338,8 +338,6 @@ const pkg = readJson(join(root, 'package.json'), 'package.json', problems);
 const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', problems);
 const version = manifest?.version ?? pkg?.version ?? null;
 
-// "Is there a name here", not "does it resolve". `existsSync` follows symlinks, so a dangling
-// artifact link reads as absent while still sitting in the directory under its publishable name.
 const housekeeping = [];
 
 // Returns true, false, or the reason it could not tell. `throwIfNoEntry: false` suppresses ENOENT
@@ -417,7 +415,7 @@ if (!version) {
 if (artifactPath) {
   for (const stale of [artifactPath, checksumPath]) {
     try {
-      rmSync(stale, { recursive: false, force: true });
+      rmSync(stale, { force: true });
     } catch (error) {
       housekeeping.push(
         `could not clear the stale artifact ${basename(stale)}: ${error.message}` +
@@ -518,12 +516,10 @@ if (bundle && entries.length > 0 && !bundledManifest) {
 } else if (bundle && bundledManifest) {
   try {
     const bundledVersion = JSON.parse(readEntry(bundle, bundledManifest).toString('utf8')).version;
-    if (bundledVersion !== version) {
-      // Only when the tree HAS a version. Without one the three lines above already said why, and
-      // a fourth reading "the tree declares null" adds a raw null to operator-facing output.
-      if (version) {
-        problems.push(`version mismatch: the bundled manifest.json says ${bundledVersion}, the tree declares ${version}`);
-      }
+    // `version &&` because without one the housekeeping line already said why, and a fourth line
+    // reading "the tree declares null" puts a raw null in front of the operator.
+    if (version && bundledVersion !== version) {
+      problems.push(`version mismatch: the bundled manifest.json says ${bundledVersion}, the tree declares ${version}`);
     }
   } catch (error) {
     problems.push(`the bundled manifest.json could not be read: ${error.message}`);
@@ -611,7 +607,7 @@ try {
   // directory in the artifact slot is reported, not silently emptied.
   for (const half of [checksumPath, artifactPath]) {
     try {
-      rmSync(half, { recursive: false, force: true });
+      rmSync(half, { force: true });
     } catch (second) {
       console.error(`  - and ${basename(half)} could not be removed either: ${second.message} — REMOVE IT BY HAND`);
     }

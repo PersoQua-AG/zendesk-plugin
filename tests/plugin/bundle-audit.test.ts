@@ -354,12 +354,10 @@ describe('a stale artifact that cannot be cleared', () => {
   // The unremovable shape a half-finished run or another user leaves behind: the artifact slot is
   // a non-empty DIRECTORY. Measured on node v26.5.0, rmSync(path, { force: true }) answers it with
   // ERR_FS_EISDIR. Chosen over a 0555 parent because that one passes for root, and CI containers
-  // run as root.
-  const blockArtifactSlot = (tree: Tree): void => occupy(tree.artifact);
 
   it('quarantines the failed bundle anyway, and names the path it could not clear', () => {
     const tree = makeTree({ entries: contaminated() });
-    blockArtifactSlot(tree);
+    occupy(tree.artifact);
     const run = runAudit(tree);
 
     // The side effect FIRST, and deliberately: exit 1 and exit 2 are both non-zero, and neither
@@ -391,7 +389,7 @@ describe('a stale artifact that cannot be cleared', () => {
   // EISDIR, which would crash AFTER the run had printed that the audit passed.
   it('refuses a bundle that would otherwise pass, instead of crashing on the write', () => {
     const tree = makeTree();
-    blockArtifactSlot(tree);
+    occupy(tree.artifact);
     const run = runAudit(tree);
 
     expect(run.status).toBe(2);
@@ -413,7 +411,6 @@ describe('a bundle the audit could not read', () => {
   // Unreadable AND still present: the audit's path is a non-empty DIRECTORY, which readFileSync
   // answers with EISDIR. Chosen over chmod 000 for the same reason the stale-artifact fixture
   // above avoids a 0555 parent — a mode bit does not stop root, and CI containers run as root.
-  const unreadableBundle = (tree: Tree): void => occupy(tree.bundle);
 
   // `existsSync` follows the link, so a DANGLING bundle symlink read as absent and the publishable
   // name stayed in the directory with nothing said about it. The question is whether a name is
@@ -434,7 +431,7 @@ describe('a bundle the audit could not read', () => {
 
   it('quarantines it anyway — a path it could not read is still a path somebody can upload', () => {
     const tree = makeTree();
-    unreadableBundle(tree);
+    occupy(tree.bundle);
     const run = runAudit(tree);
 
     expect(existsSync(tree.bundle)).toBe(false);
@@ -524,11 +521,10 @@ describe('a quarantine that cannot be performed', () => {
   // The .REJECTED slot is occupied by a non-empty directory, so the `rmSync` that clears it throws
   // ERR_FS_EISDIR inside the quarantine's own try. Nothing can be renamed, and the publishable
   // name survives — which is precisely why the operator has to be told to act by hand.
-  const blockRejectedSlot = (tree: Tree): void => occupy(`${tree.bundle}.REJECTED`);
 
   it('exits 2, not 1: this is a tree to fix by hand, not a bundle to fix', () => {
     const tree = makeTree({ entries: contaminated() });
-    blockRejectedSlot(tree);
+    occupy(`${tree.bundle}.REJECTED`);
     const run = runAudit(tree);
 
     expect(run.status).toBe(2);
@@ -1332,7 +1328,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     },
     {
       rule: 'the bundled manifest must agree with the tree',
-      mutate: [['    if (bundledVersion !== version) {', '    if (false) {']],
+      mutate: [['    if (version && bundledVersion !== version) {', '    if (false) {']],
       entries: clean('0.9.0'),
       baseline: (r) => expect(r.status).not.toBe(0),
       ablated: (r) => expect(r.status).toBe(0),
@@ -1349,7 +1345,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
       mutate: [
         // The removal only; the try/catch around it stays, so this ablates the clearing rule and
         // not the guard that #90 put around it. That guard has its own cases above.
-        ['      rmSync(stale, { recursive: false, force: true });', '      void stale;'],
+        ['      rmSync(stale, { force: true });', '      void stale;'],
       ],
       entries: contaminated(),
       seed: (t) => writeFileSync(t.artifact, 'stale bundle from the run before'),
