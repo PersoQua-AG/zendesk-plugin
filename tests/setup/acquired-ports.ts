@@ -27,7 +27,7 @@ export function recordAcquiredPort(port: number): number {
 // SCOPED TO THE CASE THAT ASKED FOR IT, not to the worker. A permanent entry disabled the refusal
 // for that number for the rest of the worker's life, so a later accidental fixed bind of the same
 // port — in this file or in any file that ran after it in the same worker — passed unseen. The
-// setup file clears this map in an afterEach, which is the size every call site actually needs:
+// setup file clears this set in an afterEach, which is the size every call site actually needs:
 // each one stands immediately above the bind it is excusing.
 //
 // NOT one shot. Measured: src/tools/diagnostics.ts binds its probe port more than once per call,
@@ -43,47 +43,36 @@ export function isDeclaredPort(port: number): boolean {
   return acquired.has(port) || foreign.has(port);
 }
 
-// A REFUSAL THAT WAS SWALLOWED MUST STILL FAIL THE RUN — why, and what was measured, is on
-// swallowedRefusal() below, which is the one place that argument is written out.
+export function endForeignBindScope(): void {
+  foreign.clear();
+}
+
+// THE REFUSAL LOG IS A DIAGNOSTIC, NOT AN ENFORCEMENT. It exists so a test can READ a refusal that
+// the code under test swallowed: the product's one real bind path wraps its `listen` in a
+// catch-everything and replaces the error with its own wording (src/auth/oauth-flow.ts:331-340),
+// so without this the port and the call site #74 asks for are simply gone by the time the test
+// looks. tests/plugin/bind-time-port-guard.test.ts reads them out of here.
+//
+// AN EARLIER VERSION ENFORCED IT IN HOOKS, and that was wrong three times over — each shape
+// measured by `qa-engineer`, each one a CORRECT test turned red with a false explanation: a plain
+// accidental bind failed twice, the second time claiming something had swallowed a refusal that
+// had already failed the case; a refusal thrown from a suite-level `afterEach` aborted the hook
+// chain before the setup's own ran, so it leaked and failed the NEXT case, which had bound
+// nothing; and an `afterAll` bind produced both the refusal naming its file:line and a second
+// error insisting nothing could attribute it to a case.
+//
+// The enforcement was also buying very little. The guard is protective AT THE BIND: the fixed port
+// is never bound, so the #23 collision it exists to prevent cannot happen whether or not anything
+// later reads the log. What a swallowed refusal costs is the DIAGNOSTIC — the author sees the
+// product's wording instead of the guard's — and a diagnostic is worth a log, not a hook that
+// fails cases which are right.
 const refusals: string[] = [];
 
 export function recordRefusal(message: string): void {
   refusals.push(message);
 }
 
-/**
- * Drains the refusals, for the cases that provoke one on purpose, and ends the foreign-bind scope.
- *
- * One call instead of two, because a case that drains mid-test is also a case whose declared
- * strangers are spent.
- */
+/** Drains the log. The guard's own test reads it; nothing else has to. */
 export function takeRefusals(): string[] {
-  foreign.clear();
   return refusals.splice(0);
-}
-
-/**
- * The error a case that swallowed a refusal must fail with, or null.
- *
- * `passed` IS THE WHOLE CONDITION, and the first spelling of this got it wrong: it failed on any
- * recorded refusal, so a case that correctly asserted the refusal with `toThrow(/Refusing/)`
- * went red, and a case that simply let the refusal propagate failed TWICE — the second time with
- * "something swallowed it" about a refusal that had reached the assertion. A refusal that became
- * the case's failure needs nothing added. A refusal that did NOT, in a case that nevertheless
- * passed, is the one this register exists for.
- *
- * Pure and exported so the failing branch has a test of its own: inside the suite it cannot be
- * exercised, because a case that provokes it is by definition a case that fails.
- */
-export function swallowedRefusal(passed: boolean): Error | null {
-  const raised = takeRefusals();
-  if (!passed || raised.length === 0) return null;
-  return new Error(
-    `A bind-time port refusal was raised and this case passed anyway (${raised.length}).\n` +
-      'The refusal never became the failure, so something between the bind and the assertion ate\n' +
-      "it — src/auth/oauth-flow.ts wraps its listen() in a catch-all, and that is the path #74\n" +
-      'scenario 1 is about. If this case provokes a refusal ON PURPOSE, assert on it and then claim\n' +
-      "it with takeRefusals() from tests/setup/acquired-ports.js.\n\n" +
-      raised.join('\n'),
-  );
 }

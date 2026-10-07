@@ -26,8 +26,9 @@ export default defineConfig({
       exclude: ['dist/**', 'tests/**', 'scripts/**', '*.config.ts', 'src/**/*.d.ts'],
       reporter: ['text', 'lcov'],
       thresholds: {
-        // Set from the measured state, not from a wish: the suite stands at 97.98% statements /
-        // 88.50% branches / 97.10% functions / 97.98% lines. These floors sit just below that, so a
+        // Set from the measured state, not from a wish: measured on this branch the suite stands at
+        // 98.83% statements / 93.17% branches / 98.57% functions / 98.83% lines (it was
+        // 97.98/88.50/97.10/97.98 when these floors were written). The floors sit below that, so a
         // regression fails the build while ordinary churn does not — and they stay far above the
         // 80% project minimum, which as a floor here would license a slow decay down to it.
         statements: 97,

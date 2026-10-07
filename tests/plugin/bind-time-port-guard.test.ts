@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { startCallbackListener } from '../../src/auth/oauth-flow.js';
 import { freePort } from '../auth/login-harness.js';
-import { allowForeignBind, swallowedRefusal, takeRefusals } from '../setup/acquired-ports.js';
+import { allowForeignBind, takeRefusals } from '../setup/acquired-ports.js';
 
 // NOT a literal at the call site, by construction — that is the whole point. The source scan reads
 // `listen(PORT)` and sees no number; the guard under test reads 18977. This is the very const the
@@ -20,16 +20,15 @@ const PORT = 18977;
 const opened: Server[] = [];
 afterEach(async () => {
   for (const s of opened.splice(0)) await new Promise<void>((done) => s.close(() => done()));
+  // Load-bearing: nothing else drains the log, so without this each case inherits the refusals of
+  // every case before it and the counts below are off. This is the only file that provokes any.
+  takeRefusals();
 });
 
 // Every refusal is also written to a register, so one that the code under test swallowed still
 // fails the case (tests/setup/no-fixed-bind-port.ts). The cases BELOW provoke refusals on purpose
 // and have already asserted on them, so they claim theirs — and the claim is itself an assertion:
 // a case that expected a refusal and got none fails here rather than quietly passing.
-function claimRefusal(): void {
-  expect(takeRefusals()).toHaveLength(1);
-}
-
 function listening(server: Server): Promise<Server> {
   opened.push(server);
   return new Promise((bound, failed) => {
@@ -43,7 +42,6 @@ describe('a fixed bind port is refused when it is bound', () => {
     expect(() => createServer().listen(PORT)).toThrow(
       new RegExp(`Refusing to bind the fixed port ${PORT} at .*bind-time-port-guard\\.test\\.ts`),
     );
-    claimRefusal();
   });
 
   // The classes the regex is documented as missing, one call each.
@@ -71,7 +69,6 @@ describe('a fixed bind port is refused when it is bound', () => {
     ['a string node coerces', () => createServer().listen('0x4650')],
   ])('catches %s too', (_label, bind) => {
     expect(bind).toThrow(/Refusing to bind the fixed port/);
-    claimRefusal();
   });
 
   // SCENARIO 1 OF #74, ON THE PATH THAT MATTERS. The product's one real bind path wraps its
@@ -96,39 +93,24 @@ describe('a fixed bind port is refused when it is bound', () => {
     expect(raised[0]).toMatch(/src\/auth\/oauth-flow\.ts/);
   });
 
-  // THE REGISTER'S OWN FAILING BRANCH, which cannot be exercised from inside the suite: a case that
-  // provokes it is by definition a case that fails. So the decision is a pure function and this
-  // tests it directly. Its first spelling fired on any recorded refusal, which made a case that
-  // correctly asserted `toThrow(/Refusing/)` go red, and made a case that merely let the refusal
-  // propagate fail twice — the second time claiming something had swallowed it.
-  describe('a swallowed refusal fails the case, and only a swallowed one', () => {
-    // Plain consts, not split: measured against `BIND_CALL`, a const initializer is never matched
-    // — the pattern needs a bind-call NAME immediately before the digits — which is why `PORT`
-    // above is written plainly too.
+  // THE LOG IS A DIAGNOSTIC AND NOTHING MORE. An earlier version enforced it in an afterEach and
+  // an afterAll, and `qa-engineer` measured three shapes in which that failed CORRECT tests with a
+  // false explanation — see acquired-ports.ts for all three. The guard is protective at the bind;
+  // the log is what lets a test read a refusal the code under test ate.
+  describe('the refusal log', () => {
     const PROVOKED = 18_004;
-    const PROVOKED_TOO = 18_005;
-    it('names the swallowed refusal when the case passed', () => {
+
+    it('carries the port and the call site of every refusal', () => {
       expect(() => createServer().listen(PROVOKED)).toThrow(/Refusing/);
-      const error = swallowedRefusal(true);
-      expect(error?.message).toContain('this case passed anyway (1)');
-      expect(error?.message).toContain('takeRefusals()');
-      expect(error?.message).toContain(`Refusing to bind the fixed port ${PROVOKED}`);
+      const raised = takeRefusals();
+      expect(raised).toHaveLength(1);
+      expect(raised[0]).toContain(`Refusing to bind the fixed port ${PROVOKED}`);
+      expect(raised[0]).toMatch(/bind-time-port-guard\.test\.ts/);
     });
 
-    it('says nothing when the refusal became the failure', () => {
-      expect(() => createServer().listen(PROVOKED_TOO)).toThrow(/Refusing/);
-      expect(swallowedRefusal(false)).toBeNull();
+    it('is empty when nothing was refused', () => {
+      expect(takeRefusals()).toHaveLength(0);
     });
-
-    it('says nothing when no refusal was raised at all', () => {
-      expect(swallowedRefusal(true)).toBeNull();
-    });
-  });
-
-  it('lets a port handed out by freePort() bind without complaint', async () => {
-    const port = freePort();
-    const server = await listening(createServer().listen(port, '127.0.0.1'));
-    expect((server.address() as { port: number }).port).toBe(port);
   });
 
   // An ephemeral bind is not a fixed port: the OS picks it, so no two runs can be given the same
@@ -153,7 +135,6 @@ describe('a fixed bind port is refused when it is bound', () => {
     expect(() => createServer().listen(SHARED_STRANGER)).toThrow(
       new RegExp(`Refusing to bind the fixed port ${SHARED_STRANGER}`),
     );
-    claimRefusal();
   });
 
   // THE NaN BRANCH OF portOf, which is what keeps a unix socket path from being read as a port.

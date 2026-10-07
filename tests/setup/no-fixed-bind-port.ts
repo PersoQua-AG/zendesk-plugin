@@ -12,8 +12,8 @@
 // it names file and line at review time rather than at bind time. This one refuses the number
 // however it was written, but only along a path a test actually runs. Neither subsumes the other.
 import { Server } from 'node:net';
-import { afterAll, afterEach } from 'vitest';
-import { isDeclaredPort, recordAcquiredPort, recordRefusal, swallowedRefusal, takeRefusals } from './acquired-ports.js';
+import { afterEach } from 'vitest';
+import { endForeignBindScope, isDeclaredPort, recordAcquiredPort, recordRefusal } from './acquired-ports.js';
 
 // 0 is chosen by the OS and anything outside 1-65535 is refused by listen() itself — neither is a
 // fixed port, and the out-of-range case must keep reaching node so that the RangeError the product
@@ -26,7 +26,11 @@ function isFixedBindPort(port: unknown): port is number {
 // A non-numeric string is a unix socket path, not a port.
 function portOf(args: unknown[]): unknown {
   const first = args[0];
-  const raw = typeof first === 'object' && first !== null && 'port' in first ? (first as { port?: unknown }).port : first;
+  // `handle` and `fd` WIN over a port in the same bag: node binds the handle and ignores
+  // options.port, so reading the port there falsely refused `listen({ handle, port: 18996 })`.
+  const bag = typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : null;
+  if (bag && ('handle' in bag || 'fd' in bag)) return undefined;
+  const raw = bag && 'port' in bag ? bag.port : first;
   if (typeof raw !== 'string') return raw;
   // `Number()`, not /^\d+$/: node coerces the string the same way, so `listen('0x4650')` and
   // `listen('1.8e4')` both bind 18000 — measured — and both walked past a decimal-digits test while
@@ -77,8 +81,15 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
   // THE CONDITION IS "THE CALLER ASKED FOR AN EPHEMERAL PORT", not "the first argument was not a
   // fixed number". Those differ: `listen({ fd })` and a pre-bound handle name no port at all, and
   // under the looser test their fixed port was recorded as acquired for the rest of the worker's
-  // life — a mis-registration that re-admits the class this guard refuses.
-  if (port === undefined || port === 0) {
+  // life — a mis-registration that re-admits the class this guard refuses. `listen(cb)` DOES ask
+  // for one and was missed by the first spelling of this: measured, the OS-chosen port went
+  // unrecorded and a later legitimate re-bind of it was refused.
+  //
+  // The entry is permanent, unlike a declared stranger. An ephemeral range (49152-65535 on macOS,
+  // 32768-60999 on Linux) does not meet PORT_BAND, so a recorded OS port cannot excuse a band
+  // literal; and a server bound once in a beforeAll is re-bound by the cases, so a per-case scope
+  // would refuse it.
+  if (port === undefined || port === 0 || typeof args[0] === 'function') {
     this.once('listening', () => {
       const chosen = this.address();
       if (chosen !== null && typeof chosen === 'object' && typeof chosen.port === 'number') {
@@ -89,29 +100,12 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
   return result;
 } as typeof realListen;
 
-// A refusal the code under test swallowed still fails the case that produced it, and ONLY then.
-// The decision, and the reason it is a pure function, are on swallowedRefusal().
+// A declared stranger is declared for the case that declared it, and not for every case that runs
+// after it in the same worker.
 //
 // THE HOOK ORDER MATTERS AND IS NOT DECLARED ANYWHERE ELSE: vitest's `sequence.hooks` default is
 // "stack", so a setup file's afterEach runs AFTER the test file's own — which is what lets a bind
-// in a file's cleanup hook still be refused and still be attributed. Setting `sequence.hooks` to
-// "list" or "parallel" in vitest.config.ts would reverse that; this comment is the only thing
-// saying so.
-afterEach((ctx) => {
-  const swallowed = swallowedRefusal(ctx.task.result?.state === 'pass');
-  if (swallowed) throw swallowed;
-});
-
-// The stragglers no afterEach can reach: a bind in an afterAll, or in an async tail that lands
-// after the last case. Without this they were dropped in silence, so #74 scenario 1 held for
-// in-test binds alone.
-afterAll(() => {
-  const raised = takeRefusals();
-  if (raised.length > 0) {
-    throw new Error(
-      `A bind-time port refusal was raised outside any test case (${raised.length}) — in an afterAll,\n` +
-        'or in an async tail that outlived the last one. Nothing could attribute it to a case.\n\n' +
-        raised.join('\n'),
-    );
-  }
-});
+// in a file's cleanup hook still be refused against a stranger that file declared. Setting
+// `sequence.hooks` to "list" or "parallel" in vitest.config.ts would reverse that; this comment is
+// the only thing saying so.
+afterEach(endForeignBindScope);
