@@ -401,7 +401,9 @@ describe('the bound-port guard as a script', () => {
     expect(run.status).toBe(1);
     // The scan root is outside the repository, so the guard names it by its way out (`../…`) —
     // that is its own documented rule for a temp tree. The part that matters is the depth.
-    expect(run.stderr).toContain(`tools/zz-port-guard-probe.ts:3 ${BOUND}`);
+    // `/tests/tools/`, with both segments: `tools/…` alone would also match a flat report and
+    // the depth is the whole claim of this case.
+    expect(run.stderr).toContain(`/tests/tools/zz-port-guard-probe.ts:3 ${BOUND}`);
   });
 
   it('passes the same file once the port is acquired instead of written', () => {

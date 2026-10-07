@@ -265,15 +265,22 @@ function claimPort(port: number): boolean {
 // skipping without a claim: a bind error that is not EADDRINUSE is a property of the HOST, not of
 // the port, so every candidate would fail the same way and the band would be walked to the end
 // before saying anything.
-// `::` IS THE FOURTH ADDRESS, and it was missing. Found by the control run for #106 finding 3:
-// `createServer().listen(port)` with no host binds `::` on macOS, and the probe could not see that
-// holder at all — 0.0.0.0, 127.0.0.1, ::1 and every routable address below are each a DIFFERENT
-// address, and macOS's SO_REUSEADDR lets a specific or differently-scoped wildcard bind succeed
-// beside one. Measured: freePort() returned 29559 as free while a concurrent run held `::` on it,
-// and the very next `createServer().listen(…)` on that port in the test threw
-// `listen EADDRINUSE: address already in use :::29559`. The two wildcards are the two shapes a
-// production or test bind with no host actually takes, so both are probed.
-const PROBE_ADDRESSES = ['0.0.0.0', '::', '127.0.0.1', '::1'] as const;
+// `::` WAS ADDED HERE AND TAKEN BACK OUT, and the reason is worth keeping because it is a
+// measurement that refuted a plausible story. One concurrent run showed freePort() hand out 29559
+// while something held it, and the next wildcard bind threw
+// `listen EADDRINUSE: address already in use :::29559`. The story was "the probe cannot see a
+// holder on `::`". It can, every time — measured, 3 of 3, on this host and against this exact
+// three-address list:
+//   holder :: (listen with no host) -> status=1 out="EADDRINUSE 0.0.0.0"
+// which is also what the matrix below says (`holder :: → macOS probe EADDRINUSE 0.0.0.0`), because
+// macOS treats `::` as dual-stack and the 0.0.0.0 bind collides with it. A fourth address that
+// catches nothing is dead weight, so it is gone.
+//
+// WHAT THAT ONE OBSERVATION WAS is therefore still open, and it is named rather than papered over.
+// Its shape is the window this file already documents at line 49: between the probe's close and
+// the caller's bind, which is loud (a named EADDRINUSE) and is the remnant the design accepts. It
+// has not recurred — 12 shuffled full runs and 20 concurrent two-process rounds since.
+const PROBE_ADDRESSES = ['0.0.0.0', '127.0.0.1', '::1'] as const;
 const PROBE_TIMEOUT_MS = 2_000;
 
 // THE ROW THE TABLE ABOVE WAS MISSING (#106 finding 2): holder on a ROUTABLE address of this host.
@@ -297,9 +304,13 @@ const PROBE_TIMEOUT_MS = 2_000;
 export function routableAddresses(): string[] {
   const found = Object.values(networkInterfaces())
     .flat()
-    .filter((i) => i !== undefined && !i.internal && !(i.family === 'IPv6' && i.scopeid !== 0))
+    // `internal` is NOT filtered out, deliberately. It was, and that left the same hole one step
+    // smaller: a stranger on a loopback ALIAS such as 127.0.0.2 is internal, is not 127.0.0.1, and
+    // was reported FREE on macOS for exactly the reason finding 2 describes. On a host with no
+    // alias this adds nothing but 127.0.0.1 and ::1, which the dedupe below removes.
+    .filter((i) => i !== undefined && !(i.family === 'IPv6' && i.scopeid !== 0))
     .map((i) => i!.address);
-  return [...new Set(found)];
+  return [...new Set(found)].filter((a) => !(PROBE_ADDRESSES as readonly string[]).includes(a));
 }
 
 // How many candidates may be PROBED in one pass of freePort() before it moves on. Not how many may
@@ -308,14 +319,25 @@ export function routableAddresses(): string[] {
 // 2 774 ms on macOS and 187 ms on Linux of blocked event loop (measured: claimPort() against a
 // pre-filled band), which is a cost, not a hazard.
 //
-// 64 because a probe costs 23.8 ms on macOS and 16.2 ms on Linux (measured, 25 probes each), so one
-// pass is at most 1.5 s / 1.0 s and both passes 3.0 s / 2.0 s — the same order as the 5.2 s the
-// slowest single file already holds a claim for. Without a ceiling the worst case is
+// 64 because a probe costs ~31 ms on macOS and 16.2 ms on Linux, so one pass is at most 2.0 s /
+// 1.0 s and both passes 4.0 s / 2.0 s — the same order as the 5.2 s the
+// slowest single file already holds a claim for. The darwin figure is re-measured since the
+// routable addresses joined the probe, because this file's own rule is that a measured number may
+// not go stale: 15 probes each, median of 31 ms for the three core addresses and 30 ms for all
+// eleven on this host. The eight extra binds are sub-millisecond — the cost is the child process,
+// which is why widening the address list is free and why PROBE_TIMEOUT_MS is nowhere near risk.
+// Without a ceiling the worst case is
 // PORT_BAND_SIZE probes, and with PROBE_TIMEOUT_MS each that is 5.5 hours of blocked event loop
 // that no vitest timeout can interrupt. Sixty-four probed band ports all held by strangers is not
 // a port problem anyway; #48 was one.
 export const MAX_PROBES_PER_ACQUISITION = 64;
 
+// `addresses` NARROWS NOTHING. The routable addresses are appended to whatever the caller names,
+// always, because they are the hole this probe exists to close and a caller that forgot them would
+// re-open it silently. The parameter chooses the STRICT set — the addresses whose non-EADDRINUSE
+// bind error is thrown rather than skipped — which is what its two callers actually use it for
+// (foreign-listener-port.test.ts:116 with 192.0.2.1, port-probe-budget.test.ts:80 with 127.0.0.1
+// three times). Named here because the signature cannot say it.
 export function portHeldOn(port: number, addresses: readonly string[] = PROBE_ADDRESSES): string {
   // [host, strict] — strict hosts throw on a bind error that is not EADDRINUSE, discovered ones
   // are skipped. See routableAddresses() above for why the two classes differ.

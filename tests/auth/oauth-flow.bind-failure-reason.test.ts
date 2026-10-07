@@ -45,8 +45,21 @@ describe('the reason a failed callback bind states', () => {
     expect(err.message).toContain(`could not start on port ${port}`);
     // The sentence the measurement in PR #101 produced for an in-range port. It must be gone.
     expect(err.message).not.toContain('must be a whole number between');
-    expect(err.message).toContain('inside the allowed range');
+    expect(err.message).toContain('not node');
     expect(err.message).toContain('TypeError');
+  });
+
+  // THE SECOND FALSE REASON, which the first fix walked straight into. node's listen() throws
+  // RangeError only outside 0-65535; CALLBACK_PORT_RULE is 1024-65535 and nothing range-checks
+  // `port` before the call. So for a privileged port that threw something else, a message saying
+  // "the port is inside the allowed range" is as false as the range rule it replaced. The message
+  // may make no claim about the range in either direction.
+  it.each([0, 80, 1023])('claims nothing about the range for port %i, which is outside the rule', async (port) => {
+    throwsOnListen(new TypeError('a bind-time guard refused this call'));
+    const err = await bindFailure(port);
+    expect(err.message).not.toMatch(/inside the allowed range|within the allowed range/);
+    expect(err.message).not.toContain('must be a whole number between');
+    expect(err.message).toContain(`could not start on port ${port}`);
   });
 
   it('attaches the original error as the cause instead of discarding it', async () => {
@@ -84,6 +97,18 @@ describe('the reason a failed callback bind states', () => {
     const err = await bindFailure(port);
     expect(err.message).not.toContain('/Users/');
     expect(err.message).toContain('threw an error synchronously');
+  });
+
+  // `name` is writable, so a long one is as much a leak as a wrong one: 200 000 characters reached
+  // the boundary verbatim before the length bound went on the gate.
+  it('does not interpolate a name longer than any real error class', async () => {
+    const port = freePort();
+    const shouting = new Error('x');
+    shouting.name = `${'A'.repeat(200_000)}Error`;
+    throwsOnListen(shouting);
+    const err = await bindFailure(port);
+    expect(err.message).toContain('threw an error synchronously');
+    expect(err.message.length).toBeLessThan(400);
   });
 
   it('survives a thrown value that is not an Error at all', async () => {

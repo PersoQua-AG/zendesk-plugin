@@ -959,6 +959,12 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
   it.each(TREE_DEFECTS)('%s leaves the clean bundle exactly where it is', (_label, breakIt, expected) => {
     const tree = makeTree();
     const before = readFileSync(tree.bundle);
+    // THE OPERATOR'S PREVIOUS RELEASE, written here on purpose. `makeTree` does not create it, so
+    // `expect(existsSync(tree.artifact)).toBe(false)` used to be true BEFORE the run — a vacuous
+    // assertion, and the reason a typo'd --expect-version could delete both files while the output
+    // said "nothing was deleted" and every row of this table stayed green.
+    writeFileSync(tree.artifact, 'the release this tree published last time');
+    writeFileSync(tree.checksum, 'and its checksum');
     const args = breakIt(tree) ?? undefined;
     const run = runAudit(tree, args);
     try {
@@ -975,13 +981,31 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
       expect(run.stderr).not.toContain('Fix the cause (usually .mcpbignore)');
       expect(existsSync(`${tree.bundle}.REJECTED`), 'a tree fault renamed the bundle').toBe(false);
       expect(existsSync(tree.bundle)).toBe(true);
-      expect(existsSync(tree.artifact)).toBe(false);
+      // "nothing was deleted", asserted rather than printed.
+      expect(readFileSync(tree.artifact, 'utf8')).toBe('the release this tree published last time');
+      expect(readFileSync(tree.checksum, 'utf8')).toBe('and its checksum');
     } finally {
       chmodSync(tree.bundle, 0o644); // or afterEach cannot remove the tree
     }
     // Byte-identical, not merely present: the measurement in #105 was taken against a
     // byte-identical bundle and the two runs disagreed about whether it survived.
     expect(readFileSync(tree.bundle).equals(before)).toBe(true);
+  });
+
+  // A VERSION DISAGREEMENT IS NOT CONTAMINATION. The archive is still refused and still
+  // quarantined — it must not be uploaded as a release it is not — but nothing is in it that
+  // should not be, so naming .mcpbignore as the likely cause is false, and so is the word.
+  it('refuses a stale bundle without calling it contaminated', () => {
+    const tree = makeTree({ entries: clean('0.9.0') });
+    const run = runAudit(tree);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('version mismatch');
+    expect(run.stderr).toContain('NOT THE RELEASE THIS TREE DESCRIBES');
+    expect(run.stderr).toContain('it is the wrong build');
+    expect(run.stderr).not.toContain('CONTAMINATED');
+    expect(run.stderr).not.toContain('Fix the cause (usually .mcpbignore)');
+    // Still quarantined, because a bundle that is not this release may not be uploaded as it.
+    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
   });
 
   // The other half of AC1, and the one that makes it a cut rather than a blanket exemption: the
@@ -1005,7 +1029,10 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
     writeFileSync(join(tree.dir, 'package.json'), '{ not json');
     const run = runAudit(tree);
-    expect(run.status, 'a tree fault wins the exit code').toBe(2);
+    // #105 AC 2: a contaminated bundle keeps exit 1. The archive WAS judged in this run and
+    // quarantined, so the bundle verdict is the one the caller has to act on; exit 2 is reserved
+    // for a run that reached no bundle verdict at all.
+    expect(run.status, 'the bundle verdict wins the exit code when there is one').toBe(1);
     expect(run.stderr).toContain('Cannot release from this tree');
     expect(run.stderr).toContain('package.json is missing or unreadable');
     expect(run.stderr).toContain('The archive was judged on its own, below.');
@@ -1258,7 +1285,10 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
         expect(existsSync(t.bundle)).toBe(true);
       },
       ablated: (r: Run, t: Tree) => {
-        expect(r.stderr).toContain('CONTAMINATED');
+        // The clean bundle is moved and announced as a refusal, on a run where the only thing
+        // wrong is that this checkout has no version to compare against.
+        expect(r.stderr).toContain('version mismatch');
+        expect(r.stderr).toContain('has been moved to');
         expect(existsSync(t.bundle)).toBe(false);
       },
     },

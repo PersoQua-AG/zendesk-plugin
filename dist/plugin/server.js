@@ -21505,11 +21505,18 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
       for (const binding of bindings) binding.server.listen(port, binding.address);
     } catch (err) {
       close();
-      const kind = err instanceof Error && /^[A-Za-z]+Error$/.test(err.name) ? err.name : "an error";
+      const kind = err instanceof Error && /^[A-Za-z]{1,40}Error$/.test(err.name) ? err.name : "an error";
       throw err instanceof RangeError ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
         cause: err
       }) : new Error(
-        `OAuth callback server could not start on port ${port}: listen() threw ${kind} synchronously. The port is inside the allowed range, so the range rule is not the cause.`,
+        // NO CLAIM ABOUT THE RANGE, in either direction. Saying "inside the allowed range"
+        // was the SAME defect this ticket is about, one step along: node's listen() throws
+        // RangeError only outside 0-65535, while CALLBACK_PORT_RULE is 1024-65535 and
+        // nothing range-checks `port` before this call — so every port in 0-1023 that threw
+        // something other than a RangeError was told it was in range. What is actually
+        // known is that this was not node's port validation, because that is a RangeError
+        // and a RangeError took the other branch.
+        `OAuth callback server could not start on port ${port}: listen() threw ${kind} synchronously, before any bind was attempted. That is not node's port validation, so the callback port rule is not the reason.`,
         { cause: err }
       );
     }

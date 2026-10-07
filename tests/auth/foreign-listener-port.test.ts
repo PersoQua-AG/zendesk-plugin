@@ -4,13 +4,13 @@
 // Structural, not statistical: `nextCandidate` advances by exactly one per candidate examined, so
 // the port freePort() will look at NEXT is the one it just returned plus one. The foreign listener
 // goes there, and the case is reached on every run rather than waited for.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { once } from 'node:events';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PORT_BAND_LAST, freePort, portClaimPath, portHeldOn } from './login-harness.js';
+import { PORT_BAND_FIRST, PORT_BAND_LAST, freePort, portClaimPath, portHeldOn } from './login-harness.js';
 
 // The body of a named function in the harness source, for the two cases whose rule is not
 // observable from inside one process.
@@ -64,7 +64,15 @@ describe('freePort() and a foreign listener in the band', () => {
   async function foreignListenerOnNextCandidate(host?: string): Promise<number> {
     const refused: string[] = [];
     const anchor = freePort();
-    for (let next = anchor + 1; next <= PORT_BAND_LAST; next += 1) {
+    // IT WRAPS, like the cursor it follows. `for (next = anchor + 1; next <= PORT_BAND_LAST)` ran
+    // zero times when freePort() returned the last port of the band, and the case then failed
+    // unconditionally with an empty log and the nonsense "between 30000 and 29999". freePort()
+    // itself wraps (`PORT_BAND_FIRST + nextCandidate % PORT_BAND_SIZE`), and the 20-attempt loop
+    // this replaced inherited that wrap; a band edge is roughly 1 pid residue in 10 000, which is
+    // exactly the kind of rate that reaches somebody else and not you.
+    const bandSize = PORT_BAND_LAST - PORT_BAND_FIRST + 1;
+    for (let step = 1; step <= bandSize; step += 1) {
+      const next = PORT_BAND_FIRST + ((anchor - PORT_BAND_FIRST + step) % bandSize);
       try {
         writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' });
       } catch (err) {
@@ -82,8 +90,8 @@ describe('freePort() and a foreign listener in the band', () => {
       return next;
     }
     return expect.fail(
-      `no band port left to put a stranger on between ${anchor + 1} and ${PORT_BAND_LAST} ` +
-        `(host ${host ?? 'wildcard'}): ${refused.join(', ')}`,
+      `no band port left to put a stranger on in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}, walking ` +
+        `from ${anchor + 1} (host ${host ?? 'wildcard'}): ${refused.join(', ')}`,
     );
   }
 
@@ -93,8 +101,26 @@ describe('freePort() and a foreign listener in the band', () => {
   for (const host of [undefined, '0.0.0.0', '127.0.0.1', '::1']) {
     it(`skips a band port held on ${host ?? 'the wildcard'} without a claim`, async () => {
       const foreign = await foreignListenerOnNextCandidate(host);
-      const port = freePort();
+      // NOT MERELY "did not return it" — that passes vacuously whenever the walk had to step over
+      // ports another run had claimed and that run released them before this call, because
+      // freePort() then answers from below `foreign` without ever looking at it. freePort()
+      // announces every skip on stderr (login-harness.ts, `[test-ports] skipping band port …`),
+      // so the examination itself is observable and is what gets asserted.
+      const skips: string[] = [];
+      const write = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        skips.push(String(chunk));
+        return true;
+      });
+      let port: number;
+      try {
+        port = freePort();
+      } finally {
+        write.mockRestore();
+      }
       expect(port).not.toBe(foreign);
+      expect(skips.join(''), `freePort() never examined ${foreign}`).toContain(
+        `skipping band port ${foreign}`,
+      );
       opened.push(await bind(port));
     });
   }

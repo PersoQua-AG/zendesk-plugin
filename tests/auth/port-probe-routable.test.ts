@@ -36,5 +36,15 @@ describe('portHeldOn() and a stranger on a routable address', () => {
     // probe binds beside the stranger and only the specific address refuses, on Linux the wildcard
     // refuses first. What must never happen is the empty string, which means FREE.
     expect(portHeldOn(port), `a stranger is listening on ${host}:${port}`).not.toBe('');
+
+    // AND IT HAS TO CONTROL ON LINUX, which the line above does not. There `0.0.0.0` refuses for
+    // ANY IPv4 holder (login-harness.ts's measured matrix), so that assertion stays green with
+    // routableAddresses() ablated — green on the one platform CI runs. Naming a strict set with no
+    // wildcard in it leaves the discovered addresses as the only thing that can answer, on both
+    // platforms: `127.0.0.1` binds beside a routable holder everywhere.
+    expect(
+      portHeldOn(port, ['127.0.0.1']),
+      `only the discovered addresses can see a stranger on ${host}:${port} from a loopback probe`,
+    ).toBe(host);
   });
 });

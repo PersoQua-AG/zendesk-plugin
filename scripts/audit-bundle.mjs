@@ -19,7 +19,7 @@
 // bundle by .mcpbignore's `scripts/` line.
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 
@@ -412,8 +412,22 @@ const argv = process.argv.slice(2);
 const positional = [];
 let expectedVersion = null;
 for (let i = 0; i < argv.length; i++) {
+  // Both spellings. `--expect-version=1.2.3` used to fall through to `positional` and become the
+  // bundle path, so the run refused `there is nothing at …/--expect-version=1.2.3` and never
+  // checked the version at all.
   if (argv[i] === '--expect-version') expectedVersion = argv[++i] ?? '';
+  else if (argv[i].startsWith('--expect-version=')) expectedVersion = argv[i].slice('--expect-version='.length);
   else positional.push(argv[i]);
+}
+// EXACTLY ONE, not "at least one". A second positional was dropped without a word, so
+// `audit-bundle.mjs a.mcpb b.mcpb` audited one of two named files and said nothing about the
+// other — the same rule scripts/assert-no-bound-port-literals.mjs:82 draws for its scan root.
+if (positional.length > 1) {
+  console.error(
+    `Expected at most one bundle path, got ${positional.length}: ${positional.join(', ')}.` +
+      ' Audit them one at a time.',
+  );
+  process.exit(2);
 }
 
 // A RELATIVE ARGUMENT IS THE CALLER'S (#105 AC5). `resolve(root, …)` resolved it against the
@@ -423,6 +437,12 @@ for (let i = 0; i < argv.length; i++) {
 // which is what package.json's `pack` script relies on.
 const bundlePath = positional[0] === undefined ? join(root, 'zendesk.mcpb') : resolve(positional[0]);
 const problems = [];
+// How many of `problems` are about the archive's VERSION rather than its CONTENT. "CONTAMINATED …
+// Fix the cause (usually .mcpbignore)" is true of a forbidden path, a credential or an entry that
+// cannot be read; it is false of a bundle that is simply not the release this tree now describes —
+// nothing is in it that should not be, it is the wrong build. Counted rather than inferred from
+// the strings, so the wording below cannot drift from what was actually found.
+let versionProblems = 0;
 const treeFaults = [];
 const accepted = [];
 // Counted for the coverage line the run prints, so the disclosure cannot go stale.
@@ -431,7 +451,28 @@ let scannedBytes = 0;
 
 const pkg = readJson(join(root, 'package.json'), 'package.json', treeFaults);
 const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', treeFaults);
-const version = manifest?.version ?? pkg?.version ?? null;
+// A VERSION THAT CAN BE A FILE NAME, or no version at all. Two measured holes closed here:
+//
+// 1. `readJson` only faults when JSON.parse throws, so a manifest that PARSES but carries no
+//    `version` left `version === null` — and then `artifactPath` was null and the success path ran
+//    `writeFileSync(null, bundle)`, which is ERR_INVALID_ARG_TYPE as a stack trace under exit 1,
+//    the script's own code for "this bundle did not pass". A bundle that passed every rule.
+// 2. The string is interpolated into a path. A version of `../../../../VICTIM` escaped `root`, and
+//    `rmSync` then deleted files four levels above it while the run announced the clean bundle as
+//    contaminated. Semver characters only, no separator, no dot-segment.
+const declaredVersion = manifest?.version ?? pkg?.version ?? null;
+const version =
+  typeof declaredVersion === 'string' && /^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(declaredVersion) && !declaredVersion.includes('..')
+    ? declaredVersion
+    : null;
+if (version === null && treeFaults.length === 0) {
+  treeFaults.push(
+    declaredVersion === null || declaredVersion === undefined
+      ? 'neither manifest.json nor package.json declares a version — the release version cannot be established'
+      : `the declared version ${JSON.stringify(String(declaredVersion))} cannot be a file name, so no` +
+          ' artifact path can be built from it — the release version cannot be established',
+  );
+}
 
 // A stale artifact from an earlier, passing run must not survive a failing one — otherwise "no
 // artifact is published" holds only for the operator who never released this bundle before.
@@ -448,9 +489,18 @@ const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 // throw landed before the verdict below and the run ended as a stack trace. A tree whose artifact
 // slot cannot be cleared cannot be released from, whatever the bundle holds, so it is a TREE
 // fault: nothing about the archive is being claimed and nothing is moved.
-if (artifactPath) {
+// NOT HERE. The clearing happens after the archive has been judged, so that a run which judged
+// NOTHING deletes nothing — see clearStaleArtifact() at the verdict below. Measured before the
+// move: `--expect-version` with a typo printed "Nothing was renamed and nothing was deleted" and
+// had already deleted the operator's previously published artifact and its checksum.
+function clearStaleArtifact() {
+  if (!artifactPath) return;
   for (const stale of [artifactPath, checksumPath]) {
     try {
+      // `force: true` suppresses ENOENT and nothing else. A stale artifact that is a non-empty
+      // directory makes this throw, and an unwritable parent makes it throw EACCES — unguarded,
+      // that throw ended the run as a stack trace. A tree whose artifact slot cannot be cleared
+      // cannot be released from, whatever the bundle holds.
       rmSync(stale, { force: true });
     } catch (error) {
       treeFaults.push(
@@ -595,15 +645,32 @@ if (bundle && entries.length > 0 && !bundledManifest) {
     // not a finding about the archive; the unreadable manifest is already a tree fault above.
     if (version !== null && bundledVersion !== version) {
       problems.push(`version mismatch: the bundled manifest.json says ${bundledVersion}, the tree declares ${version}`);
+      versionProblems += 1;
     }
   } catch (error) {
     problems.push(`the bundled manifest.json could not be read: ${error.message}`);
   }
 }
 
-// THE TREE VERDICT. It moves nothing, it renames nothing, and it says so — because the price of
-// the owner's decision is that a path somebody could upload stays under its name, and a message
-// that hid that would make the decision worse than the defect it replaced.
+// NOW the stale artifact goes, and only if the TREE is sound. "No artifact is published when the
+// audit fails" is a promise about a release this tree could make; a tree that cannot publish is
+// not making one, and deleting the operator's last release because their `--expect-version` had a
+// typo is precisely what #105 exists to stop. Measured before this moved: a typo'd
+// `--expect-version` deleted `zendesk-9.9.9.mcpb` and its `.sha256` and then printed "Nothing was
+// renamed and nothing was deleted".
+//
+// The cost, named: on a run with BOTH a tree fault and a bundle finding, a stale artifact from an
+// earlier passing run survives. That run publishes nothing of its own, exits non-zero and says the
+// tree cannot publish, so nothing is announced that is not true — and the alternative is destroying
+// a release over a fault that is not the bundle's.
+//
+// `clearStaleArtifact()` can add a tree fault of its own, which is why `treeFaults` is read after
+// this line and not before it.
+if (treeFaults.length === 0) clearStaleArtifact();
+
+// THE TREE VERDICT. It moves nothing by itself, and it says exactly what the run did — because the
+// price of the owner's decision is that a path somebody could upload stays under its name, and a
+// message that hid that would make the decision worse than the defect it replaced.
 if (treeFaults.length > 0) {
   console.error(`Cannot release from this tree: ${basename(bundlePath)} was not judged on this.`);
   for (const fault of treeFaults) console.error(`  - ${fault}`);
@@ -617,8 +684,8 @@ if (treeFaults.length > 0) {
           ' archive was judged on its own, below.'
       : `\nThis is NOT a verdict on the bundle, and it is not a .mcpbignore problem. Nothing was` +
           ` renamed and nothing was deleted: whatever is at ${bundlePath} is STILL THERE, under` +
-          ' that name, and could be uploaded. Fix the tree and run the audit again; until then the' +
-          ' file is the operator\'s to deal with.',
+          ` that name${shape.fault ? '' : ', and can still be uploaded under it'}. Fix the tree and` +
+          ' run the audit again; until then the file is the operator\'s to deal with.',
   );
 }
 
@@ -660,19 +727,26 @@ if (problems.length > 0) {
   console.error('\nNo artifact and no checksum were produced.');
   if (quarantined) {
     console.error(
-      `${basename(bundlePath)} is CONTAMINATED and has been moved to ${basename(quarantined)}` +
+      `${basename(bundlePath)} is ${problems.length > versionProblems ? 'CONTAMINATED' : 'NOT THE RELEASE THIS TREE DESCRIBES'}` +
+        ` and has been moved to ${basename(quarantined)}` +
         `${shape.symlink ? ` (and what it pointed at to ${basename(quarantined)}.target)` : ''} so it` +
-        ' cannot be uploaded by name. Do not publish it. Fix the cause (usually .mcpbignore) and' +
-        ' pack again.',
+        ' cannot be uploaded by name. Do not publish it.' +
+        (problems.length > versionProblems
+          ? ' Fix the cause (usually .mcpbignore) and pack again.'
+          : ' Nothing is in it that should not be — it is the wrong build. Pack it again from this tree.'),
     );
   }
 }
 
-// Exit 2 is "this tree cannot publish", exit 1 is "this bundle did not pass" — the distinction
-// scripts/assert-no-bound-port-literals.mjs:140 draws between "could not look" and "looked and
-// found", here between a tree to fix and a bundle to fix. A tree fault wins the code, because a
-// run that could not establish the version has not judged the archive either way.
-if (treeFaults.length > 0 || problems.length > 0) process.exit(treeFaults.length > 0 ? 2 : 1);
+// Exit 1 is "this bundle did not pass", exit 2 is "this tree could not judge it" — the
+// distinction scripts/assert-no-bound-port-literals.mjs:140 draws between "looked and found" and
+// "could not look". THE BUNDLE VERDICT WINS when there is one, and the earlier way round was
+// wrong: a contaminated bundle plus a `--expect-version` typo exited 2 although the archive HAD
+// been judged and quarantined in that very run, which contradicts #105 AC 2 ("the exit code for a
+// contaminated bundle is unchanged") and contradicted the comment that stood here. Exit 2 is now
+// exactly the case it names: no bundle verdict was reached.
+if (problems.length > 0) process.exit(1);
+if (treeFaults.length > 0) process.exit(2);
 
 const sha256 = createHash('sha256').update(bundle).digest('hex');
 writeFileSync(artifactPath, bundle);
@@ -694,6 +768,11 @@ console.log(
     ` (${share(scannedBytes, totalBytes)}%) — node_modules/** is out of scope by decision`,
 );
 console.log(`  sha256    ${sha256}`);
-console.log(`  artifact  ${basename(artifactPath)}`);
-console.log(`  checksum  ${basename(checksumPath)}`);
-console.log(`\nVerify the download with:\n  shasum -a 256 -c ${basename(checksumPath)}`);
+// NAMED FROM WHERE THE CALLER STANDS. The artifact slot is this tree's (see artifactPath), so for
+// a bundle handed in from elsewhere a bare basename is a verify command that cannot work in the
+// caller's directory — measured: the two files were in the repository and the operator was told to
+// check them in their download folder.
+const here = (p) => relative(process.cwd(), p) || basename(p);
+console.log(`  artifact  ${here(artifactPath)}`);
+console.log(`  checksum  ${here(checksumPath)}`);
+console.log(`\nVerify the download with:\n  shasum -a 256 -c ${here(checksumPath)}`);
