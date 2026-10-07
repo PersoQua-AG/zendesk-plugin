@@ -508,11 +508,18 @@ export async function rebind(port: number): Promise<void> {
 // defect these suites are about — startCallbackListener() feeds beginFlow(), and beginFlow() feeds
 // a login queue that holds every later zendesk_login behind it. The label says which call hung.
 // Lived as three word-identical copies across the login suites before it landed here.
+// Captured at module load, which is before any case can install fake timers. A watchdog built on a
+// FAKED setTimeout never fires: the clock only moves when the test moves it, and a test that is
+// waiting for a hung call is by definition not moving it. The call would then run out vitest's own
+// generic timeout instead of naming which call hung, which is the one thing this helper is for.
+// (tests/auth/oauth-flow.callback-edges.test.ts fakes setTimeout, and advances it by 200 ms.)
+const realSetTimeout = globalThis.setTimeout;
+
 export function settlesWithin<T>(label: string, promise: Promise<T>, ms = 2_000): Promise<T> {
   return Promise.race([
     promise,
     new Promise<never>((_, reject) => {
-      const t = setTimeout(() => reject(new Error(`${label} never settled within ${ms}ms`)), ms);
+      const t = realSetTimeout(() => reject(new Error(`${label} never settled within ${ms}ms`)), ms);
       t.unref?.();
     }),
   ]);
