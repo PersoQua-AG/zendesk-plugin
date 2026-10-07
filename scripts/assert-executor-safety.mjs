@@ -82,7 +82,7 @@
 // The one cost, named rather than discovered later: this hangs on a filename. Move or rename
 // src/server.ts and the guard refuses its own tree — loudly, and in the same commit that breaks
 // `npm run build`, which names that exact path, so it cannot drift silently.
-import { lstatSync, readdirSync } from 'node:fs';
+import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import ts from 'typescript';
@@ -128,8 +128,19 @@ const DECLARATION = /\.d\.(ts|mts|cts)$/;
 // trace), and a listable-but-unstattable root (EACCES), which reaches the lstat on the mark far
 // below rather than this walk. The last fallback is for a throw that is neither: `??` on `.code`
 // alone printed `(undefined)`. The sibling guard is held to the same bar.
-const unreadable = (err) => {
-  console.error(`Nothing to inspect: ${target} (${err?.code ?? err?.message ?? err}).`);
+// Repo-relative where that is shorter, absolute where it is not. `relative()` alone answered a
+// tree under /var/folders with six `../` segments, which is longer than the path it replaced and
+// harder to paste back into a command.
+const rel = (p) => {
+  const r = relative(root, p);
+  return !r || r.startsWith('..') ? p : r;
+};
+
+// `subject` names what refused, because the per-file caller below is not talking about the root.
+// Measured: without it, a file the walk could not stat was reported as `Nothing to inspect: <root>`,
+// which is the one thing #85 asks the guard not to do — name the tree instead of the file.
+const unreadable = (err, subject = target) => {
+  console.error(`Nothing to inspect: ${subject} (${err?.code ?? err?.message ?? err}).`);
   process.exit(1);
 };
 
@@ -179,7 +190,8 @@ const checker = program.getTypeChecker();
 // tree pays nothing for it; when the lstat itself dies — `chmod 444` on the root lists names and
 // refuses to stat entries — that is the root-unreadable case #77 raised, handed to its own refusal.
 // Every collected entry leaves here in exactly one of three states — walked, refused by name, or
-// explicitly not a file. There is no fourth, and that is the whole point: the silent skip was it.
+// explicitly not a file, with the link RESOLVED before that last question is asked. There is no
+// fourth, and that is the whole point: the silent skip was it.
 const unread = [];
 const sources = [];
 for (const file of files) {
@@ -188,28 +200,35 @@ for (const file of files) {
     sources.push([file, source]);
     continue;
   }
+  // `statSync`, which FOLLOWS the link, and not `lstatSync`, which reports it. A `.ts` symlink
+  // whose target the compiler cannot open is an unread source file — lstat said "symlink, not a
+  // file" and dropped it, so the hole #85 is about survived one indirection. Measured on a marked
+  // tree with `w.ts -> hidden/real.ts`, `chmod 000 real.ts`: lstat gave `0 executors, 0 inspected`
+  // and exit 0, the identical green; stat names the file and refuses.
+  //
+  // ENOENT is the one throw that is not a read failure: a dangling symlink, or a file unlinked
+  // mid-walk. Neither can hold an executor, and refusing them would break the three #76/#77 cases
+  // that pin "a dangling symlink is Not the guarded tree, not an unread file". Everything else —
+  // EACCES on a listable-but-unstattable root above all — is the root-unreadable case #77 raised.
   let stats;
   try {
-    stats = lstatSync(file);
+    stats = statSync(file);
   } catch (err) {
-    unreadable(err);
+    if (err?.code === 'ENOENT') continue;
+    unreadable(err, rel(file));
   }
   if (!stats.isFile()) continue;
-  unread.push(`${relative(root, file)}  (could not be read)`);
+  unread.push(`${rel(file)}  (could not be read)`);
 }
 for (const d of program.getSyntacticDiagnostics()) {
-  const at =
-    d.file && d.start !== undefined
-      ? (({ line, character }) => `:${line + 1}:${character + 1}`)(
-          d.file.getLineAndCharacterOfPosition(d.start),
-        )
-      : '';
-  const where = d.file ? relative(root, d.file.fileName) : '(no file)';
+  const pos = d.file && d.start !== undefined ? d.file.getLineAndCharacterOfPosition(d.start) : null;
+  const at = pos ? `:${pos.line + 1}:${pos.character + 1}` : '';
+  const where = d.file ? rel(d.file.fileName) : '(no file)';
   unread.push(`${where}${at}  ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`);
 }
 if (unread.length > 0) {
   console.error(
-    `Refusing the tree: ${unread.length} file(s) under ${relative(root, target) || target} could` +
+    `Refusing the tree: ${unread.length} file(s) under ${rel(target)} could` +
       ' not be read or did not parse, so the walk never saw what is in them.',
   );
   for (const entry of unread) console.error(`  - ${entry}`);

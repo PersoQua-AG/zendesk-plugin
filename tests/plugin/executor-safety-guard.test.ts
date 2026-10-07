@@ -591,6 +591,53 @@ export const f = (server: { listen: (p: number) => void }, port: number) =>
       expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
     });
 
+    // THE SAME HOLE, ONE INDIRECTION DEEPER. `lstatSync` reports the LINK, so a `.ts` symlink whose
+    // target cannot be opened answered "not a file" and was dropped without a word. Measured before
+    // the fix: `0 executors, 0 inspected` and exit 0 — the identical green #85 was filed about.
+    // The link target lives OUTSIDE the scanned tree on purpose: inside it, the walk collects the
+    // real file by its own name as well, so the refusal would come from that second entry and the
+    // symlink arm would never be exercised. Measured — the first spelling of this fixture passed
+    // against the unfixed guard for exactly that reason.
+    function withUnreadableTarget(run: (target: string) => Run): Run {
+      const target = fixtureDir('export const marker = 1;\n', 'unused.ts');
+      const outside = mkdtempSync(join(tmpdir(), 'executor-guard-outside-'));
+      temps.push(outside);
+      const real = join(outside, 'real.ts');
+      writeFileSync(real, WEDGE);
+      symlinkSync(real, join(target, 'w.ts'));
+      chmodSync(real, 0o000);
+      try {
+        return run(target);
+      } finally {
+        chmodSync(real, 0o644);
+      }
+    }
+
+    it('refuses a symlink whose target the compiler could not open, and names it', () => {
+      const run = withUnreadableTarget((t) => spawnSync('node', [GUARD, t], { encoding: 'utf8' }) as Run);
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('could not be read');
+      expect(run.stderr).toContain('w.ts');
+    });
+
+    // A DANGLING symlink stays what #76/#77 decided it is — not the guarded tree, not an unread
+    // file. statSync answers it with ENOENT, and ENOENT is the one throw that is not a read
+    // failure. Without that arm the fix above would have turned three settled cases red.
+    it('still treats a dangling symlink as not-a-file rather than as unread', () => {
+      const target = fixtureDir('export const marker = 1;\n', 'unused.ts');
+      symlinkSync(join(target, 'nothing-here.ts'), join(target, 'dangling.ts'));
+      const run = spawnSync('node', [GUARD, target], { encoding: 'utf8' });
+      expect(run.stderr).not.toContain('could not be read');
+      expect(run.status).toBe(0);
+    });
+
+    it('ablated: back on lstat, the symlink to an unreadable file is credited clean', () => {
+      const ablated = mutate([['    stats = statSync(file);', '    stats = lstatSync(file);']]);
+      const run = withUnreadableTarget((t) => spawnSync('node', [ablated, t], { encoding: 'utf8' }) as Run);
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain('0 executors, 0 inspected');
+    });
+
     // An unterminated template literal on line 1: the AST stops there, so the executor below it is
     // not merely unflagged, it is absent. The position is asserted because "somewhere in this file"
     // is not enough to act on.
@@ -626,7 +673,7 @@ export const f = (server: { listen: (p: number) => void }, port: number) =>
     // by another spelling. Measured state it restores: 0 executors, exit 0, the wedge unseen.
     it('ablated: without the unread-file refusal, the unreadable file is credited clean', () => {
       const ablated = mutate([
-        ['  unread.push(`${relative(root, file)}  (could not be read)`);', '  void 0;'],
+        ['  unread.push(`${rel(file)}  (could not be read)`);', '  void 0;'],
       ]);
       const run = withUnreadableFile((t) => spawnSync('node', [ablated, t], { encoding: 'utf8' }) as Run);
       expect(run.status).toBe(0);
