@@ -470,15 +470,14 @@ const declaredVersion = manifest?.version ?? pkg?.version ?? null;
 // are not versions anyway.
 const version = typeof declaredVersion === 'string' && /^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(declaredVersion) ? declaredVersion : null;
 if (version === null) {
-  treeFaults.push(
+  const why =
     declaredVersion === null || declaredVersion === undefined
-      ? 'neither manifest.json nor package.json declares a version — the release version cannot be established'
+      ? 'neither manifest.json nor package.json declares a version'
       : typeof declaredVersion !== 'string'
-        ? `the declared version ${JSON.stringify(declaredVersion)} is ${typeof declaredVersion}, not a string` +
-            ' — the release version cannot be established'
+        ? `the declared version ${JSON.stringify(declaredVersion)} is ${typeof declaredVersion}, not a string`
         : `the declared version ${JSON.stringify(declaredVersion)} is not a usable file-name component` +
-            ' (letters, digits, dot, plus and hyphen only) — the release version cannot be established',
-  );
+          ' (letters, digits, dot, plus and hyphen only)';
+  treeFaults.push(`${why} — the release version cannot be established`);
 }
 
 // A stale artifact from an earlier, passing run must not survive a failing one — otherwise "no
@@ -491,19 +490,9 @@ if (version === null) {
 // happen in `root`. For `npm run pack` nothing changes: there the bundle IS in root.
 const artifactPath = version ? join(root, `${basename(bundlePath, '.mcpb')}-${version}.mcpb`) : null;
 const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
-// `force: true` suppresses ENOENT and nothing else. A stale artifact that is a non-empty
-// directory makes this throw, and an unwritable parent makes it throw EACCES — unguarded, that
-// throw landed before the verdict below and the run ended as a stack trace. A tree whose artifact
-// slot cannot be cleared cannot be released from, whatever the bundle holds, so it is a TREE
-// fault: nothing about the archive is being claimed and nothing is moved.
-// NOT HERE. The clearing happens after the archive has been judged, so that a run which judged
-// NOTHING deletes nothing — see clearStaleArtifact() at the verdict below. Measured before the
-// move: `--expect-version` with a typo printed "Nothing was renamed and nothing was deleted" and
-// had already deleted the operator's previously published artifact and its checksum.
-// A FOREIGN BUNDLE IS READ-ONLY TO THIS TREE. The artifact slot is this tree's, so auditing a
-// downloaded bundle must neither clear it nor write it: clearing destroyed the operator's release
-// on a run that was only ever going to report, and writing re-pointed this tree's release name at
-// a file from somewhere else. Both measured. One rule, both ends.
+// The slot is this tree's, and WHEN it may be touched is stated where it is touched: the clearing
+// at the verdict below, the write at the success path.
+//
 // REALPATHS, not strings. `root` comes from `import.meta.url`, which node resolves through
 // symlinks, while `bundlePath` comes from the caller's cwd, which is whatever they typed. On macOS
 // `/tmp` is a symlink to `/private/tmp`, and a checkout reached through any symlinked component
@@ -519,22 +508,31 @@ const samePlace = (a, b) => {
 };
 const ownBundle = samePlace(dirname(bundlePath), root);
 
-const staleRemoved = [];
 function clearStaleArtifact() {
   if (!artifactPath || !ownBundle) return;
+  // Both paths, in order, and the FAULT LINE CARRIES WHAT WAS ALREADY GONE. The artifact can be
+  // removed and the checksum then refuse, which is a tree fault — and the tree paragraph below
+  // went on to say "nothing was deleted" while the operator's artifact was already gone, the same
+  // sentence and the same loss as the defect this whole ticket is about. Only one of the two can
+  // have succeeded when this reports (the loop stops reporting after the first fault and the
+  // clearing runs only on an otherwise sound tree), so it is one name, not a list.
+  const gone = [];
   for (const stale of [artifactPath, checksumPath]) {
-    const wasThere = nameState(stale) === 'taken';
     try {
       // `force: true` suppresses ENOENT and nothing else. A stale artifact that is a non-empty
       // directory makes this throw, and an unwritable parent makes it throw EACCES — unguarded,
       // that throw ended the run as a stack trace. A tree whose artifact slot cannot be cleared
       // cannot be released from, whatever the bundle holds.
+      const wasThere = nameState(stale) === 'taken';
+      // `force: true` suppresses ENOENT and nothing else: a slot that is a non-empty directory
+      // throws, and an unwritable parent throws EACCES.
       rmSync(stale, { force: true });
-      if (wasThere) staleRemoved.push(stale);
+      if (wasThere) gone.push(basename(stale));
     } catch (error) {
       treeFaults.push(
         `the stale artifact ${basename(stale)} could not be cleared: ${error.code ?? error.message}` +
-          ' — this tree cannot be released from until that path is gone',
+          ' — this tree cannot be released from until that path is gone' +
+          (gone.length > 0 ? `; ${gone[0]} was already removed before this was found and is NOT coming back` : ''),
       );
     }
   }
@@ -718,16 +716,8 @@ if (treeFaults.length > 0) {
       : `\nThis is NOT a verdict on the bundle, and it is not a .mcpbignore problem. Nothing was` +
           ` renamed: whatever is at ${bundlePath} is STILL THERE, under that name` +
           `${shape.fault ? '' : ', and can still be uploaded under it'}.` +
-          // WHAT WAS ACTUALLY REMOVED, named. The clearing runs only on a sound tree, but it can
-          // succeed on the artifact and then FAIL on the checksum, which is itself a tree fault —
-          // and the sentence then stood here claiming nothing had been deleted while the
-          // operator's artifact was already gone. Measured. The same sentence, the same file, the
-          // same loss as the round-1 blocker, one window narrower.
-          `${
-            staleRemoved.length === 0
-              ? ' Nothing was deleted either.'
-              : ` ${staleRemoved.map((f) => basename(f)).join(' and ')} ${staleRemoved.length > 1 ? 'were' : 'was'} already removed before this was found, and ${staleRemoved.length > 1 ? 'are' : 'is'} NOT coming back.`
-          }` +
+          // Nothing is DELETED on this path either, with one exception, and that exception names
+          // itself on its own fault line above rather than through a flag read down here.
           ' Fix the tree and run the audit again; until then the file is the operator\'s to deal' +
           ' with.',
   );
@@ -810,21 +800,16 @@ const sha256 = createHash('sha256').update(bundle).digest('hex');
 // overwrote this checkout's published release of that version and rewrote its `.sha256` to match a
 // file that came from somewhere else. Measured. A bundle handed in from elsewhere is audited and
 // reported on; it does not get to claim this tree's release name.
-if (!ownBundle) {
-  console.log(`Bundle audit passed: ${bundlePath}`);
-  console.log(`  sha256    ${sha256}`);
-  console.log(
-    `\nNo artifact was written. ${basename(bundlePath)} is not this tree's own bundle` +
-      ` (it is not in ${root}), and the artifact slot ${basename(artifactPath)} belongs to the` +
-      " release THIS tree declares. Pack from this tree to produce one.",
-  );
-  process.exit(0);
-}
-
 // GUARDED, because an unwritable checkout, a full disk or an artifact slot that is a directory all
 // landed here as a stack trace — under exit 1, the code that means "this bundle did not pass",
 // for a bundle that had passed every rule. Measured with the tree at mode 0555.
-try {
+//
+// SKIPPED ENTIRELY FOR A FOREIGN BUNDLE. A bundle that is not in `root` is audited and reported on
+// in full — the coverage disclosure below is the part its caller most needs, since they cannot see
+// this tree — but it does not get to claim this tree's release name. The slot is in `root` because
+// the version is, and writing it from a downloaded bundle re-pointed this checkout's published
+// release at a file from somewhere else. Measured.
+if (ownBundle) try {
   writeFileSync(artifactPath, bundle);
   // `shasum -a 256 -c <file>.sha256` format: digest, two spaces, the name it applies to.
   writeFileSync(checksumPath, `${sha256}  ${basename(artifactPath)}\n`);
@@ -848,8 +833,9 @@ try {
     console.error(`  - could not clean up ${leftBehind.join(' and ')} — DELETE BY HAND, they verify nothing`);
   }
   console.error(
-    '\nNo artifact and no checksum were left behind. The bundle is fine and is still under its own' +
-      ' name. This is the tree: fix the path and run the audit again.',
+    `\n${leftBehind.length > 0 ? 'What is named above verifies nothing and has to go by hand.' : 'No artifact and no checksum were left behind.'}` +
+      ' The bundle is fine and is still under its own name. This is the tree: fix the path and run' +
+      ' the audit again.',
   );
   process.exit(2);
 }
@@ -869,10 +855,17 @@ console.log(
     ` (${share(scannedBytes, totalBytes)}%) — node_modules/** is out of scope by decision`,
 );
 console.log(`  sha256    ${sha256}`);
-// NAMED FROM WHERE THE CALLER STANDS. The artifact slot is this tree's (see artifactPath), so for
-// a bundle handed in from elsewhere a bare basename is a verify command that cannot work in the
-// caller's directory — measured: the two files were in the repository and the operator was told to
-// check them in their download folder.
+if (!ownBundle) {
+  console.log(
+    `\nNo artifact was written: ${basename(bundlePath)} is not this tree's own bundle (it is not in` +
+      ` ${root}), and the slot ${basename(artifactPath)} belongs to the release THIS tree declares.` +
+      ' Pack from this tree to produce one.',
+  );
+  process.exit(0);
+}
+// NAMED FROM WHERE THE CALLER STANDS, because cwd need not be root even for this tree's own bundle
+// (`npm run pack` from a subdirectory), and a bare basename is then a verify command that does not
+// work where the operator is typing.
 const here = (p) => relative(process.cwd(), p) || basename(p);
 console.log(`  artifact  ${here(artifactPath)}`);
 console.log(`  checksum  ${here(checksumPath)}`);

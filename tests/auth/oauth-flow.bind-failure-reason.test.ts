@@ -55,7 +55,10 @@ describe('the reason a failed callback bind states', () => {
   // `port` before the call. So for a privileged port that threw something else, a message saying
   // "the port is inside the allowed range" is as false as the range rule it replaced. The message
   // may make no claim about the range in either direction.
-  it.each([0, 80, 1023])('claims nothing about the range for port %i, which is outside the rule', async (port) => {
+  // TWO ROWS, the two ends: 0 is the one value listen() accepts and the configuration refuses, and
+  // 1023 is the boundary. Nothing in the code under test distinguishes any port here — that is the
+  // point of the fix — so a third row buys a spawn and no claim.
+  it.each([0, 1023])('claims nothing about the range for port %i, which is outside the rule', async (port) => {
     // The parameter list carries the claim, so it is asserted: these are ports the rule forbids
     // and node's listen() accepts, which is the gap the false sentence lived in. Without this the
     // case stayed green with [2000, 30000, 65535] and pinned nothing about privileged ports.

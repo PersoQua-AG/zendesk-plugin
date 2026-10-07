@@ -731,12 +731,21 @@ describe('a version mismatch blocks the release', () => {
   // plugin moved to 1.1.0. What the BUNDLE has to be right about is its own manifest, and that is the
   // next case — package.json's number is not shipped inside the bundle at all.
 
-  it('fails when the bundled manifest disagrees with the tree', () => {
+  // AND IT IS NOT CALLED CONTAMINATION. The bundle is still refused and still quarantined — it may
+  // not be uploaded as a release it is not — but nothing is in it that should not be, so the word
+  // and the `.mcpbignore` hint were both false for this case (#105). Asserted here rather than in a
+  // second case with a byte-identical fixture.
+  it('fails when the bundled manifest disagrees with the tree, without calling it contaminated', () => {
     const tree = makeTree({ entries: clean('0.9.0') });
     const run = runAudit(tree);
-    expect(run.status).not.toBe(0);
+    expect(run.status).toBe(1);
     expect(run.stderr).toContain('the bundled manifest.json says 0.9.0, the tree declares 1.0.0');
     expect(existsSync(tree.artifact)).toBe(false);
+    expect(run.stderr).toContain('NOT THE RELEASE THIS TREE DESCRIBES');
+    expect(run.stderr).toContain('it is the wrong build');
+    expect(run.stderr).not.toContain('CONTAMINATED');
+    expect(run.stderr).not.toContain('a refused path is usually .mcpbignore');
+    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
   });
 
   it('fails when the tree disagrees with the tag it was asked to release', () => {
@@ -996,22 +1005,6 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(readFileSync(tree.bundle).equals(before)).toBe(true);
   });
 
-  // A VERSION DISAGREEMENT IS NOT CONTAMINATION. The archive is still refused and still
-  // quarantined — it must not be uploaded as a release it is not — but nothing is in it that
-  // should not be, so naming .mcpbignore as the likely cause is false, and so is the word.
-  it('refuses a stale bundle without calling it contaminated', () => {
-    const tree = makeTree({ entries: clean('0.9.0') });
-    const run = runAudit(tree);
-    expect(run.status).toBe(1);
-    expect(run.stderr).toContain('version mismatch');
-    expect(run.stderr).toContain('NOT THE RELEASE THIS TREE DESCRIBES');
-    expect(run.stderr).toContain('it is the wrong build');
-    expect(run.stderr).not.toContain('CONTAMINATED');
-    expect(run.stderr).not.toContain('Fix the cause (usually .mcpbignore)');
-    // Still quarantined, because a bundle that is not this release may not be uploaded as it.
-    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
-  });
-
   // THE VERSION IS A PATH COMPONENT, so it is validated — and round 2 of this review showed that
   // the whole validation was deletable with the suite green. These three cases are why it cannot
   // be deleted any more. Each one was a live blocker before it was pinned.
@@ -1057,7 +1050,11 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
 
     // Every legitimate semver shape still releases. A validation that bricks a real release would
     // be worse than the traversal it prevents.
-    it.each(['1.0.0', '1.0.0-rc.1', '1.0.0+build.5', '1.0.0-rc.1+exp.sha.5114f85'])(
+    // ONE ROW. The gate is a charset regex with no ordering, so this shape strictly covers
+    // `1.0.0-rc.1` and `1.0.0+build.5`, and plain `1.0.0` is makeTree()'s default and so already
+    // the subject of 'a clean bundle passes'. The case exists because a validation that bricks a
+    // real release would be worse than the traversal it prevents.
+    it.each(['1.0.0-rc.1+exp.sha.5114f85'])(
       'still releases version %s',
       (v) => {
         const tree = makeTree({ manifestVersion: v, packageVersion: v, entries: clean(v) });
@@ -1158,8 +1155,10 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(run.stderr).toContain('package.json is missing or unreadable');
     expect(run.stderr).toContain('The archive was judged on its own, below.');
     expect(run.stderr).toContain('CONTAMINATED');
-    // And it does NOT claim the file is untouched, because it is not.
-    expect(run.stderr).not.toContain('STILL THERE');
+    // And it does NOT claim the BUNDLE is untouched, because it is not. Matched on the bundle's own
+    // sentence rather than on the bare words "STILL THERE", which the line about a surviving
+    // artifact legitimately contains — a matcher that loose forbids a true statement.
+    expect(run.stderr).not.toMatch(/whatever is at .* is STILL THERE/);
     expect(existsSync(tree.bundle)).toBe(false);
     expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
   });
