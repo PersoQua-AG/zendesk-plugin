@@ -68,12 +68,16 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
     expect(config.clientSecret).toBeUndefined();
   });
 
+  // console.warn is silenced here: an unsubstituted ZENDESK_SECURITY_LEVEL re-fires the #93
+  // absence notice, and an unmocked one prints to the suite's stderr with no case attached to it.
   it('a placeholder security level and markdown flag fall back to the shipped defaults', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { ctx } = createServer({
       ...serverEnv(),
       ZENDESK_SECURITY_LEVEL: '${user_config.security_level}',
       ZENDESK_MARKDOWN_CONVERSION: '${user_config.markdown_conversion}',
     }, { security: keychain() });
+    warn.mockRestore();
     expect(ctx.securityLevel).toBe('standard');
     expect(ctx.markdownDefault).toBe(true);
   });
@@ -123,7 +127,8 @@ describe('markdown conversion — an unreadable value is never read as a silent 
     expect(markdownDefault).toBe(true);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(`ZENDESK_MARKDOWN_CONVERSION "${value}"`);
-    expect(warnings[0]).toContain('"markdown_conversion"');
+    // …and no configuration field, same as the screening level: the installed plugin declares none.
+    expect(warnings[0]).not.toContain('configuration field');
   });
 
   it('stays silent and true when the variable is absent', () => {

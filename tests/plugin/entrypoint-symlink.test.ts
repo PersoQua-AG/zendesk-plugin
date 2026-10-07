@@ -2,9 +2,15 @@
 // #63: the stdio transport used to connect only when `import.meta.url === pathToFileURL(argv[1]).href`.
 // Node resolves symlinks in an ES module's import.meta.url but leaves argv[1] as the host spelled it,
 // so `node <symlink-to-plugin-root>/dist/server.js` loaded the module, connected nothing, and exited 0
-// with an empty stderr. The launch command in .claude-plugin/plugin.json is exactly that shape. A
-// case-differing spelling of the same path is the second shape of one file with two names, and on
-// case-insensitive APFS it survived the realpath fix, so it is a row here too.
+// with an empty stderr.
+//
+// BOTH entry points are rowed. .claude-plugin/plugin.json:14 launches `dist/plugin/server.js`, the
+// esbuild bundle — #63's own citation of `dist/server.js` is stale — and the bundle carries the same
+// guard, so the shipped artifact is the one that has to start through a symlinked CLAUDE_PLUGIN_ROOT.
+//
+// The case-differing spelling is rowed as a third scenario of "one file, two names", not as a bug:
+// measured, it does NOT reproduce under the realpath form either, because Node keeps argv[1]'s own
+// spelling in the entry module's import.meta.url. The symlink rows are the red/green proof.
 //
 // SAFETY: the child's environment is BUILT, never spread, and HOME is never set. Overriding HOME does
 // NOT sandbox the macOS Keychain — /usr/bin/security resolves its search list through $HOME as well, so
@@ -36,6 +42,11 @@ symlinkSync(root, linkedRoot, 'dir');
 
 // A third spelling, available only where the filesystem folds case. On a case-sensitive volume
 // `DIST/server.js` is a different, missing path, and the row is skipped rather than asserted wrongly.
+const ENTRIES = [
+  ['the module entry point', ['dist', 'server.js']],
+  ['the bundle .claude-plugin/plugin.json launches', ['dist', 'plugin', 'server.js']],
+] as const;
+
 const upperCased = join(root, 'DIST', 'server.js');
 const caseFolds = ((): boolean => {
   try {
@@ -84,13 +95,17 @@ async function initializeThrough(entry: string): Promise<Record<string, unknown>
 }
 
 describe('the server starts however its path is spelled', () => {
-  it.each([
-    ['the real path', () => join(root, 'dist', 'server.js'), true],
-    ['a symlinked plugin root', () => join(linkedRoot, 'dist', 'server.js'), true],
-    ['a case-differing spelling', () => upperCased, caseFolds],
-  ])('serves MCP over stdio through %s', async (_label, entry, applies) => {
-    if (!applies) return; // case-sensitive volume: this spelling names no file at all
+  it.each(ENTRIES.flatMap(([what, parts]) => [
+    [`${what} on the real path`, () => join(root, ...parts)],
+    [`${what} through a symlinked plugin root`, () => join(linkedRoot, ...parts)],
+  ]))('serves MCP over stdio through %s', async (_label, entry) => {
     const message = await initializeThrough(entry());
+    expect((message.result as { serverInfo: { name: string } }).serverInfo.name).toBe('zendesk');
+  }, 60_000);
+
+  // Reported as skipped, not as passed, where the volume is case-sensitive and the path names nothing.
+  it.skipIf(!caseFolds)('serves MCP over stdio through a case-differing spelling', async () => {
+    const message = await initializeThrough(upperCased);
     expect((message.result as { serverInfo: { name: string } }).serverInfo.name).toBe('zendesk');
   }, 60_000);
 

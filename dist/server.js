@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { AuthManager } from './auth/auth-manager.js';
 import { TokenStore } from './auth/token-store.js';
-import { callbackPortOrDefault, dataDirOf, DEFAULT_SCOPES, resolveAuthConfig, stripPlaceholders, USER_CONFIG_FIELD_BY_ENV, } from './auth/config.js';
+import { callbackPortOrDefault, dataDirOf, DEFAULT_SCOPES, resolveAuthConfig, stripPlaceholders, } from './auth/config.js';
 import { readKeychainConfig, resolveTokenStoreKey, runSecurity, writeKeychainConfig, } from './auth/store-key.js';
 import { warnConfig } from './util/warn-config.js';
 import { RateLimiter } from './client/rate-limiter.js';
@@ -54,7 +54,8 @@ function parseSecurityLevel(raw) {
     // less — the only thing left that can correct it is the start naming the level in effect.
     //
     // In the installed plugin absence IS every start, so yes, this is a line on every start of every
-    // installation. That is owned rather than argued away: the alternative is an installation whose
+    // installation — and once per opened session on the remote path (src/remote/session-manager.ts:155
+    // constructs a server per session), which is unbounded. That is owned rather than argued away: the alternative is an installation whose
     // screening level nobody can find out, and a value that WAS read needs no line because it proves
     // itself through the level it produced. The text must not tell the operator to do something the
     // installed case cannot do, so it names where the variable is read instead of ordering them to
@@ -91,8 +92,10 @@ function parseMarkdownDefault(raw) {
         return true;
     if (value === 'true' || value === 'false')
         return value === 'true';
-    warnConfig(`ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false (extension configuration field ` +
-        `"${USER_CONFIG_FIELD_BY_ENV.ZENDESK_MARKDOWN_CONVERSION}") \u2014 using true, the shipped ` +
+    warnConfig(
+    // Same correction as the screening level above: the installed plugin declares no configuration
+    // field, so naming one here pointed at something that does not exist.
+    `ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false \u2014 using true, the shipped ` +
         `default, rather than reading it as a "no".`);
     return true;
 }

@@ -63,7 +63,9 @@ describe('security level — an unrecognized value is never a silent downgrade',
     expect(warnings[0]).toContain('strict | standard | off');
     // …and NOT a configuration field. The installed plugin declares none, so naming one here
     // contradicted the absence branch, which says in so many words that there is no field.
-    expect(warnings[0]).not.toContain('security_level');
+    // Asserted on the phrase, not on the field name: the message legitimately contains
+    // ZENDESK_SECURITY_LEVEL, so a name check would only be passing on letter case.
+    expect(warnings[0]).not.toContain('configuration field');
   });
 
   // stdout is the MCP stdio transport (server.ts connects StdioServerTransport to it); a warning

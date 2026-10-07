@@ -21246,7 +21246,6 @@ var USER_CONFIG_FIELDS = {
   ZENDESK_WORK_HOURS: "work_hours",
   ZENDESK_WORKDAYS: "workdays"
 };
-var USER_CONFIG_FIELD_BY_ENV = USER_CONFIG_FIELDS;
 var PLACEHOLDER = /^\$\{[^}]*\}$/;
 function isPlaceholder(value) {
   return typeof value === "string" && PLACEHOLDER.test(value);
@@ -29673,7 +29672,9 @@ function parseMarkdownDefault(raw) {
   if (!value) return true;
   if (value === "true" || value === "false") return value === "true";
   warnConfig(
-    `ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false (extension configuration field "${USER_CONFIG_FIELD_BY_ENV.ZENDESK_MARKDOWN_CONVERSION}") \u2014 using true, the shipped default, rather than reading it as a "no".`
+    // Same correction as the screening level above: the installed plugin declares no configuration
+    // field, so naming one here pointed at something that does not exist.
+    `ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false \u2014 using true, the shipped default, rather than reading it as a "no".`
   );
   return true;
 }
