@@ -3,9 +3,9 @@
 // THE RULE IS CHEAP. CHOOSING THE TREE IS WHAT IS EXPENSIVE.
 //
 // The rule is one regex at BIND_CALL, unchanged since PR #72; which DIRECTORY it is pointed at has
-// since cost three rounds, two blockers and an owner decision. So: changing what counts as a bind
-// is a small edit next to one constant, while changing what gets scanned means reading all of
-// "choosing the tree" first — every paragraph in it is a wrong root that shipped.
+// since cost three rounds, two blockers and an owner decision. Changing what counts as a bind is a
+// small edit next to one constant; changing what gets scanned means reading all of "choosing the
+// tree" first, because every paragraph in it is a wrong root that shipped.
 //
 // THE RULE. A fixed port on a bind call collides with a concurrent `vitest run` (#23); use
 // freePort().
@@ -34,15 +34,14 @@
 // 53 callers in and three wrong roots exited 0. The mark, the command that counts the defining
 // directories, and the cost the mark brings are at DEFINES_FREE_PORT.
 //
-// WHAT THE GUARD DELIBERATELY CANNOT SEE. Last, because it is reference rather than orientation,
-// and it sits next to the regex it describes: this reads source text and is evadable by
-// construction. The classes it misses are listed above BIND_CALL; catching them needs a parser or
-// a runtime check (#74).
+// WHAT THE GUARD DELIBERATELY CANNOT SEE. It reads source text and is evadable by construction;
+// the classes it misses are listed at BIND_CALL, where the regex they evade is, and catching them
+// needs a parser or a runtime check (#74).
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 
-// THE BLIND SPOTS IN FULL (summarised in the header). Only the call names listed below match, and
+// THE BLIND SPOTS IN FULL. Only the call names listed below match, and
 // only a decimal literal at the call site is read — a const, a variable, 18e3, 0x4650, a computed
 // port and an option bag such as `listen({ port: 8976 })` all pass. An expression is reported by
 // its FIRST literal, so `17_000 + 1_000` is flagged as 17_000: the call site wins over the number,
