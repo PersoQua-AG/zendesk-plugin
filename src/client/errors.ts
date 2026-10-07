@@ -1,5 +1,9 @@
 const DEFAULT_RETRY_AFTER_SECONDS = 60;
 
+// Zendesk windows reset each minute; 5 min bounds a bogus header, far below setTimeout's 2^31 ms.
+// The single cap: the limiter waits this long at most, so the error text must not promise longer.
+export const MAX_RETRY_AFTER_SECONDS = 300;
+
 export class ZendeskApiError extends Error {
   constructor(
     message: string,
@@ -39,14 +43,15 @@ export class ZendeskValidationError extends ZendeskApiError {
 }
 
 // Parse a Retry-After header: integer seconds, or an RFC HTTP-date (delta from
-// now). Anything unparseable (garbage / missing) falls back to a safe default.
+// now). Anything unparseable (garbage / missing) falls back to a safe default. The result is
+// capped, so ZendeskRateLimitError's message states the wait the limiter actually applies.
 export function parseRetryAfter(header: string | null, now: () => number = Date.now): number {
   if (header == null) return DEFAULT_RETRY_AFTER_SECONDS;
   const trimmed = header.trim();
-  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+  if (/^\d+$/.test(trimmed)) return Math.min(Number(trimmed), MAX_RETRY_AFTER_SECONDS);
   const dateMs = Date.parse(trimmed);
   if (!Number.isNaN(dateMs)) {
-    return Math.max(0, Math.ceil((dateMs - now()) / 1000));
+    return Math.min(Math.max(0, Math.ceil((dateMs - now()) / 1000)), MAX_RETRY_AFTER_SECONDS);
   }
   return DEFAULT_RETRY_AFTER_SECONDS;
 }
