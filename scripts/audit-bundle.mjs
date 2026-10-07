@@ -18,7 +18,7 @@
 // Zero deps — plain Node, including the ZIP reader (a .mcpb is a ZIP). It is excluded from the
 // bundle by .mcpbignore's `scripts/` line.
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -371,16 +371,47 @@ const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 // of that was false for the tree it was said about, and the good bundle was destroyed to say it.
 // The quarantine below now runs on `problems` alone; housekeeping decides only the exit code.
 const housekeeping = [];
-if (artifactPath) {
-  for (const stale of [artifactPath, checksumPath]) {
-    try {
-      rmSync(stale, { force: true });
-    } catch (error) {
-      housekeeping.push(
-        `could not clear the stale artifact ${basename(stale)}: ${error.message}` +
-          ' — this tree cannot be released from until that path is gone',
-      );
-    }
+
+// A BUNDLE WHOSE VERSION CANNOT BE ESTABLISHED IS UNFIT, and saying so here is what keeps the rest
+// of this block honest. With both manifest.json and package.json unreadable or versionless,
+// `artifactPath` is null: the write below answered `writeFileSync(null, …)` with an uncaught
+// ERR_INVALID_ARG_TYPE whose own catch then threw again on `basename(null)` — five frames and exit
+// 1, a tree to fix reported as a bundle to fix, which is the #90 class reappearing inside the #90
+// fix. `scripts/validate-manifests.mjs` rejects an empty version before `npm run pack` ever gets
+// here, so only a direct invocation reaches it — which is what the tests do, and what auditing a
+// downloaded artifact would do.
+if (!version) {
+  problems.push(
+    'no version could be read from manifest.json or package.json — there is no name to publish this' +
+      ' bundle under, so it cannot be released',
+  );
+}
+
+// BY PATTERN, not by the one computed name. `if (artifactPath)` skipped the clearing entirely when
+// the version was unresolvable, so an earlier passing run's `zendesk-<v>.mcpb` and its `.sha256`
+// stayed on disk while the refusal printed "No artifact and no checksum were produced." Reproduced
+// with both version sources unreadable. The invariant this block exists for does not depend on
+// being able to name the version, so neither does the sweep. `zendesk.mcpb` itself carries no
+// `-<version>` and is never matched; the quarantine below is what handles it.
+const stale = new RegExp(`^${basename(bundlePath, '.mcpb').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-.+\\.mcpb(\\.sha256)?$`);
+const artifactDir = dirname(bundlePath);
+let staleNames = [];
+try {
+  staleNames = readdirSync(artifactDir).filter((name) => stale.test(name));
+} catch (error) {
+  housekeeping.push(
+    `could not list ${artifactDir} to clear stale artifacts: ${error.message}` +
+      ' — this tree cannot be released from until that directory is readable',
+  );
+}
+for (const name of staleNames) {
+  try {
+    rmSync(join(artifactDir, name), { recursive: false, force: true });
+  } catch (error) {
+    housekeeping.push(
+      `could not clear the stale artifact ${name}: ${error.message}` +
+        ' — this tree cannot be released from until that path is gone',
+    );
   }
 }
 
@@ -512,8 +543,11 @@ if (problems.length > 0 || housekeeping.length > 0) {
       quarantined = null;
       // A quarantine this script could not perform is housekeeping it could not do, so it exits 2
       // and not 1: the caller is being told to fix the TREE, by hand, before anything is uploaded.
-      housekeeping.push(`could not quarantine ${basename(bundlePath)} — DELETE IT BY HAND`);
-      console.error(`  - could not quarantine ${basename(bundlePath)}: ${error.message} — DELETE IT BY HAND`);
+      const said = `could not quarantine ${basename(bundlePath)}: ${error.message} — DELETE IT BY HAND`;
+      // Printed here because the `[...problems, ...housekeeping]` loop above has already run; the
+      // push is what carries the exit code, and one string so the two cannot drift.
+      housekeeping.push(said);
+      console.error(`  - ${said}`);
     }
   }
   console.error('\nNo artifact and no checksum were produced.');
@@ -547,8 +581,18 @@ try {
   );
   // The bundle is CLEAN, so it is left exactly where it is. Nothing is quarantined and nothing is
   // called contaminated: the defect is the tree, and the packed bundle is the thing to keep.
-  rmSync(checksumPath, { force: true });
-  rmSync(artifactPath, { force: true });
+  //
+  // WRAPPED TOO. These two are housekeeping inside a housekeeping handler: a throw here — the half
+  // of the pair that is a directory, say — would replace this exit 2 with a stack trace and exit 1,
+  // which is the unguarded-housekeeping shape one level up. `recursive` is off deliberately: a
+  // directory in the artifact slot is reported, not silently emptied.
+  for (const half of [checksumPath, artifactPath]) {
+    try {
+      rmSync(half, { recursive: false, force: true });
+    } catch (second) {
+      console.error(`  - and ${basename(half)} could not be removed either: ${second.message} — REMOVE IT BY HAND`);
+    }
+  }
   process.exit(2);
 }
 

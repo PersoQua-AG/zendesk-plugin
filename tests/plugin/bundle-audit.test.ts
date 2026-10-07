@@ -950,6 +950,43 @@ describe('a version mismatch blocks the release', () => {
     expect(runAudit(makeTree(), ['zendesk.mcpb', '--expect-version', '1.0.0']).status).toBe(0);
   });
 
+  // NEITHER SOURCE READABLE, which is the case that leaves `artifactPath` null. Before this,
+  // `writeFileSync(null, bundle)` answered with an uncaught ERR_INVALID_ARG_TYPE whose own catch
+  // threw again on `basename(null)`: five frames and exit 1 — the #90 class reappearing inside the
+  // #90 fix. validate-manifests.mjs rejects an empty version before `npm run pack` reaches here, so
+  // only a direct invocation does — which is what this file and an audit of a downloaded artifact do.
+  function unversioned(tree: Tree): void {
+    rmSync(join(tree.dir, 'package.json'));
+    writeFileSync(join(tree.dir, 'manifest.json'), '{ not json');
+  }
+
+  it('refuses a tree with no readable version, as a message and not as a stack trace', () => {
+    const tree = makeTree();
+    unversioned(tree);
+    const run = runAudit(tree);
+
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain('no version could be read');
+    expect(run.stderr).not.toMatch(/^\s+at /m);
+    expect(run.stderr).not.toContain('ERR_INVALID_ARG_TYPE');
+  });
+
+  // The invariant at the top of the housekeeping block does not depend on being able to NAME the
+  // version, so neither does the sweep. `if (artifactPath)` skipped the clearing entirely here, so
+  // an earlier passing run's artifact and checksum sat on disk while the refusal printed "No
+  // artifact and no checksum were produced."
+  it('still clears an earlier run\'s artifact and checksum, which it cannot name', () => {
+    const tree = makeTree();
+    writeFileSync(tree.artifact, 'left by an earlier passing run');
+    writeFileSync(tree.checksum, 'left by an earlier passing run');
+    unversioned(tree);
+    const run = runAudit(tree);
+
+    expect(run.stderr).toContain('No artifact and no checksum were produced');
+    expect(existsSync(tree.artifact), 'the earlier artifact survived the refusal').toBe(false);
+    expect(existsSync(tree.checksum), 'the earlier checksum survived the refusal').toBe(false);
+  });
+
   it('refuses a tree whose package.json it cannot read, rather than releasing an unversioned bundle', () => {
     const tree = makeTree();
     rmSync(join(tree.dir, 'package.json'));
@@ -1270,7 +1307,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
       mutate: [
         // The removal only; the try/catch around it stays, so this ablates the clearing rule and
         // not the guard that #90 put around it. That guard has its own cases above.
-        ['      rmSync(stale, { force: true });', '      void stale;'],
+        ['    rmSync(join(artifactDir, name), { recursive: false, force: true });', '    void name;'],
       ],
       entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
       seed: (t) => writeFileSync(t.artifact, 'stale bundle from the run before'),
