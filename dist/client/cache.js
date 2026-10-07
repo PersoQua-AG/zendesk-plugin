@@ -1,7 +1,10 @@
 import { writeFileSync, readFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, accessSync, constants } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { warnConfig } from '../util/warn-config.js';
 const HANDLE_PATTERN = /^[A-Za-z0-9_-]+$/;
+// fs errors carry the absolute path; only the code may reach the model or the log.
+const errorCode = (err) => err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
 // Cached payloads hold screened ticket PII, so the store must not grow unbounded. Entries expire
 // after a fixed age (mtime-based) and the total on-disk size is capped; both are configurable.
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24h
@@ -31,12 +34,18 @@ export class ResponseCache {
         // report the code and the remedy like the degrade path does, never the path.
         try {
             writeFileSync(path, JSON.stringify(data));
+        }
+        catch (err) {
+            throw new Error(`Caching the response failed (${errorCode(err)}). Make sure the extension's data ` +
+                'directory is a writable directory with free space, then reload the extension.', { cause: err });
+        }
+        // Housekeeping, outside the write contract: the entry is on disk, so the caller must get its
+        // handle even if the sweep fails. Announce it on stderr; the next save() sweeps again.
+        try {
             this.sweep();
         }
         catch (err) {
-            const code = err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
-            throw new Error(`Caching the response failed (${code}). Make sure the extension's data directory is a ` +
-                'writable directory with free space, then reload the extension.');
+            warnConfig(`Cache housekeeping failed (${errorCode(err)}); the cache may grow past its size cap.`);
         }
         return { handle, path };
     }

@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer, type ServerDeps } from '../../src/server.js';
 import { keychain } from './keychain.js';
+import { modeBitsIgnored } from '../setup/mode-bits.js';
 
 // A FILE as data dir makes mkdirSync throw ENOTDIR deterministically, no chmod, even as root.
 
@@ -126,7 +127,7 @@ describe('createServer with a data directory the cache cannot be created in', ()
 });
 
 // chmod is not enforced for root, so the directory would stay writable and the test prove nothing.
-describe.skipIf(process.getuid?.() === 0)('createServer with an existing read-only cache directory', () => {
+describe.skipIf(modeBitsIgnored)('createServer with an existing read-only cache directory', () => {
   it('answers a caching tool with the errno code and no path', async () => {
     const dataDir = readOnlyCacheDataDir();
     const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;

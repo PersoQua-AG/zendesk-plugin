@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, utimesSync, mkdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ResponseCache } from '../../src/client/cache.js';
+import { modeBitsIgnored } from '../setup/mode-bits.js';
 
 describe('ResponseCache', () => {
   let dir: string;
@@ -67,7 +68,7 @@ describe('ResponseCache', () => {
 
   // #54: the constructor, not the first save(), must reject a cache dir it cannot write. chmod is
   // not enforced for root, so under root the directory would stay writable and prove nothing.
-  it.skipIf(process.getuid?.() === 0)('throws EACCES at construction for an existing read-only directory', () => {
+  it.skipIf(modeBitsIgnored)('throws EACCES at construction for an existing read-only directory', () => {
     const readOnly = join(dir, 'cache');
     mkdirSync(readOnly);
     chmodSync(readOnly, 0o500);
@@ -85,7 +86,7 @@ describe('ResponseCache', () => {
   });
 
   // sweep() reads the directory on every save, so write+traverse alone is not enough to use it.
-  it.skipIf(process.getuid?.() === 0)('throws EACCES at construction for a write-only directory (0300)', () => {
+  it.skipIf(modeBitsIgnored)('throws EACCES at construction for a write-only directory (0300)', () => {
     const writeOnly = join(dir, 'cache-0300');
     mkdirSync(writeOnly);
     chmodSync(writeOnly, 0o300);
@@ -104,7 +105,7 @@ describe('ResponseCache', () => {
 
   // The constructor's check goes stale (ENOSPC, EROFS, a quota, plain TOCTOU). save() must still
   // not hand Node's raw error — which carries the absolute path — to the tool result.
-  it.skipIf(process.getuid?.() === 0)('reports a write failure by code, without the path', () => {
+  it.skipIf(modeBitsIgnored)('reports a write failure by code, without the path', () => {
     const cache = new ResponseCache(dir);
     chmodSync(dir, 0o500); // becomes unwritable AFTER construction succeeded
     try {
@@ -120,6 +121,39 @@ describe('ResponseCache', () => {
       expect(message).not.toContain('.json');
     } finally {
       chmodSync(dir, 0o700);
+    }
+  });
+
+  // The sanitized message is for the model; the diagnosable original must not be thrown away.
+  it.skipIf(modeBitsIgnored)('keeps the original fs error as the cause', () => {
+    const cache = new ResponseCache(dir);
+    chmodSync(dir, 0o500);
+    try {
+      let cause: unknown;
+      try {
+        cache.save('zendesk_get_me', { a: 1 });
+      } catch (err) {
+        cause = (err as Error).cause;
+      }
+      expect((cause as NodeJS.ErrnoException | undefined)?.code).toBe('EACCES');
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
+  // 0300 is write+traverse without read: the write lands, sweep()'s readdirSync throws. The entry
+  // is on disk, so the caller must still get its handle instead of a "caching failed" error.
+  it.skipIf(modeBitsIgnored)('returns the handle when only the sweep fails', () => {
+    const cache = new ResponseCache(dir);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    chmodSync(dir, 0o300);
+    try {
+      const entry = cache.save('zendesk_get_me', { a: 1 });
+      expect(entry.handle).toMatch(/^zendesk_get_me-/);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
+    } finally {
+      chmodSync(dir, 0o700);
+      warn.mockRestore();
     }
   });
 });

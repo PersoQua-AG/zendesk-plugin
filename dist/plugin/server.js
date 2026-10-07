@@ -21881,6 +21881,7 @@ import { writeFileSync as writeFileSync2, readFileSync as readFileSync2, mkdirSy
 import { join as join2, resolve, sep } from "node:path";
 import { randomBytes as randomBytes3 } from "node:crypto";
 var HANDLE_PATTERN = /^[A-Za-z0-9_-]+$/;
+var errorCode = (err) => err instanceof Error && "code" in err ? String(err.code) : "unknown error";
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
 var ResponseCache = class {
@@ -21901,11 +21902,17 @@ var ResponseCache = class {
     const path = join2(this.cacheDir, `${handle}.json`);
     try {
       writeFileSync2(path, JSON.stringify(data));
+    } catch (err) {
+      throw new Error(
+        `Caching the response failed (${errorCode(err)}). Make sure the extension's data directory is a writable directory with free space, then reload the extension.`,
+        { cause: err }
+      );
+    }
+    try {
       this.sweep();
     } catch (err) {
-      const code = err instanceof Error && "code" in err ? String(err.code) : "unknown error";
-      throw new Error(
-        `Caching the response failed (${code}). Make sure the extension's data directory is a writable directory with free space, then reload the extension.`
+      warnConfig(
+        `Cache housekeeping failed (${errorCode(err)}); the cache may grow past its size cap.`
       );
     }
     return { handle, path };
