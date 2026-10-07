@@ -3,19 +3,13 @@
 // described. The whole 6×6 table is walked here, both tool paths, through the real McpServer and
 // SDK client so the assertion covers the shipped boundary and not just the pure helper.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { boot, json, once, type Call } from '../skills/probe.js';
+import { boot, jobReply, json, once, read, type Call } from '../skills/probe.js';
 
 const STATUSES = ['new', 'open', 'pending', 'hold', 'solved', 'closed'] as const;
 type Status = (typeof STATUSES)[number];
 const STAMP = '2026-07-20T10:00:00Z';
 
-const SKILL = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills', 'ticket-manager', 'SKILL.md'),
-  'utf8',
-);
+const SKILL = read('skills/ticket-manager/SKILL.md');
 
 // The expectation is TRANSCRIBED from the document, never retyped from the production rule: a test
 // that restates `transitionRefusal` agrees with it by construction and cannot notice a wrong rule.
@@ -122,9 +116,7 @@ describe('zendesk_update_tickets_bulk enforces the lifecycle table (#61)', () =>
     if (c.path.endsWith('/tickets/show_many.json')) {
       return json({ tickets: [{ id: 1001, status: 'closed' }, { id: 1002, status: 'open' }] });
     }
-    return n <= 2
-      ? json({ job_status: { id: 'job-1' } })
-      : json({ job_status: { id: 'job-1', status: 'completed', results: [{ id: 1002, success: true }] } });
+    return jobReply(n, [{ id: 1002, success: true }], 2);
   };
 
   // The id LIST that reaches update_many is asserted in tests/tools/ticket-bulk-update.test.ts,
@@ -186,9 +178,7 @@ describe('an unreadable current status refuses the write (#61, fail-closed)', ()
       { ids: [1001, 1002], fields: { status: 'pending' }, force: true },
       (c: Call, n: number): Response => {
         if (c.path.includes('/tickets/show_many.json')) return json({ tickets: [{ id: 1002, status: 'open' }] });
-        return n <= 2
-          ? json({ job_status: { id: 'job-1' } })
-          : json({ job_status: { id: 'job-1', status: 'completed', results: [{ id: 1002, success: true }] } });
+        return jobReply(n, [{ id: 1002, success: true }], 2);
       },
     );
     expect(r.isError).toBe(false);
@@ -208,9 +198,7 @@ describe('an unreadable current status refuses the write (#61, fail-closed)', ()
         if (c.path.includes('/tickets/show_many.json')) {
           return json({ tickets: [{ id: 'not-a-number', status: 'open' }, { id: 1002, status: 'open' }] });
         }
-        return n <= 2
-          ? json({ job_status: { id: 'job-1' } })
-          : json({ job_status: { id: 'job-1', status: 'completed', results: [{ id: 1002, success: true }] } });
+        return jobReply(n, [{ id: 1002, success: true }], 2);
       },
     );
     expect(r.isError).toBe(false);

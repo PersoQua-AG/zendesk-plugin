@@ -4,16 +4,13 @@
 // stripping the undeclared key — calling the src/tools/* function directly would bypass that parse
 // and pass for the wrong reason.
 import { describe, it, expect } from 'vitest';
-import { json, once, type Call } from '../skills/probe.js';
+import { jobReply, json, once, type Call } from '../skills/probe.js';
 
 const SOURCE = 123;
 const COMMENT = { body: 'Picking this up again', public: true };
 
 // create_many is an async job: hand back a job id, then a completed status on the poll.
-const bulkReply = (_c: Call, n: number): Response =>
-  n === 1
-    ? json({ job_status: { id: 'job-1' } })
-    : json({ job_status: { id: 'job-1', status: 'completed', results: [{ id: 9001, success: true }] } });
+const bulkReply = (_c: Call, n: number): Response => jobReply(n, [{ id: 9001, success: true }]);
 
 const singleReply = (): Response => json({ ticket: { id: 9001 } });
 

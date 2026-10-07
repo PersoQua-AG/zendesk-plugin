@@ -4,15 +4,12 @@
 // command, MCP prompt or tool description cannot quietly re-introduce a percentage. The prompt
 // and tool lists are read from the running server, never hard-coded, so a new surface is covered
 // the moment it is registered.
-import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, it, expect, afterEach } from 'vitest';
 import { cleanupDirs, connect, fixtureEnv, textOf } from '../server/harness.js';
+import { filesIn, read } from '../skills/probe.js';
 
 afterEach(cleanupDirs);
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PERCENT = /%|\bpercent/i;
 
 // Every offending line is listed as `file:line: text`, so a failure names the site to fix.
@@ -23,18 +20,11 @@ function offendingLines(label: string, text: string): string[] {
     .filter((l): l is string => l !== null);
 }
 
-function markdownFiles(dir: string): string[] {
-  return readdirSync(join(root, dir), { recursive: true, encoding: 'utf8' })
-    .filter((f) => f.endsWith('.md'))
-    .map((f) => join(dir, f))
-    .sort();
-}
-
 describe('KPI surfaces carry no percentage (#65)', () => {
   it('T6: no skill, command or agent file asks for a percentage', () => {
-    const files = ['skills', 'commands', 'agents'].flatMap(markdownFiles);
+    const files = ['skills', 'commands', 'agents'].flatMap((dir) => filesIn(dir, '.md'));
     expect(files.length).toBeGreaterThan(0);
-    expect(files.flatMap((f) => offendingLines(f, readFileSync(join(root, f), 'utf8')))).toEqual([]);
+    expect(files.flatMap((f) => offendingLines(f, read(f)))).toEqual([]);
   });
 
   it('T6: no registered MCP prompt body or description asks for a percentage', async () => {
@@ -62,7 +52,7 @@ describe('KPI surfaces carry no percentage (#65)', () => {
   });
 
   it('T6: the data-analyst skill names the CSAT good, bad and rated counts', () => {
-    const skill = readFileSync(join(root, 'skills/data-analyst/SKILL.md'), 'utf8');
+    const skill = read('skills/data-analyst/SKILL.md');
     for (const word of ['good', 'bad', 'rated']) expect(skill).toMatch(new RegExp(`\\b${word}\\b`));
   });
 
@@ -71,7 +61,7 @@ describe('KPI surfaces carry no percentage (#65)', () => {
   // the one sentence #65 changed, so an edit to only one of the two is named here as well.
   it('T7: the headline-numbers sentence is identical in commands/report.md and the report prompt', async () => {
     const sentence = (text: string): string | undefined => text.match(/Present the headline numbers:[^.]*\./)?.[0];
-    const fromFile = sentence(readFileSync(join(root, 'commands/report.md'), 'utf8'));
+    const fromFile = sentence(read('commands/report.md'));
     const client = await connect(fixtureEnv());
     const fromPrompt = sentence(textOf(await client.getPrompt({ name: 'report', arguments: { range: 'x' } })));
     await client.close();
