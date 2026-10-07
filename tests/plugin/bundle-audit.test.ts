@@ -1156,6 +1156,26 @@ describe('the quarantine keeps what the run before it found', () => {
 // JavaScript string is a refusal rather than a stack trace.
 // =============================================================================================
 describe('the caller names the bundle', () => {
+  // The artifact slot is the script tree's, because the version is. It used to be the caller's
+  // directory with this tree's version number, so auditing a downloaded bundle deleted — and on a
+  // pass overwrote — the operator's own release of that number, `.sha256` included.
+  it('never touches an artifact in the caller\'s directory', () => {
+    const tree = makeTree();
+    const elsewhere = mkdtempSync(join(tmpdir(), 'audit-foreign-'));
+    temps.push(elsewhere);
+    copyFileSync(tree.bundle, join(elsewhere, 'zendesk.mcpb'));
+    // The operator's own release of the version THIS tree declares, sitting where they put it.
+    const theirs = join(elsewhere, 'zendesk-1.0.0.mcpb');
+    writeFileSync(theirs, 'the operator released this');
+    writeFileSync(`${theirs}.sha256`, 'and this is its checksum');
+
+    expect(runAudit(tree, ['./zendesk.mcpb'], elsewhere).status).toBe(0);
+    expect(readFileSync(theirs, 'utf8')).toBe('the operator released this');
+    expect(readFileSync(`${theirs}.sha256`, 'utf8')).toBe('and this is its checksum');
+    // It went into the tree that declared the number instead.
+    expect(existsSync(tree.artifact)).toBe(true);
+  });
+
   it('resolves a relative argument against the caller cwd, not the script tree', () => {
     const tree = makeTree();
     const elsewhere = mkdtempSync(join(tmpdir(), 'audit-cwd-'));

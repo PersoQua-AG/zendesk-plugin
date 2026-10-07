@@ -435,7 +435,13 @@ const version = manifest?.version ?? pkg?.version ?? null;
 
 // A stale artifact from an earlier, passing run must not survive a failing one — otherwise "no
 // artifact is published" holds only for the operator who never released this bundle before.
-const artifactPath = version ? join(dirname(bundlePath), `${basename(bundlePath, '.mcpb')}-${version}.mcpb`) : null;
+// THE ARTIFACT SLOT BELONGS TO THIS TREE, because `version` does (#105). It used to be
+// `dirname(bundlePath)` — the CALLER's directory — while the number came from the script's
+// manifest, so auditing a downloaded bundle cleared, and on a pass overwrote, the operator's own
+// release of whatever version this checkout happens to declare, `.sha256` included, in a directory
+// this script had never written to. Both the clearing below and the write on the success path now
+// happen in `root`. For `npm run pack` nothing changes: there the bundle IS in root.
+const artifactPath = version ? join(root, `${basename(bundlePath, '.mcpb')}-${version}.mcpb`) : null;
 const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 // `force: true` suppresses ENOENT and nothing else. A stale artifact that is a non-empty
 // directory makes this throw, and an unwritable parent makes it throw EACCES — unguarded, that
