@@ -5,7 +5,7 @@
 // passes through the field-agnostic deep screen).
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../../client/http-client.js';
-import type { ResponseCache } from '../../client/cache.js';
+import type { CacheStore } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
 import { makeDescribe } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from '../cbp-list.js';
@@ -30,7 +30,7 @@ const describeSection = makeDescribe<Section>('section', (s) => `#${s.id} ${s.na
 
 export async function listSections(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -64,7 +64,7 @@ const describeCategory = makeDescribe<Category>('category', (c) => `#${c.id} ${c
 
 export async function listCategories(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -93,7 +93,7 @@ export interface SectionCreateFields {
 
 export function createSection(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { categoryId: number; fields: SectionCreateFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -113,7 +113,7 @@ export type CategoryCreateFields = SectionCreateFields;
 
 export function createCategory(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { fields: CategoryCreateFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {

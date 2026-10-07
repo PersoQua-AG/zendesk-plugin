@@ -8,7 +8,6 @@ import {
   DEFAULT_SCOPES,
   resolveAuthConfig,
   stripPlaceholders,
-  USER_CONFIG_FIELD_BY_ENV,
   type ResolvedAuthConfig,
 } from './auth/config.js';
 import {
@@ -20,9 +19,10 @@ import {
 } from './auth/store-key.js';
 import type { OAuthConfig } from './auth/oauth-flow.js';
 import { warnConfig } from './util/warn-config.js';
+import { errorCode } from './util/error-code.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
-import { ResponseCache } from './client/cache.js';
+import { ResponseCache, type CacheStore } from './client/cache.js';
 import type { SecurityLevel } from './security/screen.js';
 import type { TokenProvider } from './client/token-provider.js';
 import type { ToolContext } from './register/context.js';
@@ -40,7 +40,8 @@ import { registerPrompts } from './register/prompts.js';
 import { parseReportConfig } from './tools/analytics/business-hours.js';
 import { argv } from 'node:process';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { statSync } from 'node:fs';
 
 // Account-wide rate buckets (PRD §5 infra 1): everything shares 400/min; incremental export is
 // special-cased to 10/min.
@@ -67,11 +68,23 @@ export const SECURITY_LEVELS: readonly SecurityLevel[] = ['strict', 'standard', 
 
 function parseSecurityLevel(raw: string | undefined): SecurityLevel {
   const value = raw?.trim().toLowerCase();
-  if (!value) return 'standard';
+  // Absence was the one resolution with no symptom at all, and it was silent in the dangerous
+  // direction (#93 gap B): an operator who believed they had configured `strict` got `standard` and
+  // nothing anywhere said so. In the installed plugin absence IS every start, and once per opened
+  // session on the remote path.
+  if (!value) {
+    warnConfig(
+      'ZENDESK_SECURITY_LEVEL is not set — injection screening runs at standard, the shipped level. ' +
+        'The installed plugin declares no configuration field for it, so only a hand-started server ' +
+        `or the remote connector reads this variable (${SECURITY_LEVELS.join(' | ')}; README, Security).`,
+    );
+    return 'standard';
+  }
   if ((SECURITY_LEVELS as readonly string[]).includes(value)) return value as SecurityLevel;
+  // JSON.stringify, not interpolation: it supplies the quotes AND escapes the breaks, so a value
+  // like 'str\nict' can no longer forge a second line on the channel that reports it.
   warnConfig(
-    `ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(' | ')} (extension configuration ` +
-      `field "${USER_CONFIG_FIELD_BY_ENV.ZENDESK_SECURITY_LEVEL}") \u2014 using ` +
+    `ZENDESK_SECURITY_LEVEL ${JSON.stringify(raw)} is not one of ${SECURITY_LEVELS.join(' | ')} \u2014 using ` +
       `strict, the strictest level, rather than silently screening less.`,
   );
   return 'strict';
@@ -89,8 +102,7 @@ function parseMarkdownDefault(raw: string | undefined): boolean {
   if (!value) return true;
   if (value === 'true' || value === 'false') return value === 'true';
   warnConfig(
-    `ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false (extension configuration field ` +
-      `"${USER_CONFIG_FIELD_BY_ENV.ZENDESK_MARKDOWN_CONVERSION}") \u2014 using true, the shipped ` +
+    `ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false \u2014 using true, the shipped ` +
       `default, rather than reading it as a "no".`,
   );
   return true;
@@ -141,12 +153,13 @@ function resolveOrDegrade(env: NodeJS.ProcessEnv, security: RunSecurity): AuthRe
   }
 }
 
-// mkdir can throw (EACCES/ENOSPC/ENOTDIR); tokens share the dir, so degrade like a bad config.
-function openCacheOrDegrade(auth: AuthResolution): { auth: AuthResolution; cache: ResponseCache; cacheOk: boolean } {
+// Opening the cache can throw (EACCES/ENOSPC/ENOTDIR — the dir is created AND checked usable);
+// tokens share the dir, so degrade like a bad config.
+function openCacheOrDegrade(auth: AuthResolution): { auth: AuthResolution; cache: CacheStore; cacheOk: boolean } {
   try {
     return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')), cacheOk: true };
   } catch (err) {
-    const code = err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
+    const code = errorCode(err);
     const problem =
       `The extension's data directory cannot be used (${code}), so responses cannot be cached and ` +
       `tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;
@@ -154,9 +167,7 @@ function openCacheOrDegrade(auth: AuthResolution): { auth: AuthResolution; cache
     const fail = (): never => {
       throw new Error(reason);
     };
-    // ResponseCache is nominal (private fields); tools only call save/load.
-    const stub = { save: fail, load: fail } satisfies Pick<ResponseCache, 'save' | 'load'>;
-    const cache = stub as unknown as ResponseCache;
+    const cache: CacheStore = { save: fail, load: fail };
     return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
   }
 }
@@ -181,7 +192,7 @@ export interface ServerDeps {
   authManager?: TokenProvider;
   rateLimiter?: RateLimiter;
   incrementalRateLimiter?: RateLimiter;
-  cache?: ResponseCache;
+  cache?: CacheStore;
   // Test seam only: a mocked Zendesk fetch for the per-session http client. Default (stdio and
   // prod) leaves it unset → the client uses the global fetch, byte-identical to today.
   fetchImpl?: typeof fetch;
@@ -324,7 +335,23 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
 
 // Connect stdio only when run as the process entrypoint (node dist/server.js), so importing this
 // module for tests does not attempt to open a transport.
-if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) {
+//
+// Compared by file IDENTITY, not by name (#63): Node resolves symlinks in an ES module's
+// import.meta.url but leaves argv[1] as the host spelled it, so a plugin root reached through a
+// symlink made a name comparison unequal — the module loaded, no transport was connected, and the
+// process exited 0 with an empty stderr. dev+ino is what the filesystem itself calls identity, so
+// no spelling can split one file into two. An argv[1] that names no file answers "not the
+// entrypoint", and { throwIfNoEntry: false } draws exactly that line: measured ENOENT and ENOTDIR
+// return undefined while ELOOP and EACCES still throw, so a stat that fails for any other reason
+// leaves a stack on stderr instead of the silent exit 0 with no transport that #63 forbids.
+function startedAsEntrypoint(): boolean {
+  const started = argv[1] ? statSync(argv[1], { throwIfNoEntry: false }) : undefined;
+  if (!started) return false;
+  const self = statSync(fileURLToPath(import.meta.url));
+  return started.dev === self.dev && started.ino === self.ino;
+}
+
+if (startedAsEntrypoint()) {
   const { server } = createServer();
   await server.connect(new StdioServerTransport());
 }

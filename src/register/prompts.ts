@@ -59,7 +59,7 @@ Summarize matches grouped by type in a compact table (id, key fields, a one-line
 
 Use the \`data-analyst\` skill. Resolve the range into \`startTime\` (and \`endTime\`) as unix epoch **seconds** — interpret shorthand like \`last-30-days\` / \`last-7-days\` / \`this-month\`, or an explicit \`YYYY-MM-DD..YYYY-MM-DD\` window. Explicit-date windows are **inclusive-end**: the end date's full day counts, so \`2026-06-01..2026-06-30\` resolves to \`startTime\` = 2026-06-01 00:00 UTC and \`endTime\` = 2026-07-01 00:00 UTC (Jun 30 included). State the resolved UTC window back to the user, then call \`zendesk_report\` with those times.
 
-Present the headline numbers: ticket volume, first-reply-time and resolution-time (label calendar vs business-hours for each), SLA-breach count, and CSAT %. If the user asks to drill in, use \`zendesk_query\` on the report's cache handle rather than re-fetching. If no range was given, default to the last 30 days and say so.`,
+Present the headline numbers: ticket volume, first-reply-time and resolution-time (label calendar vs business-hours for each), SLA-breach count, and the CSAT good/bad/rated counts (KPIs are plain counts, never derived shares). If the user asks to drill in, use \`zendesk_query\` on the report's cache handle rather than re-fetching. If no range was given, default to the last 30 days and say so.`,
   },
   {
     name: 'escalate',

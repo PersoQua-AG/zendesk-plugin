@@ -32,7 +32,7 @@ Drive the ticket lifecycle safely. Every state change is proposed to the user an
 
 ## Lifecycle-state validation
 
-Zendesk statuses form this machine: `new → open → pending → hold → solved → closed`. Validate the target status against the current status before proposing an update.
+Zendesk statuses form this machine: `new → open → pending → hold → solved → closed`. Validate the target status against the current status before proposing an update. The ❌ cells below are enforced by two tools and only those two: `zendesk_update_ticket` and `zendesk_update_tickets_bulk` read the current status and refuse a forbidden transition before any write, on `force:true` as well, and so are the two Rules that make `new` and `closed` refuse even their own status. A current status they cannot read is refused too, rather than assumed harmless, and so is a current status that is not one of the six columns below — a capitalisation difference or a status Zendesk adds later counts as unreadable, not as harmless. `zendesk_apply_macro_to_ticket` writes the preview verbatim and is NOT gated, so a macro that sets a status can still reach a cell the table refuses — check the table yourself before applying one.
 
 | From \ To | new | open | pending | hold | solved | closed |
 |---|---|---|---|---|---|---|
@@ -45,14 +45,23 @@ Zendesk statuses form this machine: `new → open → pending → hold → solve
 
 Rules:
 - **`closed` is terminal.** A closed ticket cannot be reopened or edited. If the user asks to reopen a closed ticket, DO NOT attempt `zendesk_update_ticket`. Explain it is closed and offer to **create a linked follow-up ticket** (see below).
-- **Never move a ticket back to `new`** — `new` is the birth state only; warn and confirm if requested.
+- **Never move a ticket back to `new`** — `new` is the birth state only. The tool refuses it from every state, so do not propose it: explain that `new` cannot be restored and offer the state the user actually wants (usually `open`).
 - Reopening a `solved` ticket (→ `open`/`pending`) is allowed while it is still solved; confirm it is not already closed first.
 - **`hold` may be plan-gated.** The on-hold status is an Enterprise/Professional feature on many plans; a `→ hold` update can fail on accounts where it is not enabled. If it errors, report that it is likely unavailable on this plan rather than retrying.
 - `closed` is normally set by Zendesk automations, not manually — if the user asks to set `closed`, note that and confirm.
 
 ### Creating a follow-up for a closed ticket
 
-To carry a closed ticket's context forward, create a **linked** follow-up. The link field `via_followup_source_id` is only settable through a raw ticket record, so use `zendesk_create_tickets_bulk` with a single record:
+To carry a closed ticket's context forward, create a **linked** follow-up. Both create tools accept the link, so use the single-create tool unless you are creating several at once. The two key names differ because a bulk record is a raw Zendesk ticket while every single-tool argument is camelCase — and neither tool drops a key it does not know: an undeclared or mistyped key comes back as an input-validation error, never as a ticket created without its link.
+
+```
+zendesk_create_ticket  subject:"Follow-up: <original subject>"
+                       comment:"<opening message>"
+                       requesterId:<original requester id>
+                       followupSourceId:<closed ticket id>
+```
+
+For several at once, `zendesk_create_tickets_bulk` takes the raw Zendesk field name per record:
 
 ```
 zendesk_create_tickets_bulk  tickets:[{
@@ -63,7 +72,7 @@ zendesk_create_tickets_bulk  tickets:[{
 }]
 ```
 
-(For an unlinked new ticket, `zendesk_create_ticket` with `subject` + `comment` is simpler — mention the trade-off and let the user choose.) Confirm before creating.
+Pass the source id whenever the follow-up belongs to an existing closed ticket: omitting it creates an **unlinked** ticket whose history does not carry forward. Zendesk ignores `submitter_id` on a follow-up create. Confirm before creating.
 
 ## Replies and internal notes
 
