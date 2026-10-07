@@ -22762,6 +22762,30 @@ async function createEntity(client, cache, config2, fields, securityLevel) {
   return { summary: `Created ${config2.resourceLabel} #${record2.id}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }
 
+// src/tools/ticket-status.ts
+var FOLLOWUP_HINT = "To carry its context forward, create a linked follow-up instead: zendesk_create_ticket with followupSourceId, or zendesk_create_tickets_bulk with via_followup_source_id.";
+function transitionRefusal(current, target) {
+  if (target === void 0) return null;
+  if (target === "new") {
+    return "Refusing to set status `new`: it is the birth state only and cannot be set on an existing ticket.";
+  }
+  if (current === "closed" && target !== "closed") {
+    return `Refusing the status transition closed \u2192 ${target}: a closed ticket is terminal and cannot be reopened or edited. ${FOLLOWUP_HINT}`;
+  }
+  return null;
+}
+var StatusSchema = external_exports.object({ status: external_exports.string().nullish() });
+async function readStatus(client, ticketId) {
+  const raw = await client.request(`/tickets/${ticketId}.json`);
+  const parsed = external_exports.object({ ticket: StatusSchema }).safeParse(raw);
+  return parsed.success ? parsed.data.ticket.status ?? null : null;
+}
+async function readStatuses(client, ids) {
+  const raw = await client.request(`/tickets/show_many.json?ids=${encodeURIComponent(ids.join(","))}`);
+  const parsed = external_exports.object({ tickets: external_exports.array(StatusSchema.extend({ id: external_exports.number() })) }).safeParse(raw);
+  return new Map(parsed.success ? parsed.data.tickets.map((t) => [t.id, t.status ?? null]) : []);
+}
+
 // src/tools/tickets.ts
 var TicketSchema = external_exports.object({
   id: external_exports.number(),
@@ -22845,6 +22869,13 @@ async function updateTicket(client, cache, params, securityLevel = "standard") {
     throw new Error(
       "Refusing to update ticket without an updatedStamp: pass the updatedStamp from a prior read to enable safe optimistic-concurrency (recommended), or set force:true to deliberately overwrite without a concurrency check."
     );
+  }
+  const target = params.fields.status;
+  if (target !== void 0) {
+    const withoutRead = transitionRefusal(void 0, target);
+    if (withoutRead) throw new Error(withoutRead);
+    const refusal = transitionRefusal(await readStatus(client, params.ticketId), target);
+    if (refusal) throw new Error(refusal);
   }
   const result = await safeUpdateWithConflict(client, cache, {
     path: `/tickets/${params.ticketId}.json`,
@@ -22964,8 +22995,23 @@ async function updateTicketsBulk(client, cache, params, poll = {}, securityLevel
       "Refusing bulk field update: update_many skips per-ticket optimistic-concurrency (safe_update) and can silently overwrite concurrent changes across up to 100 tickets. Set force:true to acknowledge and proceed with the bulk overwrite."
     );
   }
-  const path = `/tickets/update_many.json?ids=${encodeURIComponent(params.ids.join(","))}`;
-  return runJob(client, cache, "zendesk_update_tickets_bulk", path, { ticket: params.fields }, "PUT", poll, securityLevel);
+  let ids = params.ids;
+  let refusedNote = "";
+  const target = params.fields.status;
+  if (target !== void 0) {
+    const withoutRead = transitionRefusal(void 0, target);
+    if (withoutRead) throw new Error(withoutRead);
+    const statuses = await readStatuses(client, params.ids);
+    const refused = params.ids.filter((id) => transitionRefusal(statuses.get(id), target) !== null);
+    if (refused.length > 0) {
+      ids = params.ids.filter((id) => !refused.includes(id));
+      refusedNote = ` Refused on a forbidden status transition to ${target}, not written: ${refused.join(", ")}.`;
+      if (ids.length === 0) throw new Error(`Refusing the bulk update \u2014 no ticket in the batch may move to ${target}.${refusedNote}`);
+    }
+  }
+  const path = `/tickets/update_many.json?ids=${encodeURIComponent(ids.join(","))}`;
+  const result = await runJob(client, cache, "zendesk_update_tickets_bulk", path, { ticket: params.fields }, "PUT", poll, securityLevel);
+  return refusedNote ? { ...result, summary: `${result.summary}${refusedNote}` } : result;
 }
 
 // src/tools/ticket-audits.ts

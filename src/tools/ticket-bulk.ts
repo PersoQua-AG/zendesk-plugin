@@ -5,6 +5,7 @@ import { pollJobToCompletion, type JobStatus, type JobPollerOptions } from '../c
 import type { SecurityLevel } from '../security/screen.js';
 import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import type { TicketUpdateFields } from './tickets.js';
+import { readStatuses, transitionRefusal } from './ticket-status.js';
 
 type PollOverrides = Partial<Pick<JobPollerOptions, 'sleep' | 'intervalMs' | 'maxAttempts'>>;
 
@@ -74,6 +75,24 @@ export async function updateTicketsBulk(
       'Refusing bulk field update: update_many skips per-ticket optimistic-concurrency (safe_update) and can silently overwrite concurrent changes across up to 100 tickets. Set force:true to acknowledge and proceed with the bulk overwrite.',
     );
   }
-  const path = `/tickets/update_many.json?ids=${encodeURIComponent(params.ids.join(','))}`;
-  return runJob(client, cache, 'zendesk_update_tickets_bulk', path, { ticket: params.fields }, 'PUT', poll, securityLevel);
+  // #61: update_many shares one field set across up to 100 tickets, so the lifecycle table is
+  // checked per ticket and the refused ones are dropped from the batch and named in the result —
+  // a single forbidden ticket must neither be written nor cancel the rest of the batch.
+  let ids = params.ids;
+  let refusedNote = '';
+  const target = params.fields.status;
+  if (target !== undefined) {
+    const withoutRead = transitionRefusal(undefined, target);
+    if (withoutRead) throw new Error(withoutRead);
+    const statuses = await readStatuses(client, params.ids);
+    const refused = params.ids.filter((id) => transitionRefusal(statuses.get(id), target) !== null);
+    if (refused.length > 0) {
+      ids = params.ids.filter((id) => !refused.includes(id));
+      refusedNote = ` Refused on a forbidden status transition to ${target}, not written: ${refused.join(', ')}.`;
+      if (ids.length === 0) throw new Error(`Refusing the bulk update — no ticket in the batch may move to ${target}.${refusedNote}`);
+    }
+  }
+  const path = `/tickets/update_many.json?ids=${encodeURIComponent(ids.join(','))}`;
+  const result = await runJob(client, cache, 'zendesk_update_tickets_bulk', path, { ticket: params.fields }, 'PUT', poll, securityLevel);
+  return refusedNote ? { ...result, summary: `${result.summary}${refusedNote}` } : result;
 }

@@ -32,7 +32,7 @@ Drive the ticket lifecycle safely. Every state change is proposed to the user an
 
 ## Lifecycle-state validation
 
-Zendesk statuses form this machine: `new → open → pending → hold → solved → closed`. Validate the target status against the current status before proposing an update.
+Zendesk statuses form this machine: `new → open → pending → hold → solved → closed`. Validate the target status against the current status before proposing an update. The ❌ cells below are also enforced by the tools: `zendesk_update_ticket` and `zendesk_update_tickets_bulk` read the current status and refuse a forbidden transition before any write, on `force:true` as well.
 
 | From \ To | new | open | pending | hold | solved | closed |
 |---|---|---|---|---|---|---|
@@ -45,7 +45,7 @@ Zendesk statuses form this machine: `new → open → pending → hold → solve
 
 Rules:
 - **`closed` is terminal.** A closed ticket cannot be reopened or edited. If the user asks to reopen a closed ticket, DO NOT attempt `zendesk_update_ticket`. Explain it is closed and offer to **create a linked follow-up ticket** (see below).
-- **Never move a ticket back to `new`** — `new` is the birth state only; warn and confirm if requested.
+- **Never move a ticket back to `new`** — `new` is the birth state only. The tool refuses it from every state, so do not propose it: explain that `new` cannot be restored and offer the state the user actually wants (usually `open`).
 - Reopening a `solved` ticket (→ `open`/`pending`) is allowed while it is still solved; confirm it is not already closed first.
 - **`hold` may be plan-gated.** The on-hold status is an Enterprise/Professional feature on many plans; a `→ hold` update can fail on accounts where it is not enabled. If it errors, report that it is likely unavailable on this plan rather than retrying.
 - `closed` is normally set by Zendesk automations, not manually — if the user asks to set `closed`, note that and confirm.

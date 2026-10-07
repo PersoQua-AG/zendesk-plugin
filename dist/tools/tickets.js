@@ -4,6 +4,7 @@ import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, screen
 import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
 import { markdownToHtml } from '../util/markdown.js';
 import { safeUpdateWithConflict } from './write-helpers.js';
+import { readStatus, transitionRefusal } from './ticket-status.js';
 const TicketSchema = z.object({
     id: z.number(),
     subject: z.string().nullish(),
@@ -99,6 +100,18 @@ export async function updateTicket(client, cache, params, securityLevel = 'stand
     // mirroring the append-tags/replace:true pattern.
     if (!params.updatedStamp && !params.force) {
         throw new Error('Refusing to update ticket without an updatedStamp: pass the updatedStamp from a prior read to enable safe optimistic-concurrency (recommended), or set force:true to deliberately overwrite without a concurrency check.');
+    }
+    // #61: the lifecycle table is enforced here, before any write, on force:true as well — force
+    // acknowledges a concurrency overwrite, not an impossible transition. → new is refused from
+    // every state, so it costs no request; the terminal-closed rule needs the current status.
+    const target = params.fields.status;
+    if (target !== undefined) {
+        const withoutRead = transitionRefusal(undefined, target);
+        if (withoutRead)
+            throw new Error(withoutRead);
+        const refusal = transitionRefusal(await readStatus(client, params.ticketId), target);
+        if (refusal)
+            throw new Error(refusal);
     }
     const result = await safeUpdateWithConflict(client, cache, {
         path: `/tickets/${params.ticketId}.json`,
