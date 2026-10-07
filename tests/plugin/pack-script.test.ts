@@ -139,22 +139,24 @@ describe('what mcpb pack puts in the bundle', () => {
   // then `npm run pack`, so the packer meets this directory on every push. Unexcluded, the audit's
   // default-deny allowlist refuses the bundle over a file the test run left behind.
   //
-  // THE PATH IS READ OUT OF vitest.config.ts, not retyped. Written twice, the reporter could be
-  // pointed somewhere else while both copies of the literal stayed green and CI's `npm run pack`
-  // started refusing the bundle by default-deny — the exact trap the .mcpbignore line exists to
-  // close, one level up.
-  it('keeps the json run record out, which the packer defaults do not', () => {
-    const configured = /outputFile:\s*\{\s*json:\s*['`]([^'`]+)['`]/.exec(readFileSync(join(root, 'vitest.config.ts'), 'utf8'));
-    expect(configured, 'vitest.config.ts no longer configures a json outputFile').not.toBeNull();
-    const record = configured![1];
-    // dirname(), not split('/')[0]. A record configured at the repo root yields `.`, which matches
+  // THE PATH IS READ OUT OF THE CONFIG, not retyped and not parsed. The config is importable —
+  // tests/tsconfig.json already includes it — so moving or removing the key is a type error here
+  // rather than a regex that silently matches nothing. Written twice as a literal, the reporter
+  // could be pointed somewhere else while both copies stayed green and CI's `npm run pack` began
+  // refusing the bundle by default-deny: the exact trap the .mcpbignore line exists to close, one
+  // level up.
+  it('keeps the json run record out, which the packer defaults do not', async () => {
+    const { default: config } = await import('../../vitest.config.js');
+    const record = config.test?.outputFile as { json: string };
+    // dirname(), not split('/')[0]. A record configured at the repo root yields `.`, which is in
     // neither ignore file, so this case FAILS rather than silently handling it — fail-closed, which
-    // is the right direction for a guard. The result goes into a RegExp, so it is escaped.
-    const dir = `${dirname(record)}/`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    expect(readFileSync(join(root, '.gitignore'), 'utf8')).toMatch(new RegExp(`^${dir}$`, 'm'));
-    expect(readFileSync(join(root, '.mcpbignore'), 'utf8')).toMatch(new RegExp(`^${dir}$`, 'm'));
-    expect(excludes(EXCLUDE_PATTERNS, record)).toBe(false);
-    expect(excludes(PACKER_PATTERNS, record)).toBe(true);
+    // is the right direction for a guard.
+    const dir = `${dirname(record.json)}/`;
+    expect(ignoreLines('.gitignore')).toContain(dir);
+    expect(excludes(EXCLUDE_PATTERNS, record.json)).toBe(false);
+    // Only the .mcpbignore line can make this true: PACKER_PATTERNS is EXCLUDE_PATTERNS plus that
+    // file's lines, and the assertion above shows the defaults do not cover it.
+    expect(excludes(PACKER_PATTERNS, record.json)).toBe(true);
   });
 
   it.each(['manifest.json', 'package.json', 'dist/server.js', 'README.md', 'node_modules/zod/package.json'])(

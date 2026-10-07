@@ -228,6 +228,21 @@ function audit(entries: ZipEntry[]): Run {
   return runAudit(makeTree({ entries }));
 }
 
+/**
+ * Makes a path unremovable and unwritable without a mode bit: a non-empty DIRECTORY, which
+ * `rmSync(p, { force: true })` answers with ERR_FS_EISDIR and `readFileSync` with EISDIR. Chosen
+ * over `chmod 000` throughout this file because a mode bit does not stop root and CI containers
+ * may run as one. Stood as four hand-written copies before it had a name.
+ */
+function occupy(path: string): void {
+  rmSync(path, { recursive: true, force: true });
+  mkdirSync(path);
+  writeFileSync(join(path, 'occupant'), 'left by an earlier run');
+}
+
+/** A clean bundle plus one planted credential file — the contaminated fixture, named once. */
+const contaminated = (): ZipEntry[] => [...clean(), { name: 'tokens.enc', data: 'x' }];
+
 /** Whether a NAME is taken, which a dangling symlink is and `existsSync` says it is not. */
 const nameIsTaken = (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 
@@ -304,7 +319,7 @@ describe('a planted secret is caught', () => {
   });
 
   it('produces no artifact, no checksum, and leaves nothing uploadable behind', () => {
-    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const tree = makeTree({ entries: contaminated() });
     const run = runAudit(tree);
     expect(run.status).not.toBe(0);
     expect(existsSync(tree.artifact)).toBe(false);
@@ -318,7 +333,7 @@ describe('a planted secret is caught', () => {
   });
 
   it('removes an artifact left by an earlier passing run, so a refusal leaves nothing shippable', () => {
-    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const tree = makeTree({ entries: contaminated() });
     writeFileSync(tree.artifact, 'stale bundle from the run before');
     writeFileSync(tree.checksum, 'stale checksum');
     expect(runAudit(tree).status).not.toBe(0);
@@ -340,13 +355,10 @@ describe('a stale artifact that cannot be cleared', () => {
   // a non-empty DIRECTORY. Measured on node v26.5.0, rmSync(path, { force: true }) answers it with
   // ERR_FS_EISDIR. Chosen over a 0555 parent because that one passes for root, and CI containers
   // run as root.
-  function blockArtifactSlot(tree: Tree): void {
-    mkdirSync(tree.artifact);
-    writeFileSync(join(tree.artifact, 'occupant'), 'left by an earlier run');
-  }
+  const blockArtifactSlot = (tree: Tree): void => occupy(tree.artifact);
 
   it('quarantines the failed bundle anyway, and names the path it could not clear', () => {
-    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const tree = makeTree({ entries: contaminated() });
     blockArtifactSlot(tree);
     const run = runAudit(tree);
 
@@ -367,7 +379,7 @@ describe('a stale artifact that cannot be cleared', () => {
   });
 
   it('leaves the ordinary refusal at exit 1, with no housekeeping complaint', () => {
-    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const tree = makeTree({ entries: contaminated() });
     const run = runAudit(tree);
     expect(run.status).toBe(1);
     expect(run.stderr).not.toContain('could not clear the stale artifact');
@@ -401,11 +413,7 @@ describe('a bundle the audit could not read', () => {
   // Unreadable AND still present: the audit's path is a non-empty DIRECTORY, which readFileSync
   // answers with EISDIR. Chosen over chmod 000 for the same reason the stale-artifact fixture
   // above avoids a 0555 parent — a mode bit does not stop root, and CI containers run as root.
-  function unreadableBundle(tree: Tree): void {
-    rmSync(tree.bundle);
-    mkdirSync(tree.bundle);
-    writeFileSync(join(tree.bundle, 'occupant'), 'not an archive');
-  }
+  const unreadableBundle = (tree: Tree): void => occupy(tree.bundle);
 
   // `existsSync` follows the link, so a DANGLING bundle symlink read as absent and the publishable
   // name stayed in the directory with nothing said about it. The question is whether a name is
@@ -444,8 +452,7 @@ describe('a bundle the audit could not read', () => {
 describe('a clean bundle on a tree whose artifact slot is blocked', () => {
   it('is left exactly where it is, and is never called contaminated', () => {
     const tree = makeTree();
-    mkdirSync(tree.artifact);
-    writeFileSync(join(tree.artifact, 'occupant'), 'left by an earlier run');
+    occupy(tree.artifact);
     const run = runAudit(tree);
 
     expect(run.status).toBe(2);
@@ -496,7 +503,7 @@ describe('an artifact directory that cannot be searched', () => {
   // The bundle sits in a SUBDIRECTORY that is locked, not in the tree root: locking the root would
   // also stop node loading the script under test, and the stack trace would then be the loader's.
   it.skipIf(asRoot)('refuses with a message and exit 2, not a stack trace', () => {
-    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const tree = makeTree({ entries: contaminated() });
     const out = join(tree.dir, 'out');
     mkdirSync(out);
     copyFileSync(tree.bundle, join(out, 'zendesk.mcpb'));
@@ -517,13 +524,10 @@ describe('a quarantine that cannot be performed', () => {
   // The .REJECTED slot is occupied by a non-empty directory, so the `rmSync` that clears it throws
   // ERR_FS_EISDIR inside the quarantine's own try. Nothing can be renamed, and the publishable
   // name survives — which is precisely why the operator has to be told to act by hand.
-  function blockRejectedSlot(tree: Tree): void {
-    mkdirSync(`${tree.bundle}.REJECTED`);
-    writeFileSync(join(`${tree.bundle}.REJECTED`, 'occupant'), 'left by an earlier run');
-  }
+  const blockRejectedSlot = (tree: Tree): void => occupy(`${tree.bundle}.REJECTED`);
 
   it('exits 2, not 1: this is a tree to fix by hand, not a bundle to fix', () => {
-    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const tree = makeTree({ entries: contaminated() });
     blockRejectedSlot(tree);
     const run = runAudit(tree);
 
@@ -997,7 +1001,7 @@ describe('a version mismatch blocks the release', () => {
   // printing "No artifact and no checksum were produced". A guard may refuse; it may not tidy
   // somebody else's directory.
   it('never removes an artifact of a version this run did not produce', () => {
-    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const tree = makeTree({ entries: contaminated() });
     const foreign = join(tree.dir, 'zendesk-9.9.9.mcpb');
     const unrelated = join(tree.dir, 'zendesk-notes.mcpb');
     writeFileSync(foreign, 'an earlier release');
@@ -1347,7 +1351,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
         // not the guard that #90 put around it. That guard has its own cases above.
         ['      rmSync(stale, { recursive: false, force: true });', '      void stale;'],
       ],
-      entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
+      entries: contaminated(),
       seed: (t) => writeFileSync(t.artifact, 'stale bundle from the run before'),
       baseline: (r, t) => expect(existsSync(t.artifact)).toBe(false),
       ablated: (r, t) => expect(existsSync(t.artifact)).toBe(true),
@@ -1642,7 +1646,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     {
       rule: 'the refusal quarantines the unaudited bundle under a name nobody uploads',
       mutate: [['      renameSync(bundlePath, quarantined);', '      void quarantined;']],
-      entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
+      entries: contaminated(),
       baseline: (_r: Run, t: Tree) => expect(existsSync(t.bundle)).toBe(false),
       ablated: (_r: Run, t: Tree) => expect(existsSync(t.bundle)).toBe(true),
     },
