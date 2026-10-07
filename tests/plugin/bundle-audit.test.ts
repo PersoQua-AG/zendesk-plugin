@@ -387,8 +387,6 @@ describe('a stale artifact that cannot be cleared', () => {
     expect(existsSync(tree.checksum)).toBe(false);
   });
 
-  // A message, not a stack trace — the bar scripts/assert-no-bound-port-literals.mjs is held to.
-  // Unguarded, this path printed a node:fs source excerpt and five stack frames.
 });
 
 // =============================================================================================
@@ -483,6 +481,34 @@ describe('a tree whose artifact cannot be written', () => {
       expect(existsSync(tree.checksum)).toBe(false);
     } finally {
       chmodSync(tree.dir, 0o755);
+    }
+  });
+});
+
+// A DIRECTORY THE SCRIPT CANNOT SEARCH. `throwIfNoEntry: false` suppresses ENOENT and nothing
+// else, so `present()` was the one unwrapped fs call left on the refusal path: measured on node
+// v26.5.0 at mode 000, two correct message lines and then an EACCES with a node:fs source excerpt,
+// five frames and exit 1 — with housekeeping already filled, i.e. the 1-vs-2 contract broken on
+// the same run. Mode bits, so root is told rather than passing for the wrong reason.
+describe('an artifact directory that cannot be searched', () => {
+  const asRoot = process.getuid?.() === 0;
+
+  // The bundle sits in a SUBDIRECTORY that is locked, not in the tree root: locking the root would
+  // also stop node loading the script under test, and the stack trace would then be the loader's.
+  it.skipIf(asRoot)('refuses with a message and exit 2, not a stack trace', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const out = join(tree.dir, 'out');
+    mkdirSync(out);
+    copyFileSync(tree.bundle, join(out, 'zendesk.mcpb'));
+    chmodSync(out, 0o000);
+    try {
+      const run = runAudit(tree, [join(out, 'zendesk.mcpb')]);
+      expect(run.stderr).not.toMatch(/^\s+at /m);
+      expect(run.stderr).not.toContain('node:fs:');
+      expect(run.stderr).toContain('could not look at');
+      expect(run.status).toBe(2);
+    } finally {
+      chmodSync(out, 0o755);
     }
   });
 });
@@ -940,9 +966,12 @@ describe('a version mismatch blocks the release', () => {
   // threw again on `basename(null)`: five frames and exit 1 — the #90 class reappearing inside the
   // #90 fix. validate-manifests.mjs rejects an empty version before `npm run pack` reaches here, so
   // only a direct invocation does — which is what this file and an audit of a downloaded artifact do.
+  // Both files PARSE and neither carries a version, which is the shape that isolates the defect:
+  // corrupting them instead also pushes "manifest.json is missing or unreadable" into `problems`,
+  // and then the quarantine runs for that reason rather than for this one.
   function unversioned(tree: Tree): void {
-    rmSync(join(tree.dir, 'package.json'));
-    writeFileSync(join(tree.dir, 'manifest.json'), '{ not json');
+    writeFileSync(join(tree.dir, 'package.json'), '{}');
+    writeFileSync(join(tree.dir, 'manifest.json'), JSON.stringify({ name: 'zendesk' }));
   }
 
   it('refuses a tree with no readable version, as a message and not as a stack trace', () => {
@@ -950,26 +979,50 @@ describe('a version mismatch blocks the release', () => {
     unversioned(tree);
     const run = runAudit(tree);
 
-    expect(run.status).not.toBe(0);
     expect(run.stderr).toContain('no version could be read');
     expect(run.stderr).not.toMatch(/^\s+at /m);
     expect(run.stderr).not.toContain('ERR_INVALID_ARG_TYPE');
+    // Exit 2, and the bundle untouched. A version that cannot be read is a TREE defect: putting it
+    // in `problems` instead renamed a provably clean bundle to `.REJECTED` and announced it as
+    // CONTAMINATED with "Fix the cause (usually .mcpbignore)", every word false for that tree.
+    expect(run.status).toBe(2);
+    expect(nameIsTaken(tree.bundle), 'the clean bundle was taken away').toBe(true);
+    expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'a clean bundle was quarantined').toBe(false);
+    expect(run.stderr).not.toContain('CONTAMINATED');
+    expect(run.stderr).not.toContain('did not pass the audit');
   });
 
-  // The invariant at the top of the housekeeping block does not depend on being able to NAME the
-  // version, so neither does the sweep. `if (artifactPath)` skipped the clearing entirely here, so
-  // an earlier passing run's artifact and checksum sat on disk while the refusal printed "No
-  // artifact and no checksum were produced."
-  it('still clears an earlier run\'s artifact and checksum, which it cannot name', () => {
+  // THE BLAST RADIUS, pinned. A `zendesk-*.mcpb` pattern sweep stood here for one round and
+  // deleted two earlier releases and an unrelated file from an operator's download directory while
+  // printing "No artifact and no checksum were produced". A guard may refuse; it may not tidy
+  // somebody else's directory.
+  it('never removes an artifact of a version this run did not produce', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const foreign = join(tree.dir, 'zendesk-9.9.9.mcpb');
+    const unrelated = join(tree.dir, 'zendesk-notes.mcpb');
+    writeFileSync(foreign, 'an earlier release');
+    writeFileSync(unrelated, 'somebody else of a similar name');
+
+    const run = runAudit(tree);
+
+    expect(run.status).toBe(1);
+    expect(existsSync(foreign), 'an earlier release was deleted').toBe(true);
+    expect(existsSync(unrelated), 'an unrelated file was deleted').toBe(true);
+  });
+
+  // A stale artifact it cannot NAME is reported, not guessed at. The invariant at the top of the
+  // housekeeping block ("no artifact is published" must hold for the operator who released this
+  // bundle before) cannot be enforced without the version, and the honest answer is to say which
+  // directory to look in rather than to delete by pattern.
+  it('names the stale artifact it cannot clear, instead of sweeping by pattern', () => {
     const tree = makeTree();
     writeFileSync(tree.artifact, 'left by an earlier passing run');
-    writeFileSync(tree.checksum, 'left by an earlier passing run');
     unversioned(tree);
     const run = runAudit(tree);
 
-    expect(run.stderr).toContain('No artifact and no checksum were produced');
-    expect(existsSync(tree.artifact), 'the earlier artifact survived the refusal').toBe(false);
-    expect(existsSync(tree.checksum), 'the earlier checksum survived the refusal').toBe(false);
+    expect(run.stderr).toMatch(/zendesk-<version>\.mcpb/);
+    expect(run.stderr).toContain('has to be checked by hand');
+    expect(existsSync(tree.artifact), 'it deleted the artifact it said it could not name').toBe(true);
   });
 
   it('refuses a tree whose package.json it cannot read, rather than releasing an unversioned bundle', () => {
@@ -1292,7 +1345,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
       mutate: [
         // The removal only; the try/catch around it stays, so this ablates the clearing rule and
         // not the guard that #90 put around it. That guard has its own cases above.
-        ['    rmSync(join(artifactDir, name), { recursive: false, force: true });', '    void name;'],
+        ['      rmSync(stale, { recursive: false, force: true });', '      void stale;'],
       ],
       entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
       seed: (t) => writeFileSync(t.artifact, 'stale bundle from the run before'),

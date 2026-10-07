@@ -147,8 +147,9 @@ describe('what mcpb pack puts in the bundle', () => {
     const configured = /outputFile:\s*\{\s*json:\s*['`]([^'`]+)['`]/.exec(readFileSync(join(root, 'vitest.config.ts'), 'utf8'));
     expect(configured, 'vitest.config.ts no longer configures a json outputFile').not.toBeNull();
     const record = configured![1];
-    // dirname(), not split('/')[0]: a record configured at the root has no directory segment, and
-    // the result goes into a RegExp, so it is escaped rather than interpolated raw.
+    // dirname(), not split('/')[0]. A record configured at the repo root yields `.`, which matches
+    // neither ignore file, so this case FAILS rather than silently handling it — fail-closed, which
+    // is the right direction for a guard. The result goes into a RegExp, so it is escaped.
     const dir = `${dirname(record)}/`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     expect(readFileSync(join(root, '.gitignore'), 'utf8')).toMatch(new RegExp(`^${dir}$`, 'm'));
     expect(readFileSync(join(root, '.mcpbignore'), 'utf8')).toMatch(new RegExp(`^${dir}$`, 'm'));

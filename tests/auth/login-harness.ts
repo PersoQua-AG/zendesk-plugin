@@ -508,7 +508,9 @@ export async function rebind(port: number): Promise<void> {
 // defect these suites are about — startCallbackListener() feeds beginFlow(), and beginFlow() feeds
 // a login queue that holds every later zendesk_login behind it. The label says which call hung.
 // Lived as three word-identical copies across the login suites before it landed here.
-// Captured at module load, which is before any case can install fake timers. A watchdog built on a
+// Captured at module load, which is before any CASE can install fake timers — setupFiles run
+// earlier still, so a future setup that fakes the clock globally would be captured instead. A
+// watchdog built on a
 // FAKED setTimeout never fires: the clock only moves when the test moves it, and a test that is
 // waiting for a hung call is by definition not moving it. The call would then run out vitest's own
 // generic timeout instead of naming which call hung, which is the one thing this helper is for.

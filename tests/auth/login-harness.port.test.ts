@@ -174,9 +174,10 @@ describe('the sweep that reclaims the band', () => {
    * anyway, and the guarantee in this comment was false. Same tmpdir, so `linkSync` stays on one
    * filesystem.
    *
-   * It returns the inode or throws. `null` would mean the planted claim was gone before the
-   * sweep — the case the assertion exists for cannot have happened — and `expect(x).not.toBe(null)`
-   * would then be true of any file at all, degrading the check to nothing without saying so.
+   * It throws `AlreadyGone` rather than returning null when the claim is no longer the one that
+   * was planted. Its caller retries on that; what must never happen is a null flowing into the
+   * assertion, where `expect(x).not.toBe(null)` is true of any file at all and the check degrades
+   * to nothing without saying so.
    */
   class AlreadyGone extends Error {}
 
@@ -194,6 +195,16 @@ describe('the sweep that reclaims the band', () => {
       throw err;
     }
     planted.push(pin);
+    // AND IT HAS TO STILL BE OURS. Between the stat above and this link a foreign worker can sweep
+    // the dead-owner body AND republish the name through its own claimPort(): the stat then reads
+    // the FOREIGN live claim's inode, the link succeeds, nothing is thrown, and `expectReclaimed`
+    // later fails because our sweep correctly left a live claim alone. A false red, not a retry.
+    // Re-reading the owner after the link closes the window, because a claim is published by
+    // link() and is therefore never observable half-written.
+    const owner = claimOwner(claim);
+    if (owner !== null && owner !== '' && owner !== String(process.pid) && pidIsLive(Number(owner))) {
+      throw new AlreadyGone(`${claim} was re-claimed by a live pid ${owner} before the link`);
+    }
     return { inode: ino, pin };
   }
 

@@ -18,7 +18,7 @@
 // Zero deps — plain Node, including the ZIP reader (a .mcpb is a ZIP). It is excluded from the
 // bundle by .mcpbignore's `scripts/` line.
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -340,7 +340,28 @@ const version = manifest?.version ?? pkg?.version ?? null;
 
 // "Is there a name here", not "does it resolve". `existsSync` follows symlinks, so a dangling
 // artifact link reads as absent while still sitting in the directory under its publishable name.
-const present = (p) => lstatSync(p, { throwIfNoEntry: false }) !== undefined;
+const housekeeping = [];
+
+// Returns true, false, or the reason it could not tell. `throwIfNoEntry: false` suppresses ENOENT
+// and nothing else: measured on node v26.5.0 with the artifact directory at mode 000, this threw
+// EACCES with a node:fs source excerpt and five frames, exit 1 — the one unwrapped fs call left on
+// the refusal path, breaking the 1-vs-2 contract on the same run. A directory this script cannot
+// search is a tree it cannot release from, and a name it cannot see is treated as TAKEN, so the
+// quarantine is still attempted rather than skipped on the error.
+const present = (p) => {
+  try {
+    return lstatSync(p, { throwIfNoEntry: false }) !== undefined;
+  } catch (error) {
+    // Printed as well as pushed: this runs inside the quarantine block, after the two lists have
+    // already been listed, so a push alone would set the exit code and say nothing.
+    const said =
+      `could not look at ${basename(p)}: ${error.message}` +
+      ' — this tree cannot be released from until that path can be read';
+    housekeeping.push(said);
+    console.error(`  - ${said}`);
+    return true;
+  }
+};
 
 // A stale artifact from an earlier, passing run must not survive a failing one — otherwise "no
 // artifact is published" holds only for the operator who never released this bundle before.
@@ -363,48 +384,46 @@ const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 // `.REJECTED` and announced as CONTAMINATED with "Fix the cause (usually .mcpbignore)". Every word
 // of that was false for the tree it was said about, and the good bundle was destroyed to say it.
 // The quarantine below now runs on `problems` alone; housekeeping decides only the exit code.
-const housekeeping = [];
-
-// A BUNDLE WHOSE VERSION CANNOT BE ESTABLISHED IS UNFIT, and saying so here is what keeps the rest
-// of this block honest. With both manifest.json and package.json unreadable or versionless,
-// `artifactPath` is null: the write below answered `writeFileSync(null, …)` with an uncaught
-// ERR_INVALID_ARG_TYPE whose own catch then threw again on `basename(null)` — five frames and exit
-// 1, a tree to fix reported as a bundle to fix, which is the #90 class reappearing inside the #90
-// fix. `scripts/validate-manifests.mjs` rejects an empty version before `npm run pack` ever gets
-// here, so only a direct invocation reaches it — which is what the tests do, and what auditing a
-// downloaded artifact would do.
+// A VERSION THAT CANNOT BE READ IS A TREE DEFECT, not a bundle defect, and the distinction is the
+// whole point of the two lists. With both manifest.json and package.json unreadable or
+// versionless, `artifactPath` is null: the write below answered `writeFileSync(null, …)` with an
+// uncaught ERR_INVALID_ARG_TYPE whose own catch threw again on `basename(null)` — five frames and
+// exit 1. Putting it in `problems` instead fixed the crash and bought the other half of the same
+// defect: a provably CLEAN bundle was renamed to `.REJECTED` and announced as CONTAMINATED with
+// "Fix the cause (usually .mcpbignore)", every word of it false for that tree. In `housekeeping`
+// it exits 2, nothing is quarantined, and the bundle stays where it is.
+//
+// `scripts/validate-manifests.mjs` rejects an empty version before `npm run pack` reaches here, so
+// only a direct invocation does — which is what the tests do, and what auditing a downloaded
+// artifact would do.
 if (!version) {
-  problems.push(
+  housekeeping.push(
     'no version could be read from manifest.json or package.json — there is no name to publish this' +
-      ' bundle under, so it cannot be released',
+      ' bundle under, and no stale artifact of an earlier run can be named either, so' +
+      ` any ${basename(bundlePath, '.mcpb')}-<version>.mcpb in ${dirname(bundlePath)} has to be checked by hand`,
   );
 }
 
-// BY PATTERN, not by the one computed name. `if (artifactPath)` skipped the clearing entirely when
-// the version was unresolvable, so an earlier passing run's `zendesk-<v>.mcpb` and its `.sha256`
-// stayed on disk while the refusal printed "No artifact and no checksum were produced." Reproduced
-// with both version sources unreadable. The invariant this block exists for does not depend on
-// being able to name the version, so neither does the sweep. `zendesk.mcpb` itself carries no
-// `-<version>` and is never matched; the quarantine below is what handles it.
-const stale = new RegExp(`^${basename(bundlePath, '.mcpb').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-.+\\.mcpb(\\.sha256)?$`);
-const artifactDir = dirname(bundlePath);
-let staleNames = [];
-try {
-  staleNames = readdirSync(artifactDir).filter((name) => stale.test(name));
-} catch (error) {
-  housekeeping.push(
-    `could not list ${artifactDir} to clear stale artifacts: ${error.message}` +
-      ' — this tree cannot be released from until that directory is readable',
-  );
-}
-for (const name of staleNames) {
-  try {
-    rmSync(join(artifactDir, name), { recursive: false, force: true });
-  } catch (error) {
-    housekeeping.push(
-      `could not clear the stale artifact ${name}: ${error.message}` +
-        ' — this tree cannot be released from until that path is gone',
-    );
+// ONLY THE TWO NAMES THIS RUN WOULD ITSELF PRODUCE. A `zendesk-*.mcpb` pattern sweep stood here
+// for one round and was a destructive mistake: `root` is the SCRIPT's parent, so the version comes
+// from this repository's manifest while the sweep runs in `dirname(bundlePath)` — and auditing a
+// downloaded artifact, which the header names as supported, deleted two earlier releases and an
+// unrelated `zendesk-notes.mcpb` from the operator's own download directory while printing "No
+// artifact and no checksum were produced". Measured by `qa-engineer`.
+//
+// So the gap that sweep was reaching for — a stale artifact of an unknowable version surviving a
+// refusal — is answered by SAYING SO above, in the housekeeping line, rather than by deleting
+// files this script never wrote. A guard may refuse; it may not tidy somebody else's directory.
+if (artifactPath) {
+  for (const stale of [artifactPath, checksumPath]) {
+    try {
+      rmSync(stale, { recursive: false, force: true });
+    } catch (error) {
+      housekeeping.push(
+        `could not clear the stale artifact ${basename(stale)}: ${error.message}` +
+          ' — this tree cannot be released from until that path is gone',
+      );
+    }
   }
 }
 
@@ -500,7 +519,11 @@ if (bundle && entries.length > 0 && !bundledManifest) {
   try {
     const bundledVersion = JSON.parse(readEntry(bundle, bundledManifest).toString('utf8')).version;
     if (bundledVersion !== version) {
-      problems.push(`version mismatch: the bundled manifest.json says ${bundledVersion}, the tree declares ${version}`);
+      // Only when the tree HAS a version. Without one the three lines above already said why, and
+      // a fourth reading "the tree declares null" adds a raw null to operator-facing output.
+      if (version) {
+        problems.push(`version mismatch: the bundled manifest.json says ${bundledVersion}, the tree declares ${version}`);
+      }
     }
   } catch (error) {
     problems.push(`the bundled manifest.json could not be read: ${error.message}`);
@@ -553,6 +576,13 @@ if (problems.length > 0 || housekeeping.length > 0) {
   // Exit 2 is "this script could not do its own housekeeping", kept apart from exit 1, "the bundle
   // did not pass", the way scripts/assert-no-bound-port-literals.mjs:140 separates the two. The
   // caller needs the distinction: exit 1 is a bundle to fix, exit 2 is a tree to fix.
+  //
+  // WITH BOTH LISTS FILLED, HOUSEKEEPING WINS, and that is #90's decision rather than an accident:
+  // exit 2 means a human has to act by hand before this tree can release anything, which outranks
+  // "fix the bundle and pack again" as a call to action. A caller must therefore not read exit 1
+  // as "contaminated" and exit 2 as "clean" — the CONTAMINATED line above is what says that, and
+  // it is printed on both codes. Pinned by `leaves the ordinary refusal at exit 1` and by
+  // `quarantines the failed bundle anyway`, which is a contaminated bundle exiting 2.
   process.exit(housekeeping.length > 0 ? 2 : 1);
 }
 
