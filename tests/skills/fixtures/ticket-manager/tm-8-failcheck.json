@@ -22,7 +22,7 @@
     },
     {
       "file": "src/register/tickets.ts",
-      "line": 22,
+      "line": 18,
       "quote": "status: z.enum(TICKET_STATUSES).optional()"
     }
   ],

@@ -53,17 +53,16 @@ export async function readStatus(client: ZendeskHttpClient, ticketId: number): P
 }
 
 // Current statuses for a batch, by id. Parsed per RECORD, not per response: validating the whole
-// array at once means one malformed ticket empties the map, and then every id in the batch looks
-// unknown. Ids missing from the response, and records that do not parse, stay absent — which
-// refusalReason reads as unreadable and refuses.
-export async function readStatuses(client: ZendeskHttpClient, ids: number[]): Promise<Map<number, string | null>> {
+// array at once means one malformed ticket empties the map and every id then looks unknown. An id
+// with no readable status is ABSENT rather than null, which refusalReason reads as unreadable.
+export async function readStatuses(client: ZendeskHttpClient, ids: number[]): Promise<Map<number, string>> {
   const raw = await client.request<unknown>(`/tickets/show_many.json?ids=${encodeURIComponent(ids.join(','))}`);
   const envelope = z.object({ tickets: z.array(z.unknown()) }).safeParse(raw);
-  const statuses = new Map<number, string | null>();
+  const statuses = new Map<number, string>();
   if (!envelope.success) return statuses;
   for (const record of envelope.data.tickets) {
     const parsed = BatchStatusSchema.safeParse(record);
-    if (parsed.success) statuses.set(parsed.data.id, parsed.data.status ?? null);
+    if (parsed.success && parsed.data.status != null) statuses.set(parsed.data.id, parsed.data.status);
   }
   return statuses;
 }

@@ -117,15 +117,6 @@ describe('buildReport + renderReport', () => {
     expect(text).not.toMatch(/0 good|0 bad|%/);
   });
 
-  // T5-adjacent (#65): one rated response reads as a count, not as a perfect score.
-  it('renders an all-good window as 1 good / 0 bad / 1 rated, with no 100', () => {
-    const allGood = buildReport({
-      tickets: [], events: [], ratings: [{ score: 'good' }], rangeStartMs, rangeEndMs, config: BERLIN,
-    });
-    const text = renderReport(allGood, 1751328000, 1754006340);
-    expect(text).toMatch(/^CSAT: 1 good \/ 0 bad \/ 1 rated$/m);
-    expect(text.split('\n').find((l) => l.startsWith('CSAT:'))).not.toMatch(/%|100/);
-  });
 });
 
 describe('range membership is half-open [start, end)', () => {

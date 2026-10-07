@@ -4,7 +4,7 @@ import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, screen
 import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
 import { markdownToHtml } from '../util/markdown.js';
 import { safeUpdateWithConflict } from './write-helpers.js';
-import { readStatus, transitionRefusal } from './ticket-status.js';
+import { readStatus, transitionRefusal, BIRTH_STATE_REFUSAL } from './ticket-status.js';
 const TicketSchema = z.object({
     id: z.number(),
     subject: z.string().nullish(),
@@ -101,17 +101,11 @@ export async function updateTicket(client, cache, params, securityLevel = 'stand
     if (!params.updatedStamp && !params.force) {
         throw new Error('Refusing to update ticket without an updatedStamp: pass the updatedStamp from a prior read to enable safe optimistic-concurrency (recommended), or set force:true to deliberately overwrite without a concurrency check.');
     }
-    // #61: the lifecycle table is enforced before any write, on force:true as well — force
-    // acknowledges a concurrency overwrite, not an impossible transition. → new is refused from
-    // every state, so it skips the read; the terminal-closed rule is what needs one.
+    // #61: the lifecycle table is enforced before any write, force:true included — force acknowledges
+    // a concurrency overwrite, not an impossible transition. → new needs no read, so it skips one.
     const target = params.fields.status;
     if (target !== undefined) {
-        // The read is skipped explicitly rather than by passing null and relying on the order of the
-        // checks inside transitionRefusal: → new is refused from every status, so its answer needs no
-        // current status, and a reordering of those checks must not silently change the reason reported.
-        const refusal = target === 'new'
-            ? transitionRefusal(null, target)
-            : transitionRefusal(await readStatus(client, params.ticketId), target);
+        const refusal = target === 'new' ? BIRTH_STATE_REFUSAL : transitionRefusal(await readStatus(client, params.ticketId), target);
         if (refusal)
             throw new Error(refusal);
     }

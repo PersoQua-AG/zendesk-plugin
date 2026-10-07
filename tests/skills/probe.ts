@@ -134,16 +134,12 @@ export const jobReply = (n: number, results: { id: number; success: boolean; err
 // whose current status it could not read. Before that guard was fail-closed, this reply's empty `{}`
 // was accepted as "not closed" and the probe reached the write by walking through the hole it is
 // supposed to notice. 'open' is what sample() asks for, and every rule accepts it.
-const probeReply = (c: Call): Response =>
-  json(
-    c.path.endsWith('/apply.json')
-      ? { result: { ticket: {} } }
-      : /\/tickets\/\d+\.json$/.test(c.path)
-        ? { ticket: { id: 1, status: 'open' } }
-        : c.path.includes('/tickets/show_many.json')
-          ? { tickets: [{ id: 1, status: 'open' }] }
-          : {},
-  );
+const probeReply = (c: Call): Response => {
+  if (c.path.endsWith('/apply.json')) return json({ result: { ticket: {} } });
+  if (/\/tickets\/\d+\.json$/.test(c.path)) return json({ ticket: { id: 1, status: 'open' } });
+  if (c.path.includes('/tickets/show_many.json')) return json({ tickets: [{ id: 1, status: 'open' }] });
+  return json({});
+};
 
 // "METHOD path" of every request each tool issues on one sampled call (default: every registered tool).
 export async function probeRequests(names?: string[]): Promise<Record<string, string[]>> {

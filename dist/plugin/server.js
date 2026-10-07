@@ -22800,7 +22800,7 @@ async function readStatuses(client, ids) {
   if (!envelope.success) return statuses;
   for (const record2 of envelope.data.tickets) {
     const parsed = BatchStatusSchema.safeParse(record2);
-    if (parsed.success) statuses.set(parsed.data.id, parsed.data.status ?? null);
+    if (parsed.success && parsed.data.status != null) statuses.set(parsed.data.id, parsed.data.status);
   }
   return statuses;
 }
@@ -22891,7 +22891,7 @@ async function updateTicket(client, cache, params, securityLevel = "standard") {
   }
   const target = params.fields.status;
   if (target !== void 0) {
-    const refusal = target === "new" ? transitionRefusal(null, target) : transitionRefusal(await readStatus(client, params.ticketId), target);
+    const refusal = target === "new" ? BIRTH_STATE_REFUSAL : transitionRefusal(await readStatus(client, params.ticketId), target);
     if (refusal) throw new Error(refusal);
   }
   const result = await safeUpdateWithConflict(client, cache, {

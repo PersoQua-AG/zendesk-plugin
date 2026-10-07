@@ -51,21 +51,11 @@ describe('KPI surfaces carry no percentage (#65)', () => {
     expect(offences).toEqual([]);
   });
 
-  it('T6: the data-analyst skill names the CSAT good, bad and rated counts', () => {
-    const skill = read('skills/data-analyst/SKILL.md');
-    for (const word of ['good', 'bad', 'rated']) expect(skill).toMatch(new RegExp(`\\b${word}\\b`));
-  });
-
-  // T7: commands/report.md and the report MCP prompt must stay word-for-word aligned on the
-  // headline-numbers sentence. tests/server/prompts-drift.test.ts pins the whole body; this pins
-  // the one sentence #65 changed, so an edit to only one of the two is named here as well.
-  it('T7: the headline-numbers sentence is identical in commands/report.md and the report prompt', async () => {
-    const sentence = (text: string): string | undefined => text.match(/Present the headline numbers:[^.]*\./)?.[0];
-    const fromFile = sentence(read('commands/report.md'));
-    const client = await connect(fixtureEnv());
-    const fromPrompt = sentence(textOf(await client.getPrompt({ name: 'report', arguments: { range: 'x' } })));
-    await client.close();
-    expect(fromFile).toBeDefined();
-    expect(fromPrompt).toBe(fromFile);
+  // The BULLET, not the bare words: `/\bgood\b/` matches anywhere in a Markdown file and so says
+  // almost nothing. This fails if the line stops naming the three counts or states a share instead.
+  it('T6: the data-analyst skill asks for the CSAT counts on its CSAT bullet', () => {
+    const bullet = read('skills/data-analyst/SKILL.md').split('\n').find((l) => /^- a \*\*CSAT\*\*/.test(l));
+    expect(bullet).toMatch(/\*\*good\*\*, \*\*bad\*\* and \*\*rated\*\* counts \(rated = good \+ bad\)/);
+    expect(bullet).not.toMatch(PERCENT);
   });
 });
