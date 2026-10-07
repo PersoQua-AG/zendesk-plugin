@@ -591,13 +591,20 @@ if (bundle && entries.length > 0 && !bundledManifest) {
 // the owner's decision is that a path somebody could upload stays under its name, and a message
 // that hid that would make the decision worse than the defect it replaced.
 if (treeFaults.length > 0) {
-  console.error(`Cannot release from this tree: ${basename(bundlePath)} was not judged.`);
+  console.error(`Cannot release from this tree: ${basename(bundlePath)} was not judged on this.`);
   for (const fault of treeFaults) console.error(`  - ${fault}`);
+  // THE SENTENCE DEPENDS ON WHAT THE RUN THEN DID. A tree fault moves nothing by itself, but the
+  // archive can still have been judged on its own and quarantined below — and a message that
+  // promised "nothing was renamed" while the next paragraph renames the file would be the same
+  // comment-against-code defect this ticket is cleaning up.
   console.error(
-    `\nThis is NOT a verdict on the bundle, and it is not a .mcpbignore problem. Nothing was` +
-      ` renamed and nothing was deleted: whatever is at ${bundlePath} is STILL THERE, under that` +
-      ' name, and could be uploaded. Fix the tree and run the audit again; until then the file is' +
-      ' the operator\'s to deal with.',
+    problems.length > 0
+      ? '\nNone of that is a verdict on the bundle, and none of it is a .mcpbignore problem. The' +
+          ' archive was judged on its own, below.'
+      : `\nThis is NOT a verdict on the bundle, and it is not a .mcpbignore problem. Nothing was` +
+          ` renamed and nothing was deleted: whatever is at ${bundlePath} is STILL THERE, under` +
+          ' that name, and could be uploaded. Fix the tree and run the audit again; until then the' +
+          ' file is the operator\'s to deal with.',
   );
 }
 

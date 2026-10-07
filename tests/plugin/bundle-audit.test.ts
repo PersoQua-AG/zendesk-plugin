@@ -994,6 +994,26 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
   });
 
+  // BOTH AT ONCE, which is reachable: package.json unreadable is a tree fault, manifest.json
+  // still carries the version, so the archive IS judged — and it is contaminated. The two
+  // verdicts have to be printable together without contradicting each other. The earlier wording
+  // promised "nothing was renamed and nothing was deleted" in the same output that renamed the
+  // file, which is the comment-against-code defect this ticket exists to clean up.
+  it('states both verdicts without one contradicting the other', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    writeFileSync(join(tree.dir, 'package.json'), '{ not json');
+    const run = runAudit(tree);
+    expect(run.status, 'a tree fault wins the exit code').toBe(2);
+    expect(run.stderr).toContain('Cannot release from this tree');
+    expect(run.stderr).toContain('package.json is missing or unreadable');
+    expect(run.stderr).toContain('The archive was judged on its own, below.');
+    expect(run.stderr).toContain('CONTAMINATED');
+    // And it does NOT claim the file is untouched, because it is not.
+    expect(run.stderr).not.toContain('STILL THERE');
+    expect(existsSync(tree.bundle)).toBe(false);
+    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
+  });
+
   // A bundle path this script cannot read is UNKNOWN, not contaminated — owner decision on #105,
   // taken because round 4 of PR #102's review measured the opposite destroying clean bundles. The
   // accepted price is stated out loud by the message, and that is asserted here: an operator who
