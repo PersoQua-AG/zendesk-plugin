@@ -1,15 +1,18 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  closeSync,
   existsSync,
-  linkSync,
+  fstatSync,
+  ftruncateSync,
+  openSync,
   readFileSync,
   rmSync,
   statSync,
   utimesSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { createServer, type RequestListener, type Server } from 'node:http';
@@ -131,6 +134,7 @@ describe('the port a test is given', () => {
 describe('the sweep that reclaims the band', () => {
   const claimDir = dirname(portClaimPath(PORT_BAND_FIRST));
   const planted: string[] = [];
+  const held: number[] = [];
 
   function plantStaging(contents: string, ageMs = 0): string {
     const path = join(claimDir, `.staging-${randomUUID()}`);
@@ -158,86 +162,23 @@ describe('the sweep that reclaims the band', () => {
    * no check-then-use window; every non-ENOENT error still throws. */
   const inodeOf = (claim: string): number | null => statSync(claim, { throwIfNoEntry: false })?.ino ?? null;
 
-  /**
-   * The claim's inode, with that inode HELD OPEN under a second name until afterEach drops it.
-   *
-   * The pin is the whole point. `linkSync` does not mint a new inode — it shares the one it links
-   * to — so "the inode under this name changed" means "removed and republished" only for as long
-   * as the old NUMBER cannot come back. APFS hands a just-freed inode number straight out again,
-   * and the staging file a concurrent `claimPort()` creates is precisely the next allocation: a
-   * flake built into the branch whose job is to remove flakes. A second link keeps the number
-   * allocated, so nothing created after this call can be given it.
-   *
-   * OUTSIDE CLAIM_DIR, in a directory of this file's own. Inside it the pin is just another entry
-   * for `sweepDeadClaims()` to judge: it carries the claim's own dead-or-empty pid and does not
-   * start with STAGING_PREFIX, so the very sweep under test removed it, the inode was freed
-   * anyway, and the guarantee in this comment was false. Same tmpdir, so `linkSync` stays on one
-   * filesystem.
-   *
-   * It throws `AlreadyGone` rather than returning null when the claim is no longer the one that
-   * was planted. Its caller retries on that; what must never happen is a null flowing into the
-   * assertion, where `expect(x).not.toBe(null)` is true of any file at all and the check degrades
-   * to nothing without saying so.
-   */
-  class AlreadyGone extends Error {}
-
-  function pinInode(claim: string): { inode: number; pin: string } {
-    const ino = inodeOf(claim);
-    if (ino === null) throw new AlreadyGone(`nothing to pin: ${claim} was gone before the sweep`);
-    const pin = join(tmpdir(), `claim-inode-pin-${randomUUID()}`);
-    try {
-      linkSync(claim, pin);
-    } catch (err) {
-      // The name went between the stat and the link. Every other errno — EXDEV, EACCES, EMLINK,
-      // ENOSPC — is a real failure and must not be retried ten times and then misreported as a
-      // race, which is what a bare `catch {}` in the caller did.
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new AlreadyGone(`${claim} was gone before the link`);
-      throw err;
-    }
-    planted.push(pin);
-    // AND THE PIN HAS TO HOLD THE INODE WE MEASURED. Between the stat above and this link a foreign
-    // worker can sweep the dead-owner body AND republish the name through its own claimPort(), so
-    // the link lands on a DIFFERENT file than the stat read, `pinInode` returns the old number
-    // while the pin holds the new one, and the anti-recycling guarantee in this docstring is void.
-    //
-    // The comparison is on the INODE, not on the claim's owner. An owner re-read was the first
-    // spelling and it asks the wrong object: if the foreign re-claimer exits between the link and
-    // the read, its pid is no longer live, nothing is thrown, and the mismatch stands. This does
-    // not depend on a third party still being alive.
-    if (statSync(pin).ino !== ino) {
-      throw new AlreadyGone(`${claim} was republished between the stat and the link`);
-    }
-    return { inode: ino, pin };
-  }
-
-  /**
-   * Acquires a port, writes the fixture body into its claim and pins the inode, taking a FRESH
-   * port each time the two steps are raced.
-   *
-   * Every vitest worker sweeps at module load (login-harness.ts:149), so between writing an
-   * ownerless or dead-owner body and taking the pin link, another worker can reclaim the name —
-   * measured as `nothing to pin: …/25203 was gone before the sweep`.
-   *
-   * A FRESH PORT PER ATTEMPT, never a second write to the same name. Retrying onto the old one was
-   * a truncating write onto a name that, by the retry's own premise, a foreign sweep had just
-   * freed and a foreign `claimPort()` may already have republished: it would have overwritten a
-   * LIVE worker's claim with a dead-pid body, and the next sweep would then free a port that
-   * worker is bound to — the #13 double handout this file exists to prevent. Straight after
-   * `freePort()` the claim carries this process's own live pid, so it is ours to overwrite and no
-   * foreign sweep can judge it dead.
-   */
-  function plantAndPin(body: string): { claim: string; inode: number; pin: string } {
+  /** Acquires a port, then writes the fixture body through an fd opened while the claim is ours. */
+  function plantAndPin(body: string): { claim: string; inode: number } {
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const claim = portClaimPath(freePort());
-      writeFileSync(claim, body);
+      let fd: number;
       try {
-        return { claim, ...pinInode(claim) };
+        fd = openSync(claim, 'r+');
       } catch (err) {
-        if (!(err instanceof AlreadyGone)) throw err;
-        // Swept between the write and the link. That port is now somebody else's business.
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        continue; // Swept before the open: a FRESH port, never a second write to the freed name.
       }
+      held.push(fd);
+      ftruncateSync(fd, 0);
+      if (body !== '') writeSync(fd, body);
+      return { claim, inode: fstatSync(fd).ino };
     }
-    throw new Error('could not plant and pin a claim: ten ports in a row were raced away');
+    throw new Error('could not plant a claim: ten ports in a row were raced away');
   }
 
   function expectReclaimed(claim: string, plantedOwner: string, inodeBefore: number): void {
@@ -251,13 +192,14 @@ describe('the sweep that reclaims the band', () => {
     // name was never freed. The inode tells the two apart: an in-place overwrite keeps it, while
     // the only legitimate way this name can carry a foreign owner is a concurrent run's
     // claimPort() publishing a DIFFERENT file by linkSync (login-harness.ts:172) after the
-    // removal. `inodeBefore` comes from pinInode(), which is what makes "different" safe to read
-    // off the number alone. Measured: mutations O1 ('1') and O2 (process.ppid) survived every
+    // removal. `inodeBefore` is read off an fd this test still holds, so the number cannot come
+    // back and "different" is safe to read off it alone. Measured: mutations O1 ('1') and O2 (process.ppid) survived every
     // assertion above with 9 passed, and are red on this line.
     expect(inodeOf(claim)).not.toBe(inodeBefore);
   }
 
   afterEach(() => {
+    for (const fd of held.splice(0)) closeSync(fd);
     for (const path of planted.splice(0)) rmSync(path, { force: true });
   });
 
@@ -294,18 +236,6 @@ describe('the sweep that reclaims the band', () => {
     const { claim, inode } = plantAndPin('');
     sweepDeadClaims();
     expectReclaimed(claim, '', inode);
-  });
-
-  // The pin has to survive the sweep it is pinning ACROSS, or it pins nothing. Its first spelling
-  // put the link inside CLAIM_DIR, where it is simply another entry: it carried the claim's own
-  // dead-or-empty pid, did not start with STAGING_PREFIX, and `sweepDeadClaims()` removed it in the
-  // same call — the inode was freed anyway and the guarantee was false while reading as true.
-  it('holds the pinned inode across the sweep, which is the only thing that makes the check real', () => {
-    const { pin } = plantAndPin('');
-
-    sweepDeadClaims();
-
-    expect(existsSync(pin), 'the pin was swept with the claim').toBe(true);
   });
 
   it('reclaims a claim whose owner has exited, and keeps one whose owner is alive', () => {
