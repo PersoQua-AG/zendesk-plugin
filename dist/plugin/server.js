@@ -29779,14 +29779,10 @@ function createServer3(rawEnv = process.env, deps = {}) {
   return { server, ctx, rateLimiter, incrementalRateLimiter };
 }
 function startedAsEntrypoint() {
-  if (!argv[1]) return false;
-  try {
-    const started = statSync2(argv[1]);
-    const self = statSync2(fileURLToPath(import.meta.url));
-    return started.dev === self.dev && started.ino === self.ino;
-  } catch {
-    return false;
-  }
+  const started = argv[1] ? statSync2(argv[1], { throwIfNoEntry: false }) : void 0;
+  if (!started) return false;
+  const self = statSync2(fileURLToPath(import.meta.url));
+  return started.dev === self.dev && started.ino === self.ino;
 }
 if (startedAsEntrypoint()) {
   const { server } = createServer3();

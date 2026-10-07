@@ -343,17 +343,15 @@ export function createServer(rawEnv: NodeJS.ProcessEnv = process.env, deps: Serv
 // import.meta.url but leaves argv[1] as the host spelled it, so a plugin root reached through a
 // symlink made a name comparison unequal — the module loaded, no transport was connected, and the
 // process exited 0 with an empty stderr. dev+ino is what the filesystem itself calls identity, so
-// no spelling can split one file into two. statSync throws when argv[1] names no file, which is
-// the same answer as "not the entrypoint", so it is caught rather than guarded for.
+// no spelling can split one file into two. An argv[1] that names no file answers "not the
+// entrypoint", and { throwIfNoEntry: false } draws exactly that line: measured ENOENT and ENOTDIR
+// return undefined while ELOOP and EACCES still throw, so a stat that fails for any other reason
+// leaves a stack on stderr instead of the silent exit 0 with no transport that #63 forbids.
 function startedAsEntrypoint(): boolean {
-  if (!argv[1]) return false;
-  try {
-    const started = statSync(argv[1]);
-    const self = statSync(fileURLToPath(import.meta.url));
-    return started.dev === self.dev && started.ino === self.ino;
-  } catch {
-    return false;
-  }
+  const started = argv[1] ? statSync(argv[1], { throwIfNoEntry: false }) : undefined;
+  if (!started) return false;
+  const self = statSync(fileURLToPath(import.meta.url));
+  return started.dev === self.dev && started.ino === self.ino;
 }
 
 if (startedAsEntrypoint()) {

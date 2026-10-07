@@ -106,4 +106,30 @@ describe('the server starts however its path is spelled', () => {
     expect(code).toBe(0);
     expect(stdout).toBe('');
   }, 60_000);
+
+  // "Does not exist" is the only stat failure allowed to answer silently. ELOOP — measured: statSync
+  // throws it even under { throwIfNoEntry: false } — stands in for EACCES and EIO, and #63 forbids
+  // exactly their old outcome: exit 0, empty stderr, no transport. Rowed over both artifacts,
+  // because dist/plugin/server.js carries its own copy of the guard.
+  const loop = join(scratch, 'loop-a');
+  symlinkSync(join(scratch, 'loop-b'), loop);
+  symlinkSync(loop, join(scratch, 'loop-b'));
+
+  it.each(ENTRIES)('fails loudly when argv[1] cannot be stat-ed at all, through %s', async (_what, parts) => {
+    const entry = join(root, ...parts).replaceAll('\\', '/');
+    const child = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `process.argv[1] = ${JSON.stringify(loop)}; await import(${JSON.stringify('file://' + entry)});`,
+      ],
+      { cwd: root, env: keylessEnv(), stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    let stderr = '';
+    child.stderr.on('data', (chunk) => (stderr += String(chunk)));
+    const code = await new Promise<number | null>((resolve) => child.on('close', resolve));
+    expect(code).not.toBe(0);
+    expect(stderr).toContain('ELOOP');
+  }, 60_000);
 });
