@@ -314,6 +314,78 @@ describe('a planted secret is caught', () => {
 });
 
 // =============================================================================================
+// Scenario: the housekeeping itself fails (#90)
+//
+// `rmSync(..., { force: true })` suppresses ENOENT and nothing else, and it used to sit outside
+// every try, 112 lines above the quarantine. A throw there skipped exactly the safeguard that
+// keeps a failed bundle from staying under its publishable name — and the exit code was 1 either
+// way, so every existing assertion read the crash as "the audit refused the bundle".
+// =============================================================================================
+describe('a stale artifact that cannot be cleared', () => {
+  // The unremovable shape a half-finished run or another user leaves behind: the artifact slot is
+  // a non-empty DIRECTORY. Measured on node v26.5.0, rmSync(path, { force: true }) answers it with
+  // ERR_FS_EISDIR. Chosen over a 0555 parent because that one passes for root, and CI containers
+  // run as root.
+  function blockArtifactSlot(tree: Tree): void {
+    mkdirSync(tree.artifact);
+    writeFileSync(join(tree.artifact, 'occupant'), 'left by an earlier run');
+  }
+
+  it('quarantines the failed bundle anyway, and names the path it could not clear', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    blockArtifactSlot(tree);
+    const run = runAudit(tree);
+
+    // The side effect FIRST, and deliberately: exit 1 and exit 2 are both non-zero, and neither
+    // can say whether the uploadable name is still sitting there. This is the assertion the
+    // unguarded shape loses — ablated, it reads `expected false to be true`.
+    expect(existsSync(tree.bundle)).toBe(false);
+    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
+    expect(run.stderr).toContain('could not clear the stale artifact zendesk-1.0.0.mcpb');
+    expect(run.stderr).toContain('CONTAMINATED');
+    expectNoSecretEchoed(run);
+  });
+
+  it('exits 2, so a tree to fix is not reported as a bundle to fix', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    blockArtifactSlot(tree);
+    expect(runAudit(tree).status).toBe(2);
+  });
+
+  it('leaves the ordinary refusal at exit 1, with no housekeeping complaint', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    const run = runAudit(tree);
+    expect(run.status).toBe(1);
+    expect(run.stderr).not.toContain('could not clear the stale artifact');
+    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
+  });
+
+  // A bundle that passes every rule is still refused, because the artifact slot it would be
+  // written to is the one that cannot be cleared: writeFileSync answers that same directory with
+  // EISDIR, which would crash AFTER the run had printed that the audit passed.
+  it('refuses a bundle that would otherwise pass, instead of crashing on the write', () => {
+    const tree = makeTree();
+    blockArtifactSlot(tree);
+    const run = runAudit(tree);
+
+    expect(run.status).toBe(2);
+    expect(run.stdout).not.toContain('Bundle audit passed');
+    expect(existsSync(tree.checksum)).toBe(false);
+  });
+
+  // A message, not a stack trace — the bar scripts/assert-no-bound-port-literals.mjs is held to.
+  // Unguarded, this path printed a node:fs source excerpt and five stack frames.
+  it('reports the failure as a line of its own, not as an uncaught SystemError', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    blockArtifactSlot(tree);
+    const run = runAudit(tree);
+
+    expect(run.stderr).not.toMatch(/^\s+at /m);
+    expect(run.stderr).not.toContain('node:fs:');
+  });
+});
+
+// =============================================================================================
 // Scenario: a forbidden path is caught even if the content looks harmless
 // =============================================================================================
 describe('forbidden paths, at any depth, whatever the content', () => {
@@ -1056,10 +1128,9 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     {
       rule: 'a refusal clears an artifact left by an earlier run',
       mutate: [
-        [
-          'if (artifactPath) for (const stale of [artifactPath, checksumPath]) rmSync(stale, { force: true });',
-          '',
-        ],
+        // The removal only; the try/catch around it stays, so this ablates the clearing rule and
+        // not the guard that #90 put around it. That guard has its own cases above.
+        ['      rmSync(stale, { force: true });', '      void stale;'],
       ],
       entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
       seed: (t) => writeFileSync(t.artifact, 'stale bundle from the run before'),

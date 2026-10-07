@@ -342,7 +342,31 @@ const version = manifest?.version ?? pkg?.version ?? null;
 // artifact is published" holds only for the operator who never released this bundle before.
 const artifactPath = version ? join(dirname(bundlePath), `${basename(bundlePath, '.mcpb')}-${version}.mcpb`) : null;
 const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
-if (artifactPath) for (const stale of [artifactPath, checksumPath]) rmSync(stale, { force: true });
+// `force: true` suppresses ENOENT and nothing else. Measured on node v26.5.0, a stale artifact
+// that is a non-empty directory — one a different user or a half-finished run can leave — makes
+// this throw ERR_FS_EISDIR, and an unwritable parent makes it throw EACCES. Unguarded, that throw
+// landed 112 lines above the quarantine below, so the failed bundle stayed under its publishable
+// name: exactly the safeguard it skipped.
+//
+// It is a REFUSAL rather than a warning, and the measurement is why: the same directory makes the
+// `writeFileSync(artifactPath, bundle)` on the success path throw EISDIR too, after the run has
+// already printed that the audit passed. A tree whose artifact slot cannot be cleared is a tree
+// this script cannot release from, whatever the bundle contains. Carried in `problems` rather than
+// exiting here, so the quarantine still runs.
+let housekeepingFailed = false;
+if (artifactPath) {
+  for (const stale of [artifactPath, checksumPath]) {
+    try {
+      rmSync(stale, { force: true });
+    } catch (error) {
+      housekeepingFailed = true;
+      problems.push(
+        `could not clear the stale artifact ${basename(stale)}: ${error.message}` +
+          ' — this tree cannot be released from until that path is gone',
+      );
+    }
+  }
+}
 
 // TWO version families since #68, by owner decision: manifest.json is the MCPB extension, which that
 // issue does not change and which therefore stays at its own number, while package.json and the
@@ -467,7 +491,10 @@ if (problems.length > 0) {
         ' uploaded by name. Do not publish it. Fix the cause (usually .mcpbignore) and pack again.',
     );
   }
-  process.exit(1);
+  // Exit 2 is "this script could not do its own housekeeping", kept apart from exit 1, "the bundle
+  // did not pass", the way scripts/assert-no-bound-port-literals.mjs:140 separates the two. The
+  // caller needs the distinction: exit 1 is a bundle to fix, exit 2 is a tree to fix.
+  process.exit(housekeepingFailed ? 2 : 1);
 }
 
 const sha256 = createHash('sha256').update(bundle).digest('hex');
