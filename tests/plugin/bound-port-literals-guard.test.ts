@@ -173,7 +173,7 @@ describe('the bound-port guard as a script', () => {
     const { status, stderr } = runGuard(dir);
     expect(status).toBe(2);
     expect(stderr).toContain('Cannot read');
-    // One rule, one spelling (#94): the same shape form its five siblings use since #77, rather
+    // One rule, one spelling (#94): the same shape form its seven siblings use since #77, rather
     // than `not.toContain('at readFileSync')`. The literal was reachable — ablating the catch to
     // print err.stack turned it red — but it only sees a leak whose frames happen to name that one
     // fs call, and this path throws from readFileSync today and need not tomorrow.

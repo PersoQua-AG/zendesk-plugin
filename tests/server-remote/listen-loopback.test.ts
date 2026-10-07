@@ -6,7 +6,6 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { listenLoopback } from './harness.js';
 import { settlesWithin } from '../auth/login-harness.js';
-import { allowForeignBind } from '../setup/acquired-ports.js';
 
 // #13, second site of the same class: a port reservation that is not exclusive.
 //
@@ -33,9 +32,6 @@ function track<T extends Server>(server: T): T {
 }
 
 function bindLoopback(port: number): Promise<Server> {
-  // Declared to the bind-time guard (#74): this binds a port ANOTHER listener already holds, on
-  // purpose — the EADDRINUSE it provokes is the assertion.
-  allowForeignBind(port, 'a second bind of a held port, to prove the reservation');
   const server = track(createServer());
   return new Promise((bound, failed) => {
     server.on('error', failed);

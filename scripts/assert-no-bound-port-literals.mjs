@@ -72,6 +72,13 @@ const SOURCE = /\.(ts|tsx|mts|cts|js|mjs|cjs)$/;
 // scan of all 199 files. The mark refuses both, which is the reasoning the sibling guard records
 // for #76/PR #87, reached from the opposite starting point.
 //
+// THE FALSE PASS IT REPLACED, kept because it is the measurement that makes the mark worth having:
+// "some file here CALLS freePort()" did not survive one day — PR #71 added 53 files that call it,
+// and three wrong roots then exited 0. A mention travels with every caller; the definition does
+// not. Count the directories that carry it with
+//   git ls-files '*.ts' | xargs grep -lE '\bexport (async )?function freePort\(' \
+//     | xargs -n1 dirname | sort -u
+//
 // The one cost, named rather than discovered later: this hangs on a name and a spelling. Renaming
 // freePort(), or rewriting it as `export const freePort = () =>`, makes the guard refuse its own
 // tree; moving login-harness.ts out refuses the tree left behind. Loud in every case, never

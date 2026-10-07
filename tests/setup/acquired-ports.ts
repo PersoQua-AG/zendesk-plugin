@@ -70,6 +70,11 @@ const refusals: string[] = [];
 
 export function recordRefusal(message: string): void {
   refusals.push(message);
+  // AND EMITTED, because a log nobody reads is not the diagnostic this removal was justified by.
+  // The throw below it is normally the whole story; the case that matters is the one where the code
+  // under test eats the throw, and there the warning is the only thing left. `emitWarning` goes to
+  // stderr once, without failing anything — which is the entire point of not doing this in a hook.
+  process.emitWarning(message, 'BindTimePortRefusal');
 }
 
 /** Drains the log. The guard's own test reads it; nothing else has to. */

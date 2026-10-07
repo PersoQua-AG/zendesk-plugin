@@ -25,10 +25,9 @@ afterEach(async () => {
   takeRefusals();
 });
 
-// Every refusal is also written to a register, so one that the code under test swallowed still
-// fails the case (tests/setup/no-fixed-bind-port.ts). The cases BELOW provoke refusals on purpose
-// and have already asserted on them, so they claim theirs — and the claim is itself an assertion:
-// a case that expected a refusal and got none fails here rather than quietly passing.
+// Every refusal is also written to a log and emitted as a process warning, so one the code under
+// test swallowed is still readable (tests/setup/acquired-ports.ts). Nothing enforces it — three
+// measured shapes of enforcement failed CORRECT tests — so this file drains the log itself.
 function listening(server: Server): Promise<Server> {
   opened.push(server);
   return new Promise((bound, failed) => {
@@ -86,7 +85,7 @@ describe('a fixed bind port is refused when it is bound', () => {
       /OAuth callback server could not start on port/,
     );
     // The product's wording is all the caller got. The refusal itself is here, with the port and
-    // the call site the ticket asks for, and without this register it would have been lost.
+    // the call site the ticket asks for, and without this log it would have been lost.
     const raised = takeRefusals();
     expect(raised, 'the refusal was never raised at all').toHaveLength(1);
     expect(raised[0]).toContain(`Refusing to bind the fixed port ${PORT}`);
@@ -135,6 +134,51 @@ describe('a fixed bind port is refused when it is bound', () => {
     expect(() => createServer().listen(SHARED_STRANGER)).toThrow(
       new RegExp(`Refusing to bind the fixed port ${SHARED_STRANGER}`),
     );
+  });
+
+  // THE TWO SHAPES THAT BOUND A FIXED PORT ANYWAY, each measured by `qa-engineer` and each
+  // unpinned until now. `'handle' in bag` is true of an ordinary optional-handle call, and a bag
+  // whose handle decides the bind used to register that handle's FIXED port as if the OS had
+  // chosen it — which then excused every later bind of that number in the worker.
+  it('refuses a fixed port in a bag whose handle is undefined', () => {
+    expect(() => createServer().listen({ handle: undefined, port: 18_006, host: '127.0.0.1' })).toThrow(
+      /Refusing to bind the fixed port 18006/,
+    );
+  });
+
+  // Two cases in order, like the stranger pair below, because `foreign` is cleared per case while
+  // `acquired` is permanent: the first binds a declared fixed port and then re-binds its HANDLE,
+  // the second asks for that same number with nothing declared. If the handle path had registered
+  // it — measured, it did — the second case would bind it undeclared and unrefused.
+  const HANDLE_PORT = 18_007;
+  it('binds a declared stranger and then re-binds its handle, naming a port node ignores', async () => {
+    allowForeignBind(HANDLE_PORT, 'a stranger whose handle this case then reuses');
+    const held = await listening(createServer().listen(HANDLE_PORT, '127.0.0.1'));
+    const second = createServer();
+    opened.push(second);
+    await new Promise<void>((bound, failed) => {
+      second.on('error', failed);
+      (second.listen as (o: unknown, cb: () => void) => void)(
+        { handle: (held as unknown as { _handle: unknown })._handle, port: 18_008 },
+        () => bound(),
+      );
+    });
+    expect((second.address() as { port: number }).port).toBe(HANDLE_PORT);
+  });
+
+  it('did not register that handle\'s port, so the next case is still refused it', () => {
+    expect(() => createServer().listen(HANDLE_PORT)).toThrow(
+      new RegExp(`Refusing to bind the fixed port ${HANDLE_PORT}`),
+    );
+  });
+
+  // `listen(cb)` asks for an ephemeral port and was missed, so the OS-chosen port went unrecorded
+  // and a later legitimate re-bind of it was refused.
+  it('records the port the OS chose for a callback-only listen', async () => {
+    const server = await listening(createServer().listen(() => {}));
+    const chosen = (server.address() as { port: number }).port;
+    const again = await listening(createServer().listen(chosen, '127.0.0.1'));
+    expect((again.address() as { port: number }).port).toBe(chosen);
   });
 
   // THE NaN BRANCH OF portOf, which is what keeps a unix socket path from being read as a port.

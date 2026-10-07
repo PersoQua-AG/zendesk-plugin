@@ -22,14 +22,24 @@ function isFixedBindPort(port: unknown): port is number {
   return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65_535;
 }
 
+// A bag whose handle or fd decides the bind, so whatever `port` it also carries is not the port.
+// Distinct from `undefined`, which means "no port was named at all" — the two used to be one value
+// and that is what registered a handle's FIXED port as if the OS had chosen it.
+const HANDLE = Symbol('bound by handle or fd');
+
 // listen(port), listen(port, host), listen({ port }), listen('8976'), listen(path), listen(handle).
 // A non-numeric string is a unix socket path, not a port.
 function portOf(args: unknown[]): unknown {
   const first = args[0];
-  // `handle` and `fd` WIN over a port in the same bag: node binds the handle and ignores
-  // options.port, so reading the port there falsely refused `listen({ handle, port: 18996 })`.
+  // `handle` and `fd` WIN over a port in the same bag, because node binds the handle and ignores
+  // options.port — reading the port there falsely refused `listen({ handle, port: 18996 })`.
+  //
+  // A VALUE CHECK, NOT `in`. `'handle' in bag` is true of `{ handle: undefined, port: 18931 }`,
+  // which is an ordinary optional-handle shape and which node binds on 18931: measured, it BOUND
+  // 18931 with the guard silent. node's own test is `options.fd >= 0` / `options.handle` being
+  // truthy, and so is this.
   const bag = typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : null;
-  if (bag && ('handle' in bag || 'fd' in bag)) return undefined;
+  if (bag && (bag.handle != null || bag.fd != null)) return HANDLE;
   const raw = bag && 'port' in bag ? bag.port : first;
   if (typeof raw !== 'string') return raw;
   // `Number()`, not /^\d+$/: node coerces the string the same way, so `listen('0x4650')` and
@@ -67,8 +77,9 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
       '  const port = freePort();\n' +
       'A listener that is deliberately NOT ours — the foreign-listener cases — declares itself:\n' +
       "  allowForeignBind(port, 'why this one is a stranger');\n";
-    // Written down BEFORE it is thrown: the throw alone is not enough. Why, and what was measured,
-    // is on swallowedRefusal() in ./acquired-ports.ts.
+    // Written down AND emitted before it is thrown, because the throw alone can be eaten: see the
+    // refusal log in ./acquired-ports.ts for the three measured shapes of enforcement that failed
+    // correct tests, and for why a log is the right size of answer.
     recordRefusal(message);
     throw new Error(message);
   }
@@ -78,18 +89,24 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
   // this guard's own definition. Recorded here so those cases stop having to declare themselves as
   // strangers, which is an escape hatch opened for a case that never qualified.
   //
-  // THE CONDITION IS "THE CALLER ASKED FOR AN EPHEMERAL PORT", not "the first argument was not a
-  // fixed number". Those differ: `listen({ fd })` and a pre-bound handle name no port at all, and
-  // under the looser test their fixed port was recorded as acquired for the rest of the worker's
-  // life — a mis-registration that re-admits the class this guard refuses. `listen(cb)` DOES ask
-  // for one and was missed by the first spelling of this: measured, the OS-chosen port went
-  // unrecorded and a later legitimate re-bind of it was refused.
+  // THE CONDITION IS "THE CALLER ASKED FOR AN EPHEMERAL PORT", and it is read off the ARGUMENTS
+  // rather than off `portOf` returning nothing. Those are not the same question, and conflating
+  // them was a hole: `portOf` answers `undefined` for a handle or fd bag too, so a handle ALREADY
+  // BOUND to a fixed port had that port registered permanently — measured, a bag reusing the handle
+  // of a server that held a declared stranger made that number declared, and a later bare bind of it
+  // then succeeded, undeclared and unrefused. Exactly the mis-registration this comment used to claim
+  // it had avoided.
   //
-  // The entry is permanent, unlike a declared stranger. An ephemeral range (49152-65535 on macOS,
-  // 32768-60999 on Linux) does not meet PORT_BAND, so a recorded OS port cannot excuse a band
-  // literal; and a server bound once in a beforeAll is re-bound by the cases, so a per-case scope
-  // would refuse it.
-  if (port === undefined || port === 0 || typeof args[0] === 'function') {
+  // Asking for an ephemeral port means: no arguments at all, a callback first, or a port of 0.
+  // A handle or an fd is NOT asking — the handle decides, and the guard records nothing.
+  //
+  // The entry is permanent, unlike a declared stranger: a server bound once in a beforeAll is
+  // re-bound by the cases, so a per-case scope would refuse it. What keeps that safe is that an
+  // ephemeral range cannot excuse a PORT_BAND literal — measured on darwin, 49152-65535 against a
+  // band of 20000-29999, and on Linux the default is 32768-60999. Both are sysctl-tunable, so this
+  // is a property of the machines this suite runs on and not a law.
+  const wantsEphemeral = args.length === 0 || typeof args[0] === 'function' || port === 0;
+  if (wantsEphemeral) {
     this.once('listening', () => {
       const chosen = this.address();
       if (chosen !== null && typeof chosen === 'object' && typeof chosen.port === 'number') {
