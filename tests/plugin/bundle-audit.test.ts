@@ -412,33 +412,41 @@ describe('a bundle the audit could not read', () => {
   // answers with EISDIR. Chosen over chmod 000 for the same reason the stale-artifact fixture
   // above avoids a 0555 parent — a mode bit does not stop root, and CI containers run as root.
 
-  // `existsSync` follows the link, so a DANGLING bundle symlink read as absent and the publishable
-  // name stayed in the directory with nothing said about it. The question is whether a name is
-  // there for somebody to upload, not whether it resolves.
-  it('quarantines a dangling symlink standing under the publishable name', () => {
+  // A DIRECTORY under the publishable name is refused and LEFT ALONE. It used to land EISDIR in
+  // `problems`, and `renameSync` then moved the whole directory to `.REJECTED` and called it
+  // contaminated — measured against `./important-project`, which is how an operator loses a tree.
+  it('refuses a directory where the bundle should be, and does not move it', () => {
+    const tree = makeTree();
+    occupy(tree.bundle);
+    const run = runAudit(tree);
+
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('it is a directory, so there is no bundle here');
+    expect(existsSync(join(tree.bundle, 'occupant')), 'the directory was moved').toBe(true);
+    expect(nameIsTaken(`${tree.bundle}.REJECTED`)).toBe(false);
+    expect(run.stderr).not.toContain('CONTAMINATED');
+  });
+
+  // OWNER QUESTION, FLAGGED RATHER THAN SETTLED HERE, and this case pins the current answer so the
+  // decision is visible either way. Two review rounds took opposite positions: round 2 said a path
+  // the audit could not read "is still a path somebody can upload" and should be quarantined; round
+  // 4 showed that quarantining on an unreadable path is what renamed a provably CLEAN bundle to
+  // `.REJECTED` and called it CONTAMINATED. What is implemented is the non-destructive side — it
+  // refuses, names the path, exits 2 and MOVES NOTHING — because the content of an EACCES file is
+  // not something this script has seen. The cost is that the name stays where it is.
+  it('refuses a path it could not read, names it, and leaves it alone', () => {
     const tree = makeTree();
     rmSync(tree.bundle);
     symlinkSync(join(tree.dir, 'nothing-here.mcpb'), tree.bundle);
     const run = runAudit(tree);
 
-    // lstat, not existsSync: a dangling link does not resolve, so `existsSync` is false for it
-    // either way and the assertion would read as passing before the fix and die on an ENOENT after.
-    expect(run.status).toBe(1);
-    expect(nameIsTaken(tree.bundle), 'the publishable name is still there').toBe(false);
-    expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'nothing was quarantined').toBe(true);
-    expect(run.stderr).toContain('CONTAMINATED');
-  });
-
-  it('quarantines it anyway — a path it could not read is still a path somebody can upload', () => {
-    const tree = makeTree();
-    occupy(tree.bundle);
-    const run = runAudit(tree);
-
-    expect(existsSync(tree.bundle)).toBe(false);
-    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
+    expect(run.status).toBe(2);
     expect(run.stderr).toContain('could not be read as a bundle');
-    expect(run.stderr).toContain('CONTAMINATED');
+    expect(nameIsTaken(tree.bundle), 'the name was moved after all').toBe(true);
+    expect(nameIsTaken(`${tree.bundle}.REJECTED`)).toBe(false);
+    expect(run.stderr).not.toContain('CONTAMINATED');
   });
+
 });
 
 // A CLEAN bundle on a tree that cannot be released from. The two questions the script answers —
@@ -522,18 +530,24 @@ describe('a quarantine that cannot be performed', () => {
   // ERR_FS_EISDIR inside the quarantine's own try. Nothing can be renamed, and the publishable
   // name survives — which is precisely why the operator has to be told to act by hand.
 
-  it('exits 2, not 1: this is a tree to fix by hand, not a bundle to fix', () => {
+  // THE OCCUPIED SLOT IS STEPPED OVER, NOT OVERWRITTEN. `rmSync(quarantined, { force: true })`
+  // stood here and contradicted the comment above it: measured across two failing runs, run 2
+  // overwrote run 1's `.REJECTED` and the credential found in it was gone. The bundle still has to
+  // leave its publishable name, so a free name is taken instead.
+  // The search for a free name is unbounded on purpose: `.REJECTED.2`, `.3` and so on, so there is
+  // always one and the bundle always leaves its publishable name.
+  it('takes the next free name rather than destroying the last quarantine', () => {
     const tree = makeTree({ entries: contaminated() });
-    occupy(`${tree.bundle}.REJECTED`);
+    writeFileSync(`${tree.bundle}.REJECTED`, 'the evidence of an earlier failing run');
     const run = runAudit(tree);
 
-    expect(run.status).toBe(2);
-    expect(run.stderr).toContain('could not quarantine zendesk.mcpb');
-    expect(run.stderr).toContain('DELETE IT BY HAND');
-    // The whole point of the louder status: the uploadable name is still there.
-    expect(existsSync(tree.bundle)).toBe(true);
+    expect(run.status).toBe(1);
+    expect(existsSync(tree.bundle), 'the uploadable name survived').toBe(false);
+    expect(readFileSync(`${tree.bundle}.REJECTED`, 'utf8')).toBe('the evidence of an earlier failing run');
+    expect(existsSync(`${tree.bundle}.REJECTED.2`)).toBe(true);
     expectNoSecretEchoed(run);
   });
+
 });
 
 // =============================================================================================
@@ -1008,6 +1022,48 @@ describe('a version mismatch blocks the release', () => {
     expect(run.status).toBe(1);
     expect(existsSync(foreign), 'an earlier release was deleted').toBe(true);
     expect(existsSync(unrelated), 'an unrelated file was deleted').toBe(true);
+  });
+
+  // BOTH MANIFESTS UNREADABLE, which is the shape the earlier version of this case was reshaped to
+  // AVOID — its own comment said so, and the live defect was documented instead of pinned.
+  // `readJson` pushed into `problems`, so a provably clean bundle was renamed to `.REJECTED` and
+  // announced as CONTAMINATED with "Fix the cause (usually .mcpbignore)". Measured by
+  // `qa-engineer` on one byte-identical bundle: readable manifests → exit 0 and an artifact
+  // written; both corrupt → the same bundle gone.
+  it('refuses a tree whose manifests cannot be parsed, without touching the bundle', () => {
+    const tree = makeTree();
+    writeFileSync(join(tree.dir, 'package.json'), '{ not json');
+    writeFileSync(join(tree.dir, 'manifest.json'), '{ not json either');
+    const run = runAudit(tree);
+
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('manifest.json is missing or unreadable');
+    expect(existsSync(tree.bundle), 'a clean bundle was taken away').toBe(true);
+    expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'a clean bundle was quarantined').toBe(false);
+    expect(run.stderr).not.toContain('CONTAMINATED');
+    expect(run.stderr).not.toContain('did not pass the audit');
+  });
+
+  // THE ONE NAME THAT IS SWEPT, which the case above cannot reach: `<name>-<THIS tree's version>`.
+  // `root` is the SCRIPT's parent, so the version is this repository's while the artifact slot is
+  // `dirname(bundlePath)` — and auditing a downloaded bundle deleted the operator's own
+  // `zendesk-1.0.0.mcpb` and its .sha256 because that happened to be the number this tree declares.
+  // Measured by `qa-engineer`. Outside its own tree the script writes no artifact either, so it has
+  // nothing of its own to clear and says which directory it left alone.
+  it('leaves even its OWN version alone in a directory that is not its tree', () => {
+    const tree = makeTree({ entries: contaminated() });
+    const elsewhere = mkdtempSync(join(tmpdir(), 'bundle-audit-downloads-'));
+    temps.push(elsewhere);
+    const theirs = join(elsewhere, 'zendesk-1.0.0.mcpb');
+    writeFileSync(theirs, 'the operator\'s own release of the version this tree declares');
+    writeFileSync(`${theirs}.sha256`, 'and its sidecar');
+    copyFileSync(tree.bundle, join(elsewhere, 'zendesk.mcpb'));
+
+    const run = runAudit(tree, [join(elsewhere, 'zendesk.mcpb')]);
+
+    expect(existsSync(theirs), "the operator's own release was deleted").toBe(true);
+    expect(existsSync(`${theirs}.sha256`), "the operator's own checksum was deleted").toBe(true);
+    expect(run.stderr).toContain("is not in this script's own tree");
   });
 
   // A stale artifact it cannot NAME is reported, not guessed at. The invariant at the top of the

@@ -195,15 +195,17 @@ describe('the sweep that reclaims the band', () => {
       throw err;
     }
     planted.push(pin);
-    // AND IT HAS TO STILL BE OURS. Between the stat above and this link a foreign worker can sweep
-    // the dead-owner body AND republish the name through its own claimPort(): the stat then reads
-    // the FOREIGN live claim's inode, the link succeeds, nothing is thrown, and `expectReclaimed`
-    // later fails because our sweep correctly left a live claim alone. A false red, not a retry.
-    // Re-reading the owner after the link closes the window, because a claim is published by
-    // link() and is therefore never observable half-written.
-    const owner = claimOwner(claim);
-    if (owner !== null && owner !== '' && owner !== String(process.pid) && pidIsLive(Number(owner))) {
-      throw new AlreadyGone(`${claim} was re-claimed by a live pid ${owner} before the link`);
+    // AND THE PIN HAS TO HOLD THE INODE WE MEASURED. Between the stat above and this link a foreign
+    // worker can sweep the dead-owner body AND republish the name through its own claimPort(), so
+    // the link lands on a DIFFERENT file than the stat read, `pinInode` returns the old number
+    // while the pin holds the new one, and the anti-recycling guarantee in this docstring is void.
+    //
+    // The comparison is on the INODE, not on the claim's owner. An owner re-read was the first
+    // spelling and it asks the wrong object: if the foreign re-claimer exits between the link and
+    // the read, its pid is no longer live, nothing is thrown, and the mismatch stands. This does
+    // not depend on a third party still being alive.
+    if (statSync(pin).ino !== ino) {
+      throw new AlreadyGone(`${claim} was republished between the stat and the link`);
     }
     return { inode: ino, pin };
   }

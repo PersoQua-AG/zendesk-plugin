@@ -328,17 +328,29 @@ for (let i = 0; i < argv.length; i++) {
 }
 
 const bundlePath = resolve(root, positional[0] ?? 'zendesk.mcpb');
+
+// TWO LISTS, AND WHICH ONE A DEFECT GOES IN DECIDES WHETHER A FILE IS MOVED.
+//
+// `problems` is "this BUNDLE is unfit to publish" and is the only thing that quarantines. Four
+// defects used to sit in it that are not about the bundle at all — an unreadable manifest.json, an
+// unreadable package.json, a bundle path that cannot be read, and a bad `--expect-version` on the
+// command line — and each of them renamed a provably CLEAN bundle to `.REJECTED` and announced it
+// as CONTAMINATED with "Fix the cause (usually .mcpbignore)". Measured on one byte-identical
+// bundle: readable manifests → exit 0 and an artifact written; both manifests corrupt → the same
+// bundle gone, under a sentence in which every word was false for that tree.
+//
+// `housekeeping` is "this TREE cannot release anything". It exits 2, moves nothing, and leaves the
+// bundle where it is for a human to deal with.
 const problems = [];
+const housekeeping = [];
 const accepted = [];
 // Counted for the coverage line the run prints, so the disclosure cannot go stale.
 let scannedEntries = 0;
 let scannedBytes = 0;
 
-const pkg = readJson(join(root, 'package.json'), 'package.json', problems);
-const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', problems);
+const pkg = readJson(join(root, 'package.json'), 'package.json', housekeeping);
+const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', housekeeping);
 const version = manifest?.version ?? pkg?.version ?? null;
-
-const housekeeping = [];
 
 // Returns true, false, or the reason it could not tell. `throwIfNoEntry: false` suppresses ENOENT
 // and nothing else: measured on node v26.5.0 with the artifact directory at mode 000, this threw
@@ -412,7 +424,22 @@ if (!version) {
 // So the gap that sweep was reaching for — a stale artifact of an unknowable version surviving a
 // refusal — is answered by SAYING SO above, in the housekeeping line, rather than by deleting
 // files this script never wrote. A guard may refuse; it may not tidy somebody else's directory.
-if (artifactPath) {
+// AND ONLY IN THE TREE THE VERSION CAME FROM. `root` is the SCRIPT's parent, so the version is
+// this repository's while the artifact slot is `dirname(bundlePath)` — and auditing a downloaded
+// bundle, which this script supports, deleted the operator's own `zendesk-1.0.0.mcpb` and its
+// .sha256 because that happened to be the number THIS tree declares. Measured by `qa-engineer`
+// twice: once through a glob I had widened it to, and again through these two names alone.
+//
+// Outside its own tree the script writes no artifact either, so there is nothing of its own to
+// clear; it says which directory it left alone rather than tidying it.
+const ownTree = dirname(bundlePath) === root;
+if (artifactPath && !ownTree) {
+  housekeeping.push(
+    `${basename(bundlePath)} is not in this script's own tree, so no stale ${basename(artifactPath)}` +
+      ` was cleared — anything of that name in ${dirname(bundlePath)} belongs to whoever put it there`,
+  );
+}
+if (artifactPath && ownTree) {
   for (const stale of [artifactPath, checksumPath]) {
     try {
       rmSync(stale, { force: true });
@@ -430,8 +457,33 @@ if (artifactPath) {
 // Claude Code plugin manifests moved on. So the equality that used to stand here cannot: what the
 // bundle has to be right about is its OWN manifest, and that is asserted against manifest.json below
 // (`the bundled manifest.json says …`). package.json's number is not shipped inside the bundle.
+// In `housekeeping`: being ASKED for the wrong version is a defect in the invocation or in the
+// tree, not in the bundle. `--expect-version` with no value measured as a clean bundle quarantined
+// and announced CONTAMINATED for a command-line slip.
 if (expectedVersion !== null && version !== expectedVersion) {
-  problems.push(`version mismatch: the release was asked for ${expectedVersion || '(empty)'}, the tree declares ${version}`);
+  housekeeping.push(`version mismatch: the release was asked for ${expectedVersion || '(empty)'}, the tree declares ${version}`);
+}
+
+// A DIRECTORY NAMED ON THE ARGV IS REFUSED HERE AND NOW, before anything can move it. Measured:
+// `node scripts/audit-bundle.mjs ./important-project` landed EISDIR in `problems`, `present()`
+// reported the name as taken, and `renameSync` cheerfully moved the whole DIRECTORY to
+// `important-project.REJECTED` and called it CONTAMINATED.
+//
+// A DIRECTORY ONLY, deliberately. A symlink — dangling or not — standing under the publishable
+// name is still something somebody can upload, so it keeps going to the quarantine below. And the
+// lstat is wrapped, because `throwIfNoEntry: false` suppresses ENOENT and nothing else: inside an
+// unsearchable directory it answers EACCES, which unguarded here is a node:fs stack trace on the
+// first line of the run.
+try {
+  if (lstatSync(bundlePath, { throwIfNoEntry: false })?.isDirectory()) {
+    console.error(`Refusing to audit ${bundlePath}: it is a directory, so there is no bundle here.`);
+    process.exit(2);
+  }
+} catch (error) {
+  housekeeping.push(
+    `could not look at ${basename(bundlePath)}: ${error.message}` +
+      ' — this tree cannot be released from until that path can be read',
+  );
 }
 
 let bundle = null;
@@ -442,7 +494,10 @@ try {
   entries = readArchive(bundle);
   readable = true;
 } catch (error) {
-  problems.push(`${basename(bundlePath)} could not be read as a bundle: ${error.message}`);
+  // `housekeeping`: a path this script cannot read is a tree it cannot release from. It used to be
+  // a `problems` entry, which quarantined on an EACCES — moving a file whose content nobody had
+  // seen and calling it contaminated.
+  housekeeping.push(`${basename(bundlePath)} could not be read as a bundle: ${error.message}`);
 }
 
 // An empty archive passes every path rule there is. That is a vacuous pass, not a clean bundle.
@@ -547,9 +602,12 @@ if (problems.length > 0 || housekeeping.length > 0) {
   // is whether a name is there for somebody to upload, not whether it resolves.
   let quarantined = null;
   if (problems.length > 0 && present(bundlePath)) {
+    // A FREE NAME, because the previous one is EVIDENCE. `rmSync(quarantined, { force: true })`
+    // stood here and flatly contradicted the comment above it: measured across two failing runs,
+    // run 2 overwrote run 1's `.REJECTED` and the `tokens.enc` that had been found in it was gone.
     quarantined = `${bundlePath}.REJECTED`;
+    for (let n = 2; present(quarantined); n += 1) quarantined = `${bundlePath}.REJECTED.${n}`;
     try {
-      rmSync(quarantined, { force: true });
       renameSync(bundlePath, quarantined);
     } catch (error) {
       quarantined = null;
@@ -603,8 +661,8 @@ try {
   //
   // WRAPPED TOO. These two are housekeeping inside a housekeeping handler: a throw here — the half
   // of the pair that is a directory, say — would replace this exit 2 with a stack trace and exit 1,
-  // which is the unguarded-housekeeping shape one level up. `recursive` is off deliberately: a
-  // directory in the artifact slot is reported, not silently emptied.
+  // which is the unguarded-housekeeping shape one level up. `recursive` is left at its default, so
+  // a directory in the artifact slot is reported rather than silently emptied.
   for (const half of [checksumPath, artifactPath]) {
     try {
       rmSync(half, { force: true });
