@@ -8,6 +8,16 @@ export default defineConfig({
     // run without an `exchange` stub, and on a regression they would POST to the real
     // acme.zendesk.com instead of turning red. The guard rejects every non-loopback fetch.
     setupFiles: ['tests/setup/no-network.ts'],
+    // #51. A failing run used to leave its evidence in scroll-back only: a QA round lost the names
+    // of two failing tests to a terminal buffer and had to write the occurrence off as "load",
+    // unevidenced. The default reporter still prints; this one additionally leaves the file and the
+    // full name of every test behind, so the next occurrence can be classified instead of guessed
+    // at. It is in the config rather than in a CI flag so that a local run, a QA worktree and CI
+    // all produce it without anybody having to remember a flag. Read the failures back with:
+    //   node -e "for (const f of require('./test-results/vitest.json').testResults)
+    //     for (const t of f.assertionResults) if (t.status === 'failed') console.log(f.name, t.fullName)"
+    reporters: ['default', 'json'],
+    outputFile: { json: 'test-results/vitest.json' },
     // Runs once, after every file: the only place that can see what a SPAWNED child did to the machine.
     // A suite that creates a real Keychain item fails the run there — see the file for why it compares
     // before with after instead of demanding an empty keychain.
