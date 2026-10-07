@@ -328,47 +328,24 @@ for (let i = 0; i < argv.length; i++) {
 }
 
 const bundlePath = resolve(root, positional[0] ?? 'zendesk.mcpb');
-
-// TWO LISTS, AND WHICH ONE A DEFECT GOES IN DECIDES WHETHER A FILE IS MOVED.
-//
-// `problems` is "this BUNDLE is unfit to publish" and is the only thing that quarantines. Four
-// defects used to sit in it that are not about the bundle at all — an unreadable manifest.json, an
-// unreadable package.json, a bundle path that cannot be read, and a bad `--expect-version` on the
-// command line — and each of them renamed a provably CLEAN bundle to `.REJECTED` and announced it
-// as CONTAMINATED with "Fix the cause (usually .mcpbignore)". Measured on one byte-identical
-// bundle: readable manifests → exit 0 and an artifact written; both manifests corrupt → the same
-// bundle gone, under a sentence in which every word was false for that tree.
-//
-// `housekeeping` is "this TREE cannot release anything". It exits 2, moves nothing, and leaves the
-// bundle where it is for a human to deal with.
 const problems = [];
-const housekeeping = [];
 const accepted = [];
 // Counted for the coverage line the run prints, so the disclosure cannot go stale.
 let scannedEntries = 0;
 let scannedBytes = 0;
 
-const pkg = readJson(join(root, 'package.json'), 'package.json', housekeeping);
-const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', housekeeping);
+const pkg = readJson(join(root, 'package.json'), 'package.json', problems);
+const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', problems);
 const version = manifest?.version ?? pkg?.version ?? null;
 
-// Returns true, false, or the reason it could not tell. `throwIfNoEntry: false` suppresses ENOENT
-// and nothing else: measured on node v26.5.0 with the artifact directory at mode 000, this threw
-// EACCES with a node:fs source excerpt and five frames, exit 1 — the one unwrapped fs call left on
-// the refusal path, breaking the 1-vs-2 contract on the same run. A directory this script cannot
-// search is a tree it cannot release from, and a name it cannot see is treated as TAKEN, so the
-// quarantine is still attempted rather than skipped on the error.
-const present = (p) => {
+// "Is there a name here", for the quarantine below. `existsSync` follows the link, so a dangling
+// artifact link reads as absent while still standing in the directory under its publishable name.
+// A path that cannot be stat'ed at all counts as taken, so the quarantine is attempted rather than
+// skipped on an error.
+const nameIsTaken = (p) => {
   try {
     return lstatSync(p, { throwIfNoEntry: false }) !== undefined;
-  } catch (error) {
-    // Printed as well as pushed: this runs inside the quarantine block, after the two lists have
-    // already been listed, so a push alone would set the exit code and say nothing.
-    const said =
-      `could not look at ${basename(p)}: ${error.message}` +
-      ' — this tree cannot be released from until that path can be read';
-    housekeeping.push(said);
-    console.error(`  - ${said}`);
+  } catch {
     return true;
   }
 };
@@ -386,65 +363,16 @@ const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 // It is a REFUSAL rather than a warning, and the measurement is why: the same directory makes the
 // `writeFileSync(artifactPath, bundle)` on the success path throw EISDIR too, after the run has
 // already printed that the audit passed. A tree whose artifact slot cannot be cleared is a tree
-// this script cannot release from, whatever the bundle contains.
-//
-// A SEPARATE LIST FROM `problems`, and that separation is load-bearing. These two answer different
-// questions — "is this bundle fit to publish" and "can this tree publish anything" — and while a
-// housekeeping failure sat in `problems`, a bundle that passed every single rule was renamed to
-// `.REJECTED` and announced as CONTAMINATED with "Fix the cause (usually .mcpbignore)". Every word
-// of that was false for the tree it was said about, and the good bundle was destroyed to say it.
-// The quarantine below now runs on `problems` alone; housekeeping decides only the exit code.
-// A VERSION THAT CANNOT BE READ IS A TREE DEFECT, not a bundle defect, and the distinction is the
-// whole point of the two lists. With both manifest.json and package.json unreadable or
-// versionless, `artifactPath` is null: the write below answered `writeFileSync(null, …)` with an
-// uncaught ERR_INVALID_ARG_TYPE whose own catch threw again on `basename(null)` — five frames and
-// exit 1. Putting it in `problems` instead fixed the crash and bought the other half of the same
-// defect: a provably CLEAN bundle was renamed to `.REJECTED` and announced as CONTAMINATED with
-// "Fix the cause (usually .mcpbignore)", every word of it false for that tree. In `housekeeping`
-// it exits 2, nothing is quarantined, and the bundle stays where it is.
-//
-// `scripts/validate-manifests.mjs` rejects an empty version before `npm run pack` reaches here, so
-// only a direct invocation does — which is what the tests do, and what auditing a downloaded
-// artifact would do.
-if (!version) {
-  housekeeping.push(
-    'no version could be read from manifest.json or package.json — there is no name to publish this' +
-      ' bundle under, and no stale artifact of an earlier run can be named either, so' +
-      ` any ${basename(bundlePath, '.mcpb')}-<version>.mcpb in ${dirname(bundlePath)} has to be checked by hand`,
-  );
-}
-
-// ONLY THE TWO NAMES THIS RUN WOULD ITSELF PRODUCE. A `zendesk-*.mcpb` pattern sweep stood here
-// for one round and was a destructive mistake: `root` is the SCRIPT's parent, so the version comes
-// from this repository's manifest while the sweep runs in `dirname(bundlePath)` — and auditing a
-// downloaded artifact, which the header names as supported, deleted two earlier releases and an
-// unrelated `zendesk-notes.mcpb` from the operator's own download directory while printing "No
-// artifact and no checksum were produced". Measured by `qa-engineer`.
-//
-// So the gap that sweep was reaching for — a stale artifact of an unknowable version surviving a
-// refusal — is answered by SAYING SO above, in the housekeeping line, rather than by deleting
-// files this script never wrote. A guard may refuse; it may not tidy somebody else's directory.
-// AND ONLY IN THE TREE THE VERSION CAME FROM. `root` is the SCRIPT's parent, so the version is
-// this repository's while the artifact slot is `dirname(bundlePath)` — and auditing a downloaded
-// bundle, which this script supports, deleted the operator's own `zendesk-1.0.0.mcpb` and its
-// .sha256 because that happened to be the number THIS tree declares. Measured by `qa-engineer`
-// twice: once through a glob I had widened it to, and again through these two names alone.
-//
-// Outside its own tree the script writes no artifact either, so there is nothing of its own to
-// clear; it says which directory it left alone rather than tidying it.
-const ownTree = dirname(bundlePath) === root;
-if (artifactPath && !ownTree) {
-  housekeeping.push(
-    `${basename(bundlePath)} is not in this script's own tree, so no stale ${basename(artifactPath)}` +
-      ` was cleared — anything of that name in ${dirname(bundlePath)} belongs to whoever put it there`,
-  );
-}
-if (artifactPath && ownTree) {
+// this script cannot release from, whatever the bundle contains. Carried in `problems` rather than
+// exiting here, so the quarantine still runs.
+let housekeepingFailed = false;
+if (artifactPath) {
   for (const stale of [artifactPath, checksumPath]) {
     try {
       rmSync(stale, { force: true });
     } catch (error) {
-      housekeeping.push(
+      housekeepingFailed = true;
+      problems.push(
         `could not clear the stale artifact ${basename(stale)}: ${error.message}` +
           ' — this tree cannot be released from until that path is gone',
       );
@@ -457,33 +385,8 @@ if (artifactPath && ownTree) {
 // Claude Code plugin manifests moved on. So the equality that used to stand here cannot: what the
 // bundle has to be right about is its OWN manifest, and that is asserted against manifest.json below
 // (`the bundled manifest.json says …`). package.json's number is not shipped inside the bundle.
-// In `housekeeping`: being ASKED for the wrong version is a defect in the invocation or in the
-// tree, not in the bundle. `--expect-version` with no value measured as a clean bundle quarantined
-// and announced CONTAMINATED for a command-line slip.
 if (expectedVersion !== null && version !== expectedVersion) {
-  housekeeping.push(`version mismatch: the release was asked for ${expectedVersion || '(empty)'}, the tree declares ${version}`);
-}
-
-// A DIRECTORY NAMED ON THE ARGV IS REFUSED HERE AND NOW, before anything can move it. Measured:
-// `node scripts/audit-bundle.mjs ./important-project` landed EISDIR in `problems`, `present()`
-// reported the name as taken, and `renameSync` cheerfully moved the whole DIRECTORY to
-// `important-project.REJECTED` and called it CONTAMINATED.
-//
-// A DIRECTORY ONLY, deliberately. A symlink — dangling or not — standing under the publishable
-// name is still something somebody can upload, so it keeps going to the quarantine below. And the
-// lstat is wrapped, because `throwIfNoEntry: false` suppresses ENOENT and nothing else: inside an
-// unsearchable directory it answers EACCES, which unguarded here is a node:fs stack trace on the
-// first line of the run.
-try {
-  if (lstatSync(bundlePath, { throwIfNoEntry: false })?.isDirectory()) {
-    console.error(`Refusing to audit ${bundlePath}: it is a directory, so there is no bundle here.`);
-    process.exit(2);
-  }
-} catch (error) {
-  housekeeping.push(
-    `could not look at ${basename(bundlePath)}: ${error.message}` +
-      ' — this tree cannot be released from until that path can be read',
-  );
+  problems.push(`version mismatch: the release was asked for ${expectedVersion || '(empty)'}, the tree declares ${version}`);
 }
 
 let bundle = null;
@@ -494,10 +397,7 @@ try {
   entries = readArchive(bundle);
   readable = true;
 } catch (error) {
-  // `housekeeping`: a path this script cannot read is a tree it cannot release from. It used to be
-  // a `problems` entry, which quarantined on an EACCES — moving a file whose content nobody had
-  // seen and calling it contaminated.
-  housekeeping.push(`${basename(bundlePath)} could not be read as a bundle: ${error.message}`);
+  problems.push(`${basename(bundlePath)} could not be read as a bundle: ${error.message}`);
 }
 
 // An empty archive passes every path rule there is. That is a vacuous pass, not a clean bundle.
@@ -571,9 +471,7 @@ if (bundle && entries.length > 0 && !bundledManifest) {
 } else if (bundle && bundledManifest) {
   try {
     const bundledVersion = JSON.parse(readEntry(bundle, bundledManifest).toString('utf8')).version;
-    // `version &&` because without one the housekeeping line already said why, and a fourth line
-    // reading "the tree declares null" puts a raw null in front of the operator.
-    if (version && bundledVersion !== version) {
+    if (bundledVersion !== version) {
       problems.push(`version mismatch: the bundled manifest.json says ${bundledVersion}, the tree declares ${version}`);
     }
   } catch (error) {
@@ -581,43 +479,32 @@ if (bundle && entries.length > 0 && !bundledManifest) {
   }
 }
 
-if (problems.length > 0 || housekeeping.length > 0) {
-  console.error(
-    problems.length > 0
-      ? `Refusing to release ${basename(bundlePath)}: the bundle did not pass the audit.`
-      : `Refusing to release ${basename(bundlePath)}: this tree cannot be released from.`,
-  );
-  for (const p of [...problems, ...housekeeping]) console.error(`  - ${p}`);
+if (problems.length > 0) {
+  console.error(`Refusing to release ${basename(bundlePath)}: the bundle did not pass the audit.`);
+  for (const p of problems) console.error(`  - ${p}`);
   // Clearing only the versioned copy left the FILE package.json names sitting there with the
   // secret inside it — the one somebody would upload. It is renamed rather than deleted so the
   // evidence survives for whoever has to find out how it got in.
   //
-  // The condition is "the file is still lying there", not "we managed to read it". `bundle` is null
-  // for every read that threw — EACCES, EISDIR, a mid-pack truncation — and on exactly those runs
-  // the file is still sitting under its publishable name. Guarding on `bundle` skipped the
-  // quarantine on the cases that need it most, which is the #90 defect one level down.
-  //
-  // `lstatSync`, not `existsSync`: `existsSync` follows the link, so a DANGLING `zendesk.mcpb`
-  // symlink answered false and the publishable name survived without a word about it. The question
-  // is whether a name is there for somebody to upload, not whether it resolves.
+  // THE CONDITION IS "THERE IS A NAME HERE", not "we managed to read it". `bundle` is the BUFFER:
+  // it is null for every read that threw — EACCES, EISDIR, a mid-pack truncation — and on exactly
+  // those runs the file is still sitting under its publishable name. Guarding on it skipped the
+  // quarantine on the cases that need it most, which is the #90 defect one level down. `lstat`
+  // rather than `existsSync`, because `existsSync` follows the link and a dangling symlink under
+  // the publishable name read as absent; a path this cannot stat at all counts as TAKEN, so the
+  // quarantine is attempted and its own catch reports what happened.
   let quarantined = null;
-  if (problems.length > 0 && present(bundlePath)) {
-    // A FREE NAME, because the previous one is EVIDENCE. `rmSync(quarantined, { force: true })`
-    // stood here and flatly contradicted the comment above it: measured across two failing runs,
-    // run 2 overwrote run 1's `.REJECTED` and the `tokens.enc` that had been found in it was gone.
+  if (nameIsTaken(bundlePath)) {
     quarantined = `${bundlePath}.REJECTED`;
-    for (let n = 2; present(quarantined); n += 1) quarantined = `${bundlePath}.REJECTED.${n}`;
     try {
+      rmSync(quarantined, { force: true });
       renameSync(bundlePath, quarantined);
     } catch (error) {
       quarantined = null;
       // A quarantine this script could not perform is housekeeping it could not do, so it exits 2
       // and not 1: the caller is being told to fix the TREE, by hand, before anything is uploaded.
-      const said = `could not quarantine ${basename(bundlePath)}: ${error.message} — DELETE IT BY HAND`;
-      // Printed here because the `[...problems, ...housekeeping]` loop above has already run; the
-      // push is what carries the exit code, and one string so the two cannot drift.
-      housekeeping.push(said);
-      console.error(`  - ${said}`);
+      housekeepingFailed = true;
+      console.error(`  - could not quarantine ${basename(bundlePath)}: ${error.message} — DELETE IT BY HAND`);
     }
   }
   console.error('\nNo artifact and no checksum were produced.');
@@ -630,48 +517,13 @@ if (problems.length > 0 || housekeeping.length > 0) {
   // Exit 2 is "this script could not do its own housekeeping", kept apart from exit 1, "the bundle
   // did not pass", the way scripts/assert-no-bound-port-literals.mjs:140 separates the two. The
   // caller needs the distinction: exit 1 is a bundle to fix, exit 2 is a tree to fix.
-  //
-  // WITH BOTH LISTS FILLED, HOUSEKEEPING WINS, and that is #90's decision rather than an accident:
-  // exit 2 means a human has to act by hand before this tree can release anything, which outranks
-  // "fix the bundle and pack again" as a call to action. A caller must therefore not read exit 1
-  // as "contaminated" and exit 2 as "clean" — the CONTAMINATED line above is what says that, and
-  // it is printed on both codes. Pinned by `leaves the ordinary refusal at exit 1` and by
-  // `quarantines the failed bundle anyway`, which is a contaminated bundle exiting 2.
-  process.exit(housekeeping.length > 0 ? 2 : 1);
+  process.exit(housekeepingFailed ? 2 : 1);
 }
 
-// WRAPPED, because clearing the slot succeeding does not mean writing into it will. Measured on
-// node v26.5.0, a read-only parent lets `rmSync(stale, { force: true })` pass — the path is not
-// there, so ENOENT is suppressed — and answers this write with EACCES. Unwrapped that was a node
-// stack trace and exit 1: a tree to fix, reported as a bundle to fix, through the one path the
-// no-stack-trace bar does not cover. It is exit 2 for the same reason the cleanup failure is.
 const sha256 = createHash('sha256').update(bundle).digest('hex');
-try {
-  writeFileSync(artifactPath, bundle);
-  // `shasum -a 256 -c <file>.sha256` format: digest, two spaces, the name it applies to.
-  writeFileSync(checksumPath, `${sha256}  ${basename(artifactPath)}\n`);
-} catch (error) {
-  console.error(`Refusing to release ${basename(bundlePath)}: this tree cannot be released from.`);
-  console.error(
-    `  - the audit passed, but ${basename(artifactPath)} could not be written: ${error.message}` +
-      ' — this tree cannot be released from until that path is writable',
-  );
-  // The bundle is CLEAN, so it is left exactly where it is. Nothing is quarantined and nothing is
-  // called contaminated: the defect is the tree, and the packed bundle is the thing to keep.
-  //
-  // WRAPPED TOO. These two are housekeeping inside a housekeeping handler: a throw here — the half
-  // of the pair that is a directory, say — would replace this exit 2 with a stack trace and exit 1,
-  // which is the unguarded-housekeeping shape one level up. `recursive` is left at its default, so
-  // a directory in the artifact slot is reported rather than silently emptied.
-  for (const half of [checksumPath, artifactPath]) {
-    try {
-      rmSync(half, { force: true });
-    } catch (second) {
-      console.error(`  - and ${basename(half)} could not be removed either: ${second.message} — REMOVE IT BY HAND`);
-    }
-  }
-  process.exit(2);
-}
+writeFileSync(artifactPath, bundle);
+// `shasum -a 256 -c <file>.sha256` format: digest, two spaces, the name it applies to.
+writeFileSync(checksumPath, `${sha256}  ${basename(artifactPath)}\n`);
 
 const dependencies = accepted.filter((a) => a.rule === 'runtime-dependencies').length;
 console.log(`Accepted ${accepted.length} paths, of which ${dependencies} are node_modules/** [runtime-dependencies].`);

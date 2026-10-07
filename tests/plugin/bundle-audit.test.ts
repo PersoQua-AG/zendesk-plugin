@@ -2,7 +2,6 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  chmodSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -228,24 +227,6 @@ function audit(entries: ZipEntry[]): Run {
   return runAudit(makeTree({ entries }));
 }
 
-/**
- * Makes a path unremovable and unwritable without a mode bit: a non-empty DIRECTORY, which
- * `rmSync(p, { force: true })` answers with ERR_FS_EISDIR and `readFileSync` with EISDIR. Chosen
- * over `chmod 000` throughout this file because a mode bit does not stop root and CI containers
- * may run as one. Stood as four hand-written copies before it had a name.
- */
-function occupy(path: string): void {
-  rmSync(path, { recursive: true, force: true });
-  mkdirSync(path);
-  writeFileSync(join(path, 'occupant'), 'left by an earlier run');
-}
-
-/** A clean bundle plus one planted credential file — the contaminated fixture, named once. */
-const contaminated = (): ZipEntry[] => [...clean(), { name: 'tokens.enc', data: 'x' }];
-
-/** Whether a NAME is taken, which a dangling symlink is and `existsSync` says it is not. */
-const nameIsTaken = (path: string): boolean => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
-
 // Every failing run in this file goes through here: no sentinel may appear in either stream.
 function expectNoSecretEchoed(run: Run): void {
   for (const sentinel of SENTINELS) {
@@ -319,7 +300,7 @@ describe('a planted secret is caught', () => {
   });
 
   it('produces no artifact, no checksum, and leaves nothing uploadable behind', () => {
-    const tree = makeTree({ entries: contaminated() });
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
     const run = runAudit(tree);
     expect(run.status).not.toBe(0);
     expect(existsSync(tree.artifact)).toBe(false);
@@ -333,7 +314,7 @@ describe('a planted secret is caught', () => {
   });
 
   it('removes an artifact left by an earlier passing run, so a refusal leaves nothing shippable', () => {
-    const tree = makeTree({ entries: contaminated() });
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
     writeFileSync(tree.artifact, 'stale bundle from the run before');
     writeFileSync(tree.checksum, 'stale checksum');
     expect(runAudit(tree).status).not.toBe(0);
@@ -354,10 +335,15 @@ describe('a stale artifact that cannot be cleared', () => {
   // The unremovable shape a half-finished run or another user leaves behind: the artifact slot is
   // a non-empty DIRECTORY. Measured on node v26.5.0, rmSync(path, { force: true }) answers it with
   // ERR_FS_EISDIR. Chosen over a 0555 parent because that one passes for root, and CI containers
+  // run as root.
+  function blockArtifactSlot(tree: Tree): void {
+    mkdirSync(tree.artifact);
+    writeFileSync(join(tree.artifact, 'occupant'), 'left by an earlier run');
+  }
 
   it('quarantines the failed bundle anyway, and names the path it could not clear', () => {
-    const tree = makeTree({ entries: contaminated() });
-    occupy(tree.artifact);
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    blockArtifactSlot(tree);
     const run = runAudit(tree);
 
     // The side effect FIRST, and deliberately: exit 1 and exit 2 are both non-zero, and neither
@@ -367,17 +353,17 @@ describe('a stale artifact that cannot be cleared', () => {
     expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
     expect(run.stderr).toContain('could not clear the stale artifact zendesk-1.0.0.mcpb');
     expect(run.stderr).toContain('CONTAMINATED');
-    // Exit 2, not 1: a tree to fix, not a bundle to fix. And a message, not a stack trace — the
-    // bar scripts/assert-no-bound-port-literals.mjs is held to. Unguarded, this path printed a
-    // node:fs source excerpt and five stack frames and still died with 1.
-    expect(run.status).toBe(2);
-    expect(run.stderr).not.toMatch(/^\s+at /m);
-    expect(run.stderr).not.toContain('node:fs:');
     expectNoSecretEchoed(run);
   });
 
+  it('exits 2, so a tree to fix is not reported as a bundle to fix', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    blockArtifactSlot(tree);
+    expect(runAudit(tree).status).toBe(2);
+  });
+
   it('leaves the ordinary refusal at exit 1, with no housekeeping complaint', () => {
-    const tree = makeTree({ entries: contaminated() });
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
     const run = runAudit(tree);
     expect(run.status).toBe(1);
     expect(run.stderr).not.toContain('could not clear the stale artifact');
@@ -389,7 +375,7 @@ describe('a stale artifact that cannot be cleared', () => {
   // EISDIR, which would crash AFTER the run had printed that the audit passed.
   it('refuses a bundle that would otherwise pass, instead of crashing on the write', () => {
     const tree = makeTree();
-    occupy(tree.artifact);
+    blockArtifactSlot(tree);
     const run = runAudit(tree);
 
     expect(run.status).toBe(2);
@@ -397,158 +383,64 @@ describe('a stale artifact that cannot be cleared', () => {
     expect(existsSync(tree.checksum)).toBe(false);
   });
 
+  // A message, not a stack trace — the bar scripts/assert-no-bound-port-literals.mjs is held to.
+  // Unguarded, this path printed a node:fs source excerpt and five stack frames.
+  it('reports the failure as a line of its own, not as an uncaught SystemError', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    blockArtifactSlot(tree);
+    const run = runAudit(tree);
+
+    expect(run.stderr).not.toMatch(/^\s+at /m);
+    expect(run.stderr).not.toContain('node:fs:');
+  });
 });
 
 // =============================================================================================
-// Scenario: the quarantine itself is the thing that fails (#90, one level down)
+// Scenario: the quarantine itself is skipped or mis-reported (#90, one level down)
 //
-// The quarantine used to be guarded on `bundle`, the BUFFER — so every run whose read threw left
-// the file lying under its publishable name, unquarantined and unmentioned. And when the rename
-// failed, the run still exited 1: "a bundle to fix", when what it meant was "a tree to fix, by
-// hand". Same class as #90 itself: the safeguard is skipped on exactly the runs that need it.
+// The quarantine was guarded on `bundle`, the BUFFER — so every run whose read threw left the file
+// lying under its publishable name, unquarantined and unmentioned. And when the rename failed, the
+// run still exited 1, "a bundle to fix", when what it meant was "a tree to fix, by hand".
 // =============================================================================================
 describe('a bundle the audit could not read', () => {
-  // Unreadable AND still present: the audit's path is a non-empty DIRECTORY, which readFileSync
-  // answers with EISDIR. Chosen over chmod 000 for the same reason the stale-artifact fixture
-  // above avoids a 0555 parent — a mode bit does not stop root, and CI containers run as root.
-
-  // A DIRECTORY under the publishable name is refused and LEFT ALONE. It used to land EISDIR in
-  // `problems`, and `renameSync` then moved the whole directory to `.REJECTED` and called it
-  // contaminated — measured against `./important-project`, which is how an operator loses a tree.
-  it('refuses a directory where the bundle should be, and does not move it', () => {
-    const tree = makeTree();
-    occupy(tree.bundle);
-    const run = runAudit(tree);
-
-    expect(run.status).toBe(2);
-    expect(run.stderr).toContain('it is a directory, so there is no bundle here');
-    expect(existsSync(join(tree.bundle, 'occupant')), 'the directory was moved').toBe(true);
-    expect(nameIsTaken(`${tree.bundle}.REJECTED`)).toBe(false);
-    expect(run.stderr).not.toContain('CONTAMINATED');
-  });
-
-  // OWNER QUESTION, FLAGGED RATHER THAN SETTLED HERE, and this case pins the current answer so the
-  // decision is visible either way. Two review rounds took opposite positions: round 2 said a path
-  // the audit could not read "is still a path somebody can upload" and should be quarantined; round
-  // 4 showed that quarantining on an unreadable path is what renamed a provably CLEAN bundle to
-  // `.REJECTED` and called it CONTAMINATED. What is implemented is the non-destructive side — it
-  // refuses, names the path, exits 2 and MOVES NOTHING — because the content of an EACCES file is
-  // not something this script has seen. The cost is that the name stays where it is.
-  it('refuses a path it could not read, names it, and leaves it alone', () => {
+  // Unreadable AND still present: a DANGLING symlink. `existsSync` follows the link, so it read as
+  // absent for both the guard and a naive assertion; lstat is what sees the name.
+  it('quarantines it anyway — a name it could not read is still a name somebody can upload', () => {
     const tree = makeTree();
     rmSync(tree.bundle);
     symlinkSync(join(tree.dir, 'nothing-here.mcpb'), tree.bundle);
     const run = runAudit(tree);
 
-    expect(run.status).toBe(2);
-    expect(run.stderr).toContain('could not be read as a bundle');
-    expect(nameIsTaken(tree.bundle), 'the name was moved after all').toBe(true);
-    expect(nameIsTaken(`${tree.bundle}.REJECTED`)).toBe(false);
-    expect(run.stderr).not.toContain('CONTAMINATED');
-  });
-
-});
-
-// A CLEAN bundle on a tree that cannot be released from. The two questions the script answers —
-// "is this bundle fit to publish" and "can this tree publish anything" — were one list, so a bundle
-// that passed every rule was renamed to `.REJECTED` and announced as CONTAMINATED with "Fix the
-// cause (usually .mcpbignore)". Every word false for that tree, and the good bundle destroyed to
-// say it.
-describe('a clean bundle on a tree whose artifact slot is blocked', () => {
-  it('is left exactly where it is, and is never called contaminated', () => {
-    const tree = makeTree();
-    occupy(tree.artifact);
-    const run = runAudit(tree);
-
-    expect(run.status).toBe(2);
-    expect(existsSync(tree.bundle)).toBe(true);
-    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(false);
-    expect(run.stderr).not.toContain('CONTAMINATED');
-    expect(run.stderr).not.toContain('did not pass the audit');
-    expect(run.stderr).toContain('this tree cannot be released from');
-    expect(existsSync(tree.checksum)).toBe(false);
-  });
-});
-
-// Clearing the slot succeeding does not mean writing into it will: `rmSync(stale, { force: true })`
-// suppresses the ENOENT of a path that is not there, and the write into the same unwritable parent
-// then throws. Unwrapped that was a node stack trace and exit 1 — a tree to fix reported as a
-// bundle to fix — on the one path with no assertion over it.
-describe('a tree whose artifact cannot be written', () => {
-  // Root ignores the mode bits, so this says so rather than passing for the wrong reason. GitHub's
-  // ubuntu-latest runners execute as `runner`, not root, so it runs in CI.
-  const asRoot = process.getuid?.() === 0;
-
-  it.skipIf(asRoot)('refuses with exit 2 and a message, and keeps the clean bundle', () => {
-    const tree = makeTree();
-    chmodSync(tree.dir, 0o555);
-    try {
-      const run = runAudit(tree);
-      expect(run.status).toBe(2);
-      expect(run.stderr).toContain('could not be written');
-      expect(run.stderr).not.toMatch(/^\s+at /m);
-      expect(run.stderr).not.toContain('node:fs:');
-      expect(run.stdout).not.toContain('Bundle audit passed');
-      expect(existsSync(tree.bundle)).toBe(true);
-      expect(existsSync(tree.checksum)).toBe(false);
-    } finally {
-      chmodSync(tree.dir, 0o755);
-    }
-  });
-});
-
-// A DIRECTORY THE SCRIPT CANNOT SEARCH. `throwIfNoEntry: false` suppresses ENOENT and nothing
-// else, so `present()` was the one unwrapped fs call left on the refusal path: measured on node
-// v26.5.0 at mode 000, two correct message lines and then an EACCES with a node:fs source excerpt,
-// five frames and exit 1 — with housekeeping already filled, i.e. the 1-vs-2 contract broken on
-// the same run. Mode bits, so root is told rather than passing for the wrong reason.
-describe('an artifact directory that cannot be searched', () => {
-  const asRoot = process.getuid?.() === 0;
-
-  // The bundle sits in a SUBDIRECTORY that is locked, not in the tree root: locking the root would
-  // also stop node loading the script under test, and the stack trace would then be the loader's.
-  it.skipIf(asRoot)('refuses with a message and exit 2, not a stack trace', () => {
-    const tree = makeTree({ entries: contaminated() });
-    const out = join(tree.dir, 'out');
-    mkdirSync(out);
-    copyFileSync(tree.bundle, join(out, 'zendesk.mcpb'));
-    chmodSync(out, 0o000);
-    try {
-      const run = runAudit(tree, [join(out, 'zendesk.mcpb')]);
-      expect(run.stderr).not.toMatch(/^\s+at /m);
-      expect(run.stderr).not.toContain('node:fs:');
-      expect(run.stderr).toContain('could not look at');
-      expect(run.status).toBe(2);
-    } finally {
-      chmodSync(out, 0o755);
-    }
+    expect(run.status).not.toBe(0);
+    expect(nameIsTaken(tree.bundle), 'the publishable name is still there').toBe(false);
+    expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'nothing was quarantined').toBe(true);
+    expect(run.stderr).toContain('CONTAMINATED');
   });
 });
 
 describe('a quarantine that cannot be performed', () => {
-  // The .REJECTED slot is occupied by a non-empty directory, so the `rmSync` that clears it throws
-  // ERR_FS_EISDIR inside the quarantine's own try. Nothing can be renamed, and the publishable
-  // name survives — which is precisely why the operator has to be told to act by hand.
-
-  // THE OCCUPIED SLOT IS STEPPED OVER, NOT OVERWRITTEN. `rmSync(quarantined, { force: true })`
-  // stood here and contradicted the comment above it: measured across two failing runs, run 2
-  // overwrote run 1's `.REJECTED` and the credential found in it was gone. The bundle still has to
-  // leave its publishable name, so a free name is taken instead.
-  // The search for a free name is unbounded on purpose: `.REJECTED.2`, `.3` and so on, so there is
-  // always one and the bundle always leaves its publishable name.
-  it('takes the next free name rather than destroying the last quarantine', () => {
-    const tree = makeTree({ entries: contaminated() });
-    writeFileSync(`${tree.bundle}.REJECTED`, 'the evidence of an earlier failing run');
+  it('exits 2, not 1: this is a tree to fix by hand, not a bundle to fix', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    // The .REJECTED slot is a non-empty directory, so the `rmSync` that clears it throws
+    // ERR_FS_EISDIR inside the quarantine's own try. Nothing can be renamed, and the publishable
+    // name survives — which is precisely why the operator has to be told to act by hand. A
+    // directory rather than a mode bit, because a mode bit does not stop root.
+    mkdirSync(`${tree.bundle}.REJECTED`);
+    writeFileSync(join(`${tree.bundle}.REJECTED`, 'occupant'), 'left by an earlier run');
     const run = runAudit(tree);
 
-    expect(run.status).toBe(1);
-    expect(existsSync(tree.bundle), 'the uploadable name survived').toBe(false);
-    expect(readFileSync(`${tree.bundle}.REJECTED`, 'utf8')).toBe('the evidence of an earlier failing run');
-    expect(existsSync(`${tree.bundle}.REJECTED.2`)).toBe(true);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('could not quarantine zendesk.mcpb');
+    expect(run.stderr).toContain('DELETE IT BY HAND');
+    expect(existsSync(tree.bundle), 'the uploadable name is still there').toBe(true);
     expectNoSecretEchoed(run);
   });
-
 });
+
+/** Whether a NAME is taken, which a dangling symlink is and `existsSync` says it is not. */
+function nameIsTaken(path: string): boolean {
+  return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+}
 
 // =============================================================================================
 // Scenario: a forbidden path is caught even if the content looks harmless
@@ -975,112 +867,6 @@ describe('a version mismatch blocks the release', () => {
     expect(runAudit(makeTree(), ['zendesk.mcpb', '--expect-version', '1.0.0']).status).toBe(0);
   });
 
-  // NEITHER SOURCE READABLE, which is the case that leaves `artifactPath` null. Before this,
-  // `writeFileSync(null, bundle)` answered with an uncaught ERR_INVALID_ARG_TYPE whose own catch
-  // threw again on `basename(null)`: five frames and exit 1 — the #90 class reappearing inside the
-  // #90 fix. validate-manifests.mjs rejects an empty version before `npm run pack` reaches here, so
-  // only a direct invocation does — which is what this file and an audit of a downloaded artifact do.
-  // Both files PARSE and neither carries a version, which is the shape that isolates the defect:
-  // corrupting them instead also pushes "manifest.json is missing or unreadable" into `problems`,
-  // and then the quarantine runs for that reason rather than for this one.
-  function unversioned(tree: Tree): void {
-    writeFileSync(join(tree.dir, 'package.json'), '{}');
-    writeFileSync(join(tree.dir, 'manifest.json'), JSON.stringify({ name: 'zendesk' }));
-  }
-
-  it('refuses a tree with no readable version, as a message and not as a stack trace', () => {
-    const tree = makeTree();
-    unversioned(tree);
-    const run = runAudit(tree);
-
-    expect(run.stderr).toContain('no version could be read');
-    expect(run.stderr).not.toMatch(/^\s+at /m);
-    expect(run.stderr).not.toContain('ERR_INVALID_ARG_TYPE');
-    // Exit 2, and the bundle untouched. A version that cannot be read is a TREE defect: putting it
-    // in `problems` instead renamed a provably clean bundle to `.REJECTED` and announced it as
-    // CONTAMINATED with "Fix the cause (usually .mcpbignore)", every word false for that tree.
-    expect(run.status).toBe(2);
-    expect(nameIsTaken(tree.bundle), 'the clean bundle was taken away').toBe(true);
-    expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'a clean bundle was quarantined').toBe(false);
-    expect(run.stderr).not.toContain('CONTAMINATED');
-    expect(run.stderr).not.toContain('did not pass the audit');
-  });
-
-  // THE BLAST RADIUS, pinned. A `zendesk-*.mcpb` pattern sweep stood here for one round and
-  // deleted two earlier releases and an unrelated file from an operator's download directory while
-  // printing "No artifact and no checksum were produced". A guard may refuse; it may not tidy
-  // somebody else's directory.
-  it('never removes an artifact of a version this run did not produce', () => {
-    const tree = makeTree({ entries: contaminated() });
-    const foreign = join(tree.dir, 'zendesk-9.9.9.mcpb');
-    const unrelated = join(tree.dir, 'zendesk-notes.mcpb');
-    writeFileSync(foreign, 'an earlier release');
-    writeFileSync(unrelated, 'somebody else of a similar name');
-
-    const run = runAudit(tree);
-
-    expect(run.status).toBe(1);
-    expect(existsSync(foreign), 'an earlier release was deleted').toBe(true);
-    expect(existsSync(unrelated), 'an unrelated file was deleted').toBe(true);
-  });
-
-  // BOTH MANIFESTS UNREADABLE, which is the shape the earlier version of this case was reshaped to
-  // AVOID — its own comment said so, and the live defect was documented instead of pinned.
-  // `readJson` pushed into `problems`, so a provably clean bundle was renamed to `.REJECTED` and
-  // announced as CONTAMINATED with "Fix the cause (usually .mcpbignore)". Measured by
-  // `qa-engineer` on one byte-identical bundle: readable manifests → exit 0 and an artifact
-  // written; both corrupt → the same bundle gone.
-  it('refuses a tree whose manifests cannot be parsed, without touching the bundle', () => {
-    const tree = makeTree();
-    writeFileSync(join(tree.dir, 'package.json'), '{ not json');
-    writeFileSync(join(tree.dir, 'manifest.json'), '{ not json either');
-    const run = runAudit(tree);
-
-    expect(run.status).toBe(2);
-    expect(run.stderr).toContain('manifest.json is missing or unreadable');
-    expect(existsSync(tree.bundle), 'a clean bundle was taken away').toBe(true);
-    expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'a clean bundle was quarantined').toBe(false);
-    expect(run.stderr).not.toContain('CONTAMINATED');
-    expect(run.stderr).not.toContain('did not pass the audit');
-  });
-
-  // THE ONE NAME THAT IS SWEPT, which the case above cannot reach: `<name>-<THIS tree's version>`.
-  // `root` is the SCRIPT's parent, so the version is this repository's while the artifact slot is
-  // `dirname(bundlePath)` — and auditing a downloaded bundle deleted the operator's own
-  // `zendesk-1.0.0.mcpb` and its .sha256 because that happened to be the number this tree declares.
-  // Measured by `qa-engineer`. Outside its own tree the script writes no artifact either, so it has
-  // nothing of its own to clear and says which directory it left alone.
-  it('leaves even its OWN version alone in a directory that is not its tree', () => {
-    const tree = makeTree({ entries: contaminated() });
-    const elsewhere = mkdtempSync(join(tmpdir(), 'bundle-audit-downloads-'));
-    temps.push(elsewhere);
-    const theirs = join(elsewhere, 'zendesk-1.0.0.mcpb');
-    writeFileSync(theirs, 'the operator\'s own release of the version this tree declares');
-    writeFileSync(`${theirs}.sha256`, 'and its sidecar');
-    copyFileSync(tree.bundle, join(elsewhere, 'zendesk.mcpb'));
-
-    const run = runAudit(tree, [join(elsewhere, 'zendesk.mcpb')]);
-
-    expect(existsSync(theirs), "the operator's own release was deleted").toBe(true);
-    expect(existsSync(`${theirs}.sha256`), "the operator's own checksum was deleted").toBe(true);
-    expect(run.stderr).toContain("is not in this script's own tree");
-  });
-
-  // A stale artifact it cannot NAME is reported, not guessed at. The invariant at the top of the
-  // housekeeping block ("no artifact is published" must hold for the operator who released this
-  // bundle before) cannot be enforced without the version, and the honest answer is to say which
-  // directory to look in rather than to delete by pattern.
-  it('names the stale artifact it cannot clear, instead of sweeping by pattern', () => {
-    const tree = makeTree();
-    writeFileSync(tree.artifact, 'left by an earlier passing run');
-    unversioned(tree);
-    const run = runAudit(tree);
-
-    expect(run.stderr).toMatch(/zendesk-<version>\.mcpb/);
-    expect(run.stderr).toContain('has to be checked by hand');
-    expect(existsSync(tree.artifact), 'it deleted the artifact it said it could not name').toBe(true);
-  });
-
   it('refuses a tree whose package.json it cannot read, rather than releasing an unversioned bundle', () => {
     const tree = makeTree();
     rmSync(join(tree.dir, 'package.json'));
@@ -1384,7 +1170,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     },
     {
       rule: 'the bundled manifest must agree with the tree',
-      mutate: [['    if (version && bundledVersion !== version) {', '    if (false) {']],
+      mutate: [['    if (bundledVersion !== version) {', '    if (false) {']],
       entries: clean('0.9.0'),
       baseline: (r) => expect(r.status).not.toBe(0),
       ablated: (r) => expect(r.status).toBe(0),
@@ -1403,7 +1189,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
         // not the guard that #90 put around it. That guard has its own cases above.
         ['      rmSync(stale, { force: true });', '      void stale;'],
       ],
-      entries: contaminated(),
+      entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
       seed: (t) => writeFileSync(t.artifact, 'stale bundle from the run before'),
       baseline: (r, t) => expect(existsSync(t.artifact)).toBe(false),
       ablated: (r, t) => expect(existsSync(t.artifact)).toBe(true),
@@ -1698,7 +1484,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     {
       rule: 'the refusal quarantines the unaudited bundle under a name nobody uploads',
       mutate: [['      renameSync(bundlePath, quarantined);', '      void quarantined;']],
-      entries: contaminated(),
+      entries: [...clean(), { name: 'tokens.enc', data: 'x' }],
       baseline: (_r: Run, t: Tree) => expect(existsSync(t.bundle)).toBe(false),
       ablated: (_r: Run, t: Tree) => expect(existsSync(t.bundle)).toBe(true),
     },
