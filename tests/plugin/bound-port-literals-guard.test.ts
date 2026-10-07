@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -347,33 +348,59 @@ describe('the bound-port guard as a script', () => {
   // THIS repository were not.
   // ──────────────────────────────────────────────────────────────────────────────────────────────
 
-  // The probe is a real file in a real subdirectory of the real scanned tree, removed in a finally
-  // so a failed assertion cannot leave it behind. Not named *.test.ts on purpose: vitest must not
-  // collect it, and the guard must still scan it — which is the "scans helper files too" rule.
-  // A `finally` does not cover a killed process, so an abort here leaves the probe on disk. How
-  // loud that residue is depends on which probe it is, and only one of the two is caught by the
-  // gate: the bound-literal probe makes `check:ports` go red, the `deps(freePort())` probe leaves
-  // it green (measured: exit 0) and is shown by `git status` alone. Both are named for what they
-  // are, which is what makes the quiet one survivable. No test file but this one runs the port
-  // guard, so the window is this file's own, not a race with the rest of a parallel `vitest run`.
-  function withProbe<T>(relDir: string, source: string, body: () => T): T {
-    const probe = join(root, relDir, 'zz-port-guard-probe.ts');
-    writeFileSync(probe, source);
-    try {
-      return body();
-    } finally {
-      rmSync(probe, { force: true });
-    }
+  // A COPY OF THE REAL TEST TREE, not the repository itself and not a tree this test invents.
+  //
+  // THE CLAIM THIS REPLACES WAS MEASURABLY WRONG (#106, fourth instance). It read: "No test file
+  // but this one runs the port guard, so the window is this file's own, not a race with the rest
+  // of a parallel `vitest run`." Running the port guard is not the only way to read these files.
+  // `tests/plugin/no-real-keychain.test.ts` walks `tests/**` with a recursive readdirSync and then
+  // readFileSync's every entry, and in a shuffled full run it hit the probe after the `finally`
+  // had unlinked it:
+  //   Error: ENOENT: no such file or directory, open
+  //     '…/tests/tools/zz-port-guard-probe.ts'   (tests/plugin/no-real-keychain.test.ts:86)
+  // That is the same defect as the mutant files this ticket moved out of `scripts/`: the tracked
+  // tree is not this file's private workspace while other suites are walking it. And the keychain
+  // guard is not the place to fix it — it may not be weakened, and tolerating a vanished entry is
+  // the #85 class anyway.
+  //
+  // WHY A COPY ANSWERS #82 and a hand-built fixture did not. The defect #82 fixed was a scan one
+  // directory deep, invisible to any small tree the test wrote itself. A faithful copy of `tests/`
+  // has the real structure — 227 files, the same subdirectories, `freePort()` defined in
+  // tests/auth/login-harness.ts so the tree is MARKED — so a one-deep scan misses tests/tools
+  // there exactly as it did in the repository. 1.5 MB per case, measured. The repository's own
+  // wired root is still run against, unplanted, by the sweep case above
+  // (`expect(runGuard(wiredRoot()).status).toBe(0)`), so nothing stops exercising the real tree.
+  //
+  // The probe is still not named *.test.ts: vitest must not collect it and the guard must still
+  // scan it, which is the "scans helper files too" rule. Nothing has to be removed in a `finally`
+  // any more, so a killed process leaves no residue in the repository at all.
+  function withProbe<T>(relDir: string, source: string, body: (scanRoot: string) => T): T {
+    const dir = mkdtempSync(join(tmpdir(), 'port-guard-tree-'));
+    temps.push(dir);
+    cpSync(join(root, 'tests'), join(dir, 'tests'), { recursive: true });
+    writeFileSync(join(dir, relDir, 'zz-port-guard-probe.ts'), source);
+    return body(join(dir, 'tests'));
   }
+
+  // #106, fourth instance, as a position rather than a race — the same assertion shape that holds
+  // the mutant files in tests/plugin/executor-safety-guard.test.ts. Red the moment a probe goes
+  // back under the repository root.
+  it('plants its probe outside the repository, where no other suite can race it', () => {
+    withProbe('tests/tools', '// nothing to find here\n', (scanRoot) => {
+      expect(relative(root, scanRoot), scanRoot).toMatch(/^\.\./);
+    });
+  });
 
   // ACCEPTANCE CRITERION 1, with its control. Before #82 this file was simply not looked at:
   // measured on b9f0615, `npm run check:ports` with this exact probe in tests/tools printed
   // "Bound port literals in tests/auth/: 50 files scanned." and exited 0.
   it('fails and names file and line for a bound literal OUTSIDE tests/auth', () => {
-    withProbe('tests/tools', `${ACQUIRES}\nexport const start = () => ${BOUND};\n`, () => {
-      const run = runGuard(wiredRoot());
+    withProbe('tests/tools', `${ACQUIRES}\nexport const start = () => ${BOUND};\n`, (scanRoot) => {
+      const run = runGuard(scanRoot);
       expect(run.status).toBe(1);
-      expect(run.stderr).toContain(`tests/tools/zz-port-guard-probe.ts:3 ${BOUND}`);
+      // The scan root is outside the repository, so the guard names it by its way out (`../…`) —
+      // that is its own documented rule for a temp tree. The part that matters is the depth.
+      expect(run.stderr).toContain(`tools/zz-port-guard-probe.ts:3 ${BOUND}`);
     });
   });
 
@@ -381,8 +408,8 @@ describe('the bound-port guard as a script', () => {
     withProbe(
       'tests/tools',
       `${ACQUIRES}\nexport const start = () => ${BIND('freePort()')};\n`,
-      () => {
-        const run = runGuard(wiredRoot());
+      (scanRoot) => {
+        const run = runGuard(scanRoot);
         expect(run.stderr).toBe('');
         expect(run.status).toBe(0);
       },
