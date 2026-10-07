@@ -24,24 +24,52 @@ function isFixedBindPort(port: unknown): port is number {
 
 // listen(port), listen(port, host), listen({ port }), listen('8976'), listen(path), listen(handle).
 // A non-numeric string is a unix socket path, not a port.
+const bagOf = (first: unknown): Record<string, unknown> | null =>
+  typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : null;
+
+// NODE'S OWN TEST, not an approximation of it, and shared by the two questions that need it so they
+// cannot drift apart. `'handle' in bag` is true of `{ handle: undefined, port: 18931 }`, an ordinary
+// optional-handle shape that node binds on 18931 — measured, it BOUND 18931 with the guard silent.
+// `!= null` then admitted `fd: -1`, the canonical absent-fd sentinel, as well as `handle: 0`,
+// `handle: false` and `fd: NaN`: measured, four more fixed ports bound with the guard silent, the
+// same class one value over. node asks `options.fd >= 0` and whether `options.handle` is truthy.
+const handleDecides = (bag: Record<string, unknown>): boolean =>
+  (typeof bag.fd === 'number' && bag.fd >= 0) || Boolean(bag.handle);
+
+// "The caller asked for the OS to choose", read off the ARGUMENTS rather than off `portOf`, which
+// answers `undefined` both for "no port named" and for "a handle decides" and so cannot tell them
+// apart. Conflating those two registered a handle's FIXED port as if the OS had chosen it, and the
+// positional arms were each missing at some point — `listen(cb)`, then `listen(undefined, cb)` —
+// with the OS-chosen port going unrecorded so a later legitimate re-bind of it was refused. Both
+// are pinned by cases that go red when their arm is removed.
+//
+// NO BAG-LEVEL NULLISH ARM, and that is measured rather than assumed. A review round reported
+// `{ port: undefined }` and `{ port: null }` as unrecorded, from a harness that called this patch
+// directly. Through node they never arrive that way: instrumenting the patched `listen` shows node
+// normalising `{ port: undefined, host }` to `{ port: 0, host }` BEFORE the prototype is reached,
+// so `Number(bag.port) === 0` already answers them. An arm for it was written, could not be made
+// red by any ablation, and was removed as the dead code it is.
+function asksForEphemeral(args: unknown[]): boolean {
+  if (args.length === 0) return true;
+  const first = args[0];
+  if (first === undefined || first === null || typeof first === 'function') return true;
+  const bag = bagOf(first);
+  if (bag === null) return Number(first) === 0;
+  // A handle is not asking — it decides, and then there is nothing of the OS's to record.
+  if (handleDecides(bag)) return false;
+  return Number(bag.port) === 0;
+}
+
 function portOf(args: unknown[]): unknown {
   const first = args[0];
   // `handle` and `fd` WIN over a port in the same bag, because node binds the handle and ignores
   // options.port — reading the port there falsely refused `listen({ handle, port: 18996 })`.
   //
   // Returning `undefined` rather than a distinct sentinel is enough: nothing downstream asks
-  // whether `portOf` answered nothing. `wantsEphemeral` reads the ARGUMENTS, which is what closed
+  // whether `portOf` answered nothing. `asksForEphemeral` reads the ARGUMENTS, which is what closed
   // the mis-registration a sentinel was briefly added for as well.
-  //
-  // NODE'S OWN TEST, not an approximation of it. `'handle' in bag` is true of
-  // `{ handle: undefined, port: 18931 }`, an ordinary optional-handle shape that node binds on
-  // 18931 — measured, it BOUND 18931 with the guard silent. `!= null` then admitted `fd: -1`, the
-  // canonical absent-fd sentinel, as well as `handle: 0`, `handle: false` and `fd: NaN`: measured,
-  // four more fixed ports bound with the guard silent, the same class one value over. node asks
-  // `options.fd >= 0` and whether `options.handle` is truthy, and so does this.
-  const bag = typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : null;
-  const byHandle = bag !== null && ((typeof bag.fd === 'number' && bag.fd >= 0) || Boolean(bag.handle));
-  if (byHandle) return undefined;
+  const bag = bagOf(first);
+  if (bag !== null && handleDecides(bag)) return undefined;
   const raw = bag && 'port' in bag ? bag.port : first;
   if (typeof raw !== 'string') return raw;
   // `Number()`, not /^\d+$/: node coerces the string the same way, so `listen('0x4650')` and
@@ -99,19 +127,15 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
   // then succeeded, undeclared and unrefused. Exactly the mis-registration this comment used to claim
   // it had avoided.
   //
-  // Asking for an ephemeral port means: no arguments at all, nothing in the first one, a callback
-  // first, or a port of 0. A handle or an fd is NOT asking — the handle decides, and the guard
-  // records nothing. `args[0] === undefined` is the arm that was missing: measured,
-  // `listen(undefined, cb)` had node choose 49613 and recorded nothing, so a later legitimate
-  // re-bind of that number was refused — the same defect as the callback arm, one shape over.
+  // Asking for an ephemeral port is decided by `asksForEphemeral`, above, which is where the shapes
+  // and their measurements live. A handle or an fd is NOT asking, so nothing is recorded for it.
   //
   // The entry is permanent, unlike a declared stranger: a server bound once in a beforeAll is
   // re-bound by the cases, so a per-case scope would refuse it. What keeps that safe is that an
   // ephemeral range cannot excuse a PORT_BAND literal — measured on darwin, 49152-65535 against a
   // band of 20000-29999, and on Linux the default is 32768-60999. Both are sysctl-tunable, so this
   // is a property of the machines this suite runs on and not a law.
-  const wantsEphemeral = args.length === 0 || args[0] === undefined || typeof args[0] === 'function' || port === 0;
-  if (wantsEphemeral) {
+  if (asksForEphemeral(args)) {
     this.once('listening', () => {
       const chosen = this.address();
       if (chosen !== null && typeof chosen === 'object' && typeof chosen.port === 'number') {
