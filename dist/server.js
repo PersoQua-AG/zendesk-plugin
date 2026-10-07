@@ -46,8 +46,19 @@ export const INCREMENTAL_RATE_LIMIT_RPM = 10;
 export const SECURITY_LEVELS = ['strict', 'standard', 'off'];
 function parseSecurityLevel(raw) {
     const value = raw?.trim().toLowerCase();
-    if (!value)
+    // Absence was the one resolution with no symptom at all, and it was silent in the dangerous
+    // direction (#93 gap B): an operator who believed they had configured `strict` got `standard`, so
+    // STRICT_PATTERNS never applied and nothing anywhere said so. Since the owner decision on #59 the
+    // shipped plugin declares no field for this level, which makes that belief MORE likely rather than
+    // less — the only thing left that can correct it is the start naming the level in effect and the
+    // one variable that moves it. Said only when nothing was read: a value that WAS read proves itself
+    // through the level it produced, and a line printed on every start is a line nobody reads.
+    if (!value) {
+        warnConfig('ZENDESK_SECURITY_LEVEL is not set — injection screening runs at standard, the shipped level. ' +
+            'This plugin declares no configuration field for it: set ZENDESK_SECURITY_LEVEL to ' +
+            `${SECURITY_LEVELS.join(' | ')} in the environment the server is started in (README, Security).`);
         return 'standard';
+    }
     if (SECURITY_LEVELS.includes(value))
         return value;
     warnConfig(`ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(' | ')} (extension configuration ` +

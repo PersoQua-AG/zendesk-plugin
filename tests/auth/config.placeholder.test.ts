@@ -92,7 +92,10 @@ describe('markdown conversion — an unreadable value is never read as a silent 
     const env = serverEnv();
     if (value !== undefined) env.ZENDESK_MARKDOWN_CONVERSION = value;
     const { ctx } = createServer(env, { security: keychain() });
-    const warnings = warn.mock.calls.map((c) => String(c[0]));
+    // This suite's subject is ZENDESK_MARKDOWN_CONVERSION alone. Since #93 a start with no
+    // ZENDESK_SECURITY_LEVEL also names the screening level in effect, and counting that line here
+    // would make these cases fail for a reason that has nothing to do with markdown.
+    const warnings = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('ZENDESK_MARKDOWN_CONVERSION'));
     warn.mockRestore();
     return { markdownDefault: ctx.markdownDefault, warnings };
   }

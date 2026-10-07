@@ -88,15 +88,43 @@ describe('security level — values that must stay silent', () => {
     expect(warnings).toEqual([]);
   });
 
-  // Absent is not a typo — it is the default both manifests declare. Degrading it to 'strict' would
-  // change the shipped behaviour of every untouched installation.
+  // Absent is not a typo — it is the shipped level. Degrading it to 'strict' would change the
+  // behaviour of every untouched installation, so the LEVEL stays 'standard'.
+  //
+  // What changed with #93 is that the resolution is no longer silent. These three values are what an
+  // operator who believes they configured `strict` actually leaves behind: nothing the server can
+  // read. Under the old behaviour that belief had no symptom anywhere — the strict-only patterns
+  // simply never fired. So absence is the one case the start has to say out loud, while a value that
+  // WAS read stays silent (the block above): it proves itself through the level it produced.
   it.each([
     ['unset', undefined],
     ['blank', ''],
     ['an unsubstituted placeholder', '${user_config.security_level}'],
-  ])('treats %s as the shipped default, standard, without a warning', (_label, value) => {
+  ])('treats %s as the shipped default, standard, and says so rather than assuming it', (_label, value) => {
     const { securityLevel, warnings } = build(value);
     expect(securityLevel).toBe('standard');
-    expect(warnings).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    // Which level is in effect, that nothing configured it, and what to set instead — the three
+    // things an operator needs to notice the belief was wrong. Asserted as substance, not wording.
+    expect(warnings[0]).toContain('ZENDESK_SECURITY_LEVEL is not set');
+    expect(warnings[0]).toContain('standard');
+    expect(warnings[0]).toContain('strict | standard | off');
+    expect(warnings[0]).toContain('no configuration field');
+  });
+
+  // The notice is a notice, not a crash report, and it is pasted into issues: a stack trace or an
+  // absolute path in it would leak the operator's home directory out of a line about a setting.
+  it('says it without a stack trace and without an absolute path', () => {
+    const { warnings } = build(undefined);
+    expect(warnings[0]).not.toMatch(/\n\s+at /);
+    expect(warnings[0]).not.toMatch(/(^|\s)(\/|[A-Za-z]:\\)\S/);
+  });
+
+  // stdout carries the MCP protocol frame; this line must not reach it any more than the typo
+  // warning above may.
+  it('writes the notice to stderr only', () => {
+    const { warnings, stdoutWrites } = build(undefined);
+    expect(warnings).toHaveLength(1);
+    expect(stdoutWrites).toHaveLength(0);
   });
 });

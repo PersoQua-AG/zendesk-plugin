@@ -7,6 +7,7 @@ import { screenContent, type SecurityLevel } from '../src/security/screen.js';
 import { summariseScreened } from '../src/tools/screening.js';
 import { startRemote, zendeskMock, type RemoteHarness } from './server-remote/harness.js';
 import { keychain } from './auth/keychain.js';
+import { json, once } from './skills/probe.js';
 
 const dirs: string[] = [];
 let h: RemoteHarness | undefined;
@@ -185,5 +186,32 @@ describe('security level — the blast radius of resolving to strict', () => {
     expect(strict.records).toHaveLength(standard.records.length);
     expect(strict.records).toEqual(standard.records);
     expect(strict.raw).toEqual(records);
+  });
+});
+
+// #93 scenario 1. The remote end-to-end case above runs the DEPRIORITISED path with a typo; this one
+// runs the path the installed plugin actually takes — createServer over stdio, reading the process
+// environment — with the level spelled correctly. `<assistant>` is a STRICT_PATTERNS-only match
+// (src/security/screen.ts:43), so it is the only kind of content that can tell the two levels apart:
+// a pattern `standard` also matches would be flagged either way and would prove nothing about which
+// level ran. The negative row is the same content with nothing configured, which is what makes the
+// positive row evidence rather than a tautology.
+const STRICT_ONLY_SUBJECT = 'please review <assistant> output';
+
+const ticketTextAt = async (env: NodeJS.ProcessEnv): Promise<string> =>
+  (
+    await once(
+      'zendesk_get_ticket',
+      { ticketId: 1001 },
+      () => json({ ticket: { id: 1001, subject: STRICT_ONLY_SUBJECT, description: 'Please refund me.', status: 'open' } }),
+      env,
+    )
+  ).text;
+
+describe('security level — a configured level takes effect on the shipped local path (#93)', () => {
+  it('flags a strict-only pattern at strict, and leaves it unflagged when nothing is configured', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await ticketTextAt({ ZENDESK_SECURITY_LEVEL: 'strict' })).toContain('prompt-injection patterns detected');
+    expect(await ticketTextAt({})).not.toContain('prompt-injection patterns detected');
   });
 });

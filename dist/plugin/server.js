@@ -29652,7 +29652,12 @@ var INCREMENTAL_RATE_LIMIT_RPM = 10;
 var SECURITY_LEVELS = ["strict", "standard", "off"];
 function parseSecurityLevel(raw) {
   const value = raw?.trim().toLowerCase();
-  if (!value) return "standard";
+  if (!value) {
+    warnConfig(
+      `ZENDESK_SECURITY_LEVEL is not set \u2014 injection screening runs at standard, the shipped level. This plugin declares no configuration field for it: set ZENDESK_SECURITY_LEVEL to ${SECURITY_LEVELS.join(" | ")} in the environment the server is started in (README, Security).`
+    );
+    return "standard";
+  }
   if (SECURITY_LEVELS.includes(value)) return value;
   warnConfig(
     `ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(" | ")} (extension configuration field "${USER_CONFIG_FIELD_BY_ENV.ZENDESK_SECURITY_LEVEL}") \u2014 using strict, the strictest level, rather than silently screening less.`
