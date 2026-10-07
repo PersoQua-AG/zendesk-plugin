@@ -12,8 +12,8 @@
 // it names file and line at review time rather than at bind time. This one refuses the number
 // however it was written, but only along a path a test actually runs. Neither subsumes the other.
 import { Server } from 'node:net';
-import { afterEach } from 'vitest';
-import { isDeclaredPort, recordAcquiredPort, recordRefusal, takeRefusals } from './acquired-ports.js';
+import { afterAll, afterEach } from 'vitest';
+import { isDeclaredPort, recordAcquiredPort, recordRefusal, swallowedRefusal, takeRefusals } from './acquired-ports.js';
 
 // 0 is chosen by the OS and anything outside 1-65535 is refused by listen() itself — neither is a
 // fixed port, and the out-of-range case must keep reaching node so that the RangeError the product
@@ -68,9 +68,14 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
   const result = (realListen as (...a: unknown[]) => unknown).apply(this, args) as Server;
   // AN OS-CHOSEN PORT IS ACQUIRED, not foreign. `listen(0)` hands the number back through
   // address(), and re-binding it — which is how an EADDRINUSE is staged — is not a fixed port by
-  // this guard's own definition. Recorded here so those cases stop having to declare themselves
-  // as strangers, which is an escape hatch opened for a case that never needed it.
-  if (!isFixedBindPort(port)) {
+  // this guard's own definition. Recorded here so those cases stop having to declare themselves as
+  // strangers, which is an escape hatch opened for a case that never qualified.
+  //
+  // THE CONDITION IS "THE CALLER ASKED FOR AN EPHEMERAL PORT", not "the first argument was not a
+  // fixed number". Those differ: `listen({ fd })` and a pre-bound handle name no port at all, and
+  // under the looser test their fixed port was recorded as acquired for the rest of the worker's
+  // life — a mis-registration that re-admits the class this guard refuses.
+  if (port === undefined || port === 0) {
     this.once('listening', () => {
       const chosen = this.address();
       if (chosen !== null && typeof chosen === 'object' && typeof chosen.port === 'number') {
@@ -81,18 +86,30 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
   return result;
 } as typeof realListen;
 
-// A refusal the code under test swallowed still fails the case that produced it. Cases that
-// provoke a refusal on purpose claim it with takeRefusals().
-afterEach(() => {
-  // takeRefusals() also ends the foreign-bind scope: a declared stranger is declared for the case
-  // that declared it, and not for every case that runs after it in the same worker.
-  const swallowed = takeRefusals();
-  if (swallowed.length > 0) {
+// A refusal the code under test swallowed still fails the case that produced it, and ONLY then:
+// a refusal that became the failure needs nothing added, and a case that asserted on one claims it
+// with takeRefusals(). The decision is in acquired-ports.ts so its failing branch can be tested.
+//
+// THE HOOK ORDER MATTERS AND IS NOT DECLARED ANYWHERE ELSE: vitest's `sequence.hooks` default is
+// "stack", so a setup file's afterEach runs AFTER the test file's own — which is what lets a bind
+// in a file's cleanup hook still be refused and still be attributed. Setting `sequence.hooks` to
+// "list" or "parallel" in vitest.config.ts would reverse that; this comment is the only thing
+// saying so.
+afterEach((ctx) => {
+  const swallowed = swallowedRefusal(ctx.task.result?.state === 'pass');
+  if (swallowed) throw swallowed;
+});
+
+// The stragglers no afterEach can reach: a bind in an afterAll, or in an async tail that lands
+// after the last case. Without this they were dropped in silence, so #74 scenario 1 held for
+// in-test binds alone.
+afterAll(() => {
+  const raised = takeRefusals();
+  if (raised.length > 0) {
     throw new Error(
-      `A bind-time port refusal was raised and did not reach this assertion (${swallowed.length}).\n` +
-        'Something between the bind and the test swallowed it — the product wraps its listen() in a\n' +
-        'catch-all, so the refusal below arrived under a different wording or not at all.\n\n' +
-        swallowed.join('\n'),
+      `A bind-time port refusal was raised outside any test case (${raised.length}) — in an afterAll,\n` +
+        'or in an async tail that outlived the last one. Nothing could attribute it to a case.\n\n' +
+        raised.join('\n'),
     );
   }
 });

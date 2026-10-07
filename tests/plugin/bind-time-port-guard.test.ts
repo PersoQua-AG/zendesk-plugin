@@ -5,8 +5,9 @@
 // of its rule.
 import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:net';
+import { startCallbackListener } from '../../src/auth/oauth-flow.js';
 import { freePort } from '../auth/login-harness.js';
-import { allowForeignBind, takeRefusals } from '../setup/acquired-ports.js';
+import { allowForeignBind, swallowedRefusal, takeRefusals } from '../setup/acquired-ports.js';
 
 // NOT a literal at the call site, by construction — that is the whole point. The source scan reads
 // `listen(PORT)` and sees no number; the guard under test reads 18977. This is the very const the
@@ -44,14 +45,22 @@ describe('a fixed bind port is refused when it is bound', () => {
 
   // The classes the regex is documented as missing, one call each.
   //
-  // MEASURED WHILE WRITING THIS, and it is the answer to #74's open question. Of the six shapes
-  // here the source scan sees exactly one — the expression, which it reports by its FIRST operand,
-  // so that operand is written split below the way this file's siblings are (a literal in a COMMENT
-  // counts too, which is why this sentence does not spell it either). The other five it cannot see
-  // at all: `18e3` does not even match its `\d[\d_]*`, the hex literal is filtered out as port 0,
-  // and the option bag and the numeric string never reach the pattern. So the two instruments are
-  // not redundant and the text scan stays: it refuses a bind in a file nothing executes, which this
-  // one by construction cannot.
+  // MEASURED AGAINST `BIND_CALL` ITSELF, and it is the answer to #74's open question: the source
+  // scan sees NONE of the shapes below. Not one. `18e3` and `0x4650` do not match `\d[\d_]*\b`
+  // at all, the option bag and the numeric string never reach the pattern, and an expression is
+  // only matched through its FIRST literal — which `17_000 + 1_000` has at the call site, so that
+  // row is written split here the way this file's siblings are. An earlier version of this comment
+  // claimed the scan saw "exactly one" of them and that the hex literal was "filtered out as port
+  // 0"; both were wrong, and `qa-engineer` reproduced the regex against each shape to show it.
+  //
+  // So the two instruments are not redundant and the text scan stays — but not for the reason first
+  // written. It earns its place by refusing a bind in a file nothing ever executes, which a runtime
+  // guard by construction cannot, and by naming file and line at review time rather than at bind
+  // time. On SPELLING it is strictly the weaker of the two.
+  // Split, because a bare `17_000` immediately after `listen(` is the one shape the source scan
+  // DOES match, and this file sits inside the tree that scan walks. Measured: as a const it is not
+  // matched — the pattern needs the literal at the call site — but the split keeps the row honest
+  // about being an expression rather than relying on that.
   const FIRST_OPERAND = Number(`17${'000'}`);
   it.each([
     ['an expression', () => createServer().listen(FIRST_OPERAND + 1_000)],
@@ -75,16 +84,51 @@ describe('a fixed bind port is refused when it is bound', () => {
   // error. src/ is out of scope for #74, so the answer is on this side — every refusal is written
   // to a register and an afterEach fails the case unless it was claimed.
   it('survives a product that catches everything around its own listen()', async () => {
-    const { startCallbackListener } = await import('../../src/auth/oauth-flow.js');
+    // A SHAPE, not the sentence. src/auth/oauth-flow.ts states a reason that is false for anything
+    // but a RangeError — it names the configured range for a port that is inside it — and that is
+    // a product defect carried to its own ticket, out of scope for #74. Pinning the sentence here
+    // would turn the defect into a test-enforced requirement.
     await expect(startCallbackListener(PORT, 'state', 1_000)).rejects.toThrow(
       /OAuth callback server could not start on port/,
     );
     // The product's wording is all the caller got. The refusal itself is here, with the port and
     // the call site the ticket asks for, and without this register it would have been lost.
-    const [swallowed] = takeRefusals();
-    expect(swallowed, 'the refusal was never raised at all').toBeDefined();
-    expect(swallowed).toContain(`Refusing to bind the fixed port ${PORT}`);
-    expect(swallowed).toMatch(/src\/auth\/oauth-flow\.ts/);
+    const raised = takeRefusals();
+    expect(raised, 'the refusal was never raised at all').toHaveLength(1);
+    expect(raised[0]).toContain(`Refusing to bind the fixed port ${PORT}`);
+    expect(raised[0]).toMatch(/src\/auth\/oauth-flow\.ts/);
+  });
+
+  // THE REGISTER'S OWN FAILING BRANCH, which cannot be exercised from inside the suite: a case that
+  // provokes it is by definition a case that fails. So the decision is a pure function and this
+  // tests it directly. Its first spelling fired on any recorded refusal, which made a case that
+  // correctly asserted `toThrow(/Refusing/)` go red, and made a case that merely let the refusal
+  // propagate fail twice — the second time claiming something had swallowed it.
+  describe('a swallowed refusal fails the case, and only a swallowed one', () => {
+    // Split, like every other fixed port in this file: a bare literal at the call site is the one
+    // shape the source scan DOES match, and this file sits inside the tree that scan walks.
+    const PROVOKED = Number(`180${'04'}`);
+    const PROVOKED_TOO = Number(`180${'05'}`);
+    afterEach(() => {
+      takeRefusals();
+    });
+
+    it('names the swallowed refusal when the case passed', () => {
+      expect(() => createServer().listen(PROVOKED)).toThrow(/Refusing/);
+      const error = swallowedRefusal(true);
+      expect(error?.message).toContain('this case passed anyway (1)');
+      expect(error?.message).toContain('takeRefusals()');
+      expect(error?.message).toContain(`Refusing to bind the fixed port ${PROVOKED}`);
+    });
+
+    it('says nothing when the refusal became the failure', () => {
+      expect(() => createServer().listen(PROVOKED_TOO)).toThrow(/Refusing/);
+      expect(swallowedRefusal(false)).toBeNull();
+    });
+
+    it('says nothing when no refusal was raised at all', () => {
+      expect(swallowedRefusal(true)).toBeNull();
+    });
   });
 
   it('lets a port handed out by freePort() bind without complaint', async () => {
@@ -104,7 +148,7 @@ describe('a fixed bind port is refused when it is bound', () => {
   // the refusal for that number for every case that ran afterwards in the same worker — including
   // files that never asked. These two run in order inside one file, which is what makes it
   // observable: the second one asks for the same port without declaring it.
-  const SHARED_STRANGER = 18_003;
+  const SHARED_STRANGER = Number(`180${'03'}`);
   it('lets a declared stranger bind, in the case that declared it', async () => {
     allowForeignBind(SHARED_STRANGER, 'a stranger declared by this case alone');
     const server = await listening(createServer().listen(SHARED_STRANGER, '127.0.0.1'));

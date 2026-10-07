@@ -3,8 +3,10 @@
 // login-harness.ts so that a suite which never touches the login fixture still gets the refusal.
 //
 // WHY A REGISTER AND NOT A RANGE CHECK. "Is this port inside PORT_BAND?" would pass any literal
-// somebody writes inside the band, which is the mistake one layer up. Only a port this process
-// actually took out of freePort() is in here.
+// somebody writes inside the band, which is the mistake one layer up. What is in here is a port
+// this process did not WRITE DOWN: one freePort() handed over, and one the OS chose for a
+// `listen(0)` and handed back through address(). Neither can be the same number in two concurrent
+// runs, which is the whole of #23.
 // A SET, not a map of reasons. The `why` strings went in and were never read back: `isDeclaredPort`
 // is the only consumer and it asks one question. The `why` parameter stays, because it is the
 // call-site documentation the refusal message advertises — it just is not stored.
@@ -57,10 +59,36 @@ export function recordRefusal(message: string): void {
 /**
  * Drains the refusals, for the cases that provoke one on purpose, and ends the foreign-bind scope.
  *
- * One call instead of two, because the only caller of either is the setup file's afterEach — and a
- * case that drains mid-test is also a case whose declared strangers are spent.
+ * One call instead of two, because a case that drains mid-test is also a case whose declared
+ * strangers are spent.
  */
 export function takeRefusals(): string[] {
   foreign.clear();
   return refusals.splice(0);
+}
+
+/**
+ * The error a case that swallowed a refusal must fail with, or null.
+ *
+ * `passed` IS THE WHOLE CONDITION, and the first spelling of this got it wrong: it failed on any
+ * recorded refusal, so a case that correctly asserted the refusal with `toThrow(/Refusing/)`
+ * went red, and a case that simply let the refusal propagate failed TWICE — the second time with
+ * "something swallowed it" about a refusal that had reached the assertion. A refusal that became
+ * the case's failure needs nothing added. A refusal that did NOT, in a case that nevertheless
+ * passed, is the one this register exists for.
+ *
+ * Pure and exported so the failing branch has a test of its own: inside the suite it cannot be
+ * exercised, because a case that provokes it is by definition a case that fails.
+ */
+export function swallowedRefusal(passed: boolean): Error | null {
+  const raised = takeRefusals();
+  if (!passed || raised.length === 0) return null;
+  return new Error(
+    `A bind-time port refusal was raised and this case passed anyway (${raised.length}).\n` +
+      'The refusal never became the failure, so something between the bind and the assertion ate\n' +
+      "it — src/auth/oauth-flow.ts wraps its listen() in a catch-all, and that is the path #74\n" +
+      'scenario 1 is about. If this case provokes a refusal ON PURPOSE, assert on it and then claim\n' +
+      "it with takeRefusals() from tests/setup/acquired-ports.js.\n\n" +
+      raised.join('\n'),
+  );
 }
