@@ -21700,6 +21700,11 @@ var TokenStore = class {
   }
 };
 
+// src/util/error-code.ts
+function errorCode(err) {
+  return err instanceof Error && "code" in err ? String(err.code) : "unknown error";
+}
+
 // src/client/errors.ts
 var DEFAULT_RETRY_AFTER_SECONDS = 60;
 var MAX_RETRY_AFTER_SECONDS = 300;
@@ -21881,7 +21886,6 @@ import { writeFileSync as writeFileSync2, readFileSync as readFileSync2, mkdirSy
 import { join as join2, resolve, sep } from "node:path";
 import { randomBytes as randomBytes3 } from "node:crypto";
 var HANDLE_PATTERN = /^[A-Za-z0-9_-]+$/;
-var errorCode = (err) => err instanceof Error && "code" in err ? String(err.code) : "unknown error";
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
 var ResponseCache = class {
@@ -29706,7 +29710,7 @@ function openCacheOrDegrade(auth) {
   try {
     return { auth, cache: new ResponseCache(join3(auth.dataDir, "cache")), cacheOk: true };
   } catch (err) {
-    const code = err instanceof Error && "code" in err ? String(err.code) : "unknown error";
+    const code = errorCode(err);
     const problem = `The extension's data directory cannot be used (${code}), so responses cannot be cached and tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;
     const reason = auth.ok ? problem : `${auth.reason.replace(/,? then reload the extension\.$/, ".")} ${problem}`;
     const fail = () => {

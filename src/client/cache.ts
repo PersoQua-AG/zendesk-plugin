@@ -2,12 +2,9 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync, readdirSync, statSy
 import { join, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { warnConfig } from '../util/warn-config.js';
+import { errorCode } from '../util/error-code.js';
 
 const HANDLE_PATTERN = /^[A-Za-z0-9_-]+$/;
-
-// fs errors carry the absolute path; only the code may reach the model or the log.
-const errorCode = (err: unknown): string =>
-  err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
 
 // Cached payloads hold screened ticket PII, so the store must not grow unbounded. Entries expire
 // after a fixed age (mtime-based) and the total on-disk size is capped; both are configurable.

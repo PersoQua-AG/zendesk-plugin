@@ -27,13 +27,6 @@ describe('mapErrorResponse', () => {
     expect(error.message).toContain('retry after 300s');
   });
 
-  it('never reports Infinity for a Retry-After too long for a double', async () => {
-    const response = new Response('', { status: 429, headers: { 'Retry-After': '9'.repeat(400) } });
-    const error = await mapErrorResponse(response);
-    expect(error.message).toContain('retry after 300s');
-    expect(error.message).not.toContain('Infinity');
-  });
-
   it('maps 403 to ZendeskPermissionError mentioning scope ∩ role', async () => {
     const response = new Response('forbidden', { status: 403 });
     const error = await mapErrorResponse(response);

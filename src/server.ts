@@ -20,6 +20,7 @@ import {
 } from './auth/store-key.js';
 import type { OAuthConfig } from './auth/oauth-flow.js';
 import { warnConfig } from './util/warn-config.js';
+import { errorCode } from './util/error-code.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
 import { ResponseCache, type CacheStore } from './client/cache.js';
@@ -147,7 +148,7 @@ function openCacheOrDegrade(auth: AuthResolution): { auth: AuthResolution; cache
   try {
     return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')), cacheOk: true };
   } catch (err) {
-    const code = err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
+    const code = errorCode(err);
     const problem =
       `The extension's data directory cannot be used (${code}), so responses cannot be cached and ` +
       `tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;

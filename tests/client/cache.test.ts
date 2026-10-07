@@ -109,37 +109,23 @@ describe('ResponseCache', () => {
     const cache = new ResponseCache(dir);
     chmodSync(dir, 0o500); // becomes unwritable AFTER construction succeeded
     try {
-      let message = '';
+      let thrown: Error | undefined;
       try {
         cache.save('zendesk_get_me', { a: 1 });
       } catch (err) {
-        message = (err as Error).message;
+        thrown = err as Error;
       }
-      expect(message).toContain('EACCES');
-      expect(message).toMatch(/free space/);
-      expect(message).not.toContain(dir);
-      expect(message).not.toContain('.json');
+      expect(thrown?.message).toContain('EACCES');
+      expect(thrown?.message).toMatch(/free space/);
+      expect(thrown?.message).not.toContain(dir);
+      expect(thrown?.message).not.toContain('.json');
+      // …and the sanitized message does not throw the diagnosable original away.
+      expect((thrown?.cause as NodeJS.ErrnoException | undefined)?.code).toBe('EACCES');
     } finally {
       chmodSync(dir, 0o700);
     }
   });
 
-  // The sanitized message is for the model; the diagnosable original must not be thrown away.
-  it.skipIf(modeBitsIgnored)('keeps the original fs error as the cause', () => {
-    const cache = new ResponseCache(dir);
-    chmodSync(dir, 0o500);
-    try {
-      let cause: unknown;
-      try {
-        cache.save('zendesk_get_me', { a: 1 });
-      } catch (err) {
-        cause = (err as Error).cause;
-      }
-      expect((cause as NodeJS.ErrnoException | undefined)?.code).toBe('EACCES');
-    } finally {
-      chmodSync(dir, 0o700);
-    }
-  });
 
   // 0300 is write+traverse without read: the write lands, sweep()'s readdirSync throws. The entry
   // is on disk, so the caller must still get its handle instead of a "caching failed" error.
