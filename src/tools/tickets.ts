@@ -163,14 +163,12 @@ export async function updateTicket(
       'Refusing to update ticket without an updatedStamp: pass the updatedStamp from a prior read to enable safe optimistic-concurrency (recommended), or set force:true to deliberately overwrite without a concurrency check.',
     );
   }
-  // #61: the lifecycle table is enforced here, before any write, on force:true as well — force
+  // #61: the lifecycle table is enforced before any write, on force:true as well — force
   // acknowledges a concurrency overwrite, not an impossible transition. → new is refused from
-  // every state, so it costs no request; the terminal-closed rule needs the current status.
+  // every state, so it skips the read; the terminal-closed rule is what needs one.
   const target = params.fields.status;
   if (target !== undefined) {
-    const withoutRead = transitionRefusal(undefined, target);
-    if (withoutRead) throw new Error(withoutRead);
-    const refusal = transitionRefusal(await readStatus(client, params.ticketId), target);
+    const refusal = transitionRefusal(target === 'new' ? null : await readStatus(client, params.ticketId), target);
     if (refusal) throw new Error(refusal);
   }
   const result = await safeUpdateWithConflict(client, cache, {

@@ -16,7 +16,8 @@ function cacheStub(): ResponseCache {
 
 describe('updateTicket', () => {
   it('sends safe_update + updated_stamp and reports success', async () => {
-    const client = { request: vi.fn().mockResolvedValue({ ticket: { id: 42 } }) } as unknown as ZendeskHttpClient;
+    // The pre-read must carry a status: #61 refuses a status change whose current status is unknown.
+    const client = { request: vi.fn().mockResolvedValue({ ticket: { id: 42, status: 'open' } }) } as unknown as ZendeskHttpClient;
     const result = await updateTicket(client, cacheStub(), {
       ticketId: 42,
       fields: { status: 'pending', priority: 'low' },
@@ -64,7 +65,7 @@ describe('updateTicket', () => {
   });
 
   it('force:true overwrites without safe_update (documented escape hatch)', async () => {
-    const client = { request: vi.fn().mockResolvedValue({ ticket: { id: 7 } }) } as unknown as ZendeskHttpClient;
+    const client = { request: vi.fn().mockResolvedValue({ ticket: { id: 7, status: 'open' } }) } as unknown as ZendeskHttpClient;
     const result = await updateTicket(client, cacheStub(), { ticketId: 7, fields: { status: 'solved' }, force: true });
     const body = JSON.parse(put(client)[1].body);
     expect(body.ticket.safe_update).toBeUndefined();

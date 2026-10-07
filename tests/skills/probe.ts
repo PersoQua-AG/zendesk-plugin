@@ -124,7 +124,20 @@ export async function once(name: string, args: Record<string, unknown>, reply?: 
 }
 
 // A macro preview answers in the shape the apply tool accepts, so its confirmed PUT is reached too.
-const probeReply = (c: Call): Response => json(c.path.endsWith('/apply.json') ? { result: { ticket: {} } } : {});
+// A ticket read answers WITH a status, because the lifecycle guard (#61) refuses a status change
+// whose current status it could not read. Before that guard was fail-closed, this reply's empty `{}`
+// was accepted as "not closed" and the probe reached the write by walking through the hole it is
+// supposed to notice. 'open' is what sample() asks for, and every rule accepts it.
+const probeReply = (c: Call): Response =>
+  json(
+    c.path.endsWith('/apply.json')
+      ? { result: { ticket: {} } }
+      : /\/tickets\/\d+\.json$/.test(c.path)
+        ? { ticket: { id: 1, status: 'open' } }
+        : c.path.includes('/tickets/show_many.json')
+          ? { tickets: [{ id: 1, status: 'open' }] }
+          : {},
+  );
 
 // "METHOD path" of every request each tool issues on one sampled call (default: every registered tool).
 export async function probeRequests(names?: string[]): Promise<Record<string, string[]>> {

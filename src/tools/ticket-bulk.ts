@@ -82,13 +82,14 @@ export async function updateTicketsBulk(
   let refusedNote = '';
   const target = params.fields.status;
   if (target !== undefined) {
-    const withoutRead = transitionRefusal(undefined, target);
-    if (withoutRead) throw new Error(withoutRead);
-    const statuses = await readStatuses(client, params.ids);
-    const refused = params.ids.filter((id) => transitionRefusal(statuses.get(id), target) !== null);
-    if (refused.length > 0) {
-      ids = params.ids.filter((id) => !refused.includes(id));
-      refusedNote = ` Refused on a forbidden status transition to ${target}, not written: ${refused.join(', ')}.`;
+    // → new is refused from every state, so the batch needs no read to settle it.
+    const statuses = target === 'new' ? new Map<number, string | null>() : await readStatuses(client, params.ids);
+    // `?? null` is the fail-CLOSED half: an id show_many did not answer for has no known status,
+    // and transitionRefusal refuses rather than writing a ticket whose lifecycle it cannot check.
+    const refused = new Set(params.ids.filter((id) => transitionRefusal(statuses.get(id) ?? null, target)));
+    if (refused.size > 0) {
+      ids = params.ids.filter((id) => !refused.has(id));
+      refusedNote = ` Refused on a forbidden status transition to ${target}, not written: ${[...refused].join(', ')}.`;
       if (ids.length === 0) throw new Error(`Refusing the bulk update — no ticket in the batch may move to ${target}.${refusedNote}`);
     }
   }

@@ -32,7 +32,7 @@ Drive the ticket lifecycle safely. Every state change is proposed to the user an
 
 ## Lifecycle-state validation
 
-Zendesk statuses form this machine: `new → open → pending → hold → solved → closed`. Validate the target status against the current status before proposing an update. The ❌ cells below are also enforced by the tools: `zendesk_update_ticket` and `zendesk_update_tickets_bulk` read the current status and refuse a forbidden transition before any write, on `force:true` as well.
+Zendesk statuses form this machine: `new → open → pending → hold → solved → closed`. Validate the target status against the current status before proposing an update. The ❌ cells below are also enforced by the tools, and so are the two Rules that make `new` and `closed` refuse even their own status: `zendesk_update_ticket` and `zendesk_update_tickets_bulk` read the current status and refuse a forbidden transition before any write, on `force:true` as well. A current status they cannot read is refused too, rather than assumed harmless.
 
 | From \ To | new | open | pending | hold | solved | closed |
 |---|---|---|---|---|---|---|
