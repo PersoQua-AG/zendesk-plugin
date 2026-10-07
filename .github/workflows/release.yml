@@ -1,0 +1,92 @@
+name: Release
+
+# Publishes the Claude Code plugin archive once a state reaches `main`. CI already gates every
+# push; this workflow adds only the packaging and the two deliveries (gateway, GitHub release).
+on:
+  push:
+    branches: [main]
+
+# Two pushes to `main` must not overtake each other: the gateway refuses a version it already
+# holds, so the runs have to be serialised. Unlike in ci.yml the older run is NOT cancelled —
+# killing a run between the gateway publish and the GitHub release would leave the two halves
+# of a release out of step.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # `gh release create` writes a tag and a release to this repo.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      # Reproducible install from the lockfile; any drift fails here.
+      - run: npm ci
+      # Validate the plugin manifests BEFORE the build so a broken manifest fails fast — the
+      # version this workflow publishes is read out of one of them.
+      - run: node scripts/validate-manifests.mjs
+      - run: npm run build
+      # Dist-drift guard: the just-run build must leave committed dist/ byte-identical.
+      # A source state without a matching dist rebuild would otherwise ship a stale artifact
+      # (the plugin runs from dist/, not src/).
+      - run: git diff --exit-code dist/
+      # The archive version and the release tag come from the manifest, so the tag can never
+      # disagree with what Claude Code reads out of the plugin.
+      - id: version
+        run: echo "version=$(node -p "require('./.claude-plugin/plugin.json').version")" >> "$GITHUB_OUTPUT"
+      # An explicit path list, not `.mcpbignore`: that file excludes exactly the plugin layer
+      # (.claude-plugin/, skills/, commands/, agents/, dist/plugin/ — lines 17-23), because it
+      # describes the Desktop Extension bundle. It is the inverse of this archive.
+      # No node_modules: dist/plugin/server.js is esbuild-bundled and committed.
+      - run: zip -r zendesk-plugin.zip .claude-plugin agents commands skills dist/plugin README.md LICENSE
+      # Prove the archive before it is published: Claude Code resolves the plugin through
+      # .claude-plugin/plugin.json, and an empty server.js would install but never start.
+      - run: |
+          unzip -l zendesk-plugin.zip | grep -q ' \.claude-plugin/plugin\.json$'
+          unzip -p zendesk-plugin.zip dist/plugin/server.js | grep -q .
+      # PLUGIN_GATEWAY_PUBLISH_TOKEN must be set as a repository secret before the first run;
+      # it does not exist yet. `shell: bash {0}` drops the default `-e` so the HTTP status is
+      # read and reported instead of the raw curl exit code.
+      - name: Publish to the plugin gateway
+        shell: bash {0}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          code=$(curl --fail-with-body -sS -X POST https://plugins.persoqua.de/admin/publish \
+            -H "Authorization: Bearer ${{ secrets.PLUGIN_GATEWAY_PUBLISH_TOKEN }}" \
+            -H "X-Plugin: zendesk" \
+            -H "X-Version: $VERSION" \
+            -H "Content-Type: application/zip" \
+            --data-binary @zendesk-plugin.zip \
+            -o publish-body.txt -w '%{http_code}')
+          rc=$?
+          if [ "$code" = "409" ]; then
+            echo "::error::Version $VERSION is already published. Bump \"version\" in .claude-plugin/plugin.json."
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Gateway publish of version $VERSION failed with HTTP $code (curl exit $rc)."
+            cat publish-body.txt
+            exit 1
+          fi
+      # A second, independent copy of every published archive: traceable per tag, and an
+      # emergency install path while the gateway is down. Re-runs update the asset instead of
+      # failing, so a retried release does not need a new version.
+      - name: Attach the archive to a GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" zendesk-plugin.zip --clobber
+          else
+            gh release create "v$VERSION" zendesk-plugin.zip \
+              --title "v$VERSION" \
+              --notes "Zendesk plugin v$VERSION. Install it from the PersoQua plugin marketplace at https://plugins.persoqua.de; this archive is the same artifact, for manual installation."
+          fi
