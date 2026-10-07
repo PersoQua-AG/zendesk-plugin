@@ -227,6 +227,11 @@ function audit(entries: ZipEntry[]): Run {
   return runAudit(makeTree({ entries }));
 }
 
+/** Whether a NAME is taken, which a dangling symlink is and `existsSync` says it is not. */
+function nameIsTaken(path: string): boolean {
+  return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+}
+
 // Every failing run in this file goes through here: no sentinel may appear in either stream.
 function expectNoSecretEchoed(run: Run): void {
   for (const sentinel of SENTINELS) {
@@ -411,10 +416,30 @@ describe('a bundle the audit could not read', () => {
     symlinkSync(join(tree.dir, 'nothing-here.mcpb'), tree.bundle);
     const run = runAudit(tree);
 
-    expect(run.status).not.toBe(0);
+    // `toBe(1)`, not `not.toBe(0)`: this commit's subject IS the 1-vs-2 split, and its sibling
+    // below pins the 2 side exactly.
+    expect(run.status).toBe(1);
     expect(nameIsTaken(tree.bundle), 'the publishable name is still there').toBe(false);
     expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'nothing was quarantined').toBe(true);
     expect(run.stderr).toContain('CONTAMINATED');
+    expectNoSecretEchoed(run);
+  });
+
+  // A DIRECTORY IS NOT QUARANTINED. Guarding on `bundle` made that true by accident — readFileSync
+  // of a directory throws EISDIR, so the buffer stayed null and the quarantine was skipped — and
+  // moving the guard to the NAME made the loss reachable: measured,
+  // `audit-bundle.mjs ./important-project` renamed the whole tree to `.REJECTED`.
+  it('refuses a directory under the publishable name without moving it', () => {
+    const tree = makeTree();
+    rmSync(tree.bundle);
+    mkdirSync(tree.bundle);
+    writeFileSync(join(tree.bundle, 'main.ts'), 'somebody\'s actual work');
+    const run = runAudit(tree);
+
+    expect(run.status).not.toBe(0);
+    expect(existsSync(join(tree.bundle, 'main.ts')), 'the directory was moved').toBe(true);
+    expect(nameIsTaken(`${tree.bundle}.REJECTED`), 'a directory was quarantined').toBe(false);
+    expect(run.stderr).not.toContain('CONTAMINATED');
   });
 });
 
@@ -436,11 +461,6 @@ describe('a quarantine that cannot be performed', () => {
     expectNoSecretEchoed(run);
   });
 });
-
-/** Whether a NAME is taken, which a dangling symlink is and `existsSync` says it is not. */
-function nameIsTaken(path: string): boolean {
-  return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
-}
 
 // =============================================================================================
 // Scenario: a forbidden path is caught even if the content looks harmless

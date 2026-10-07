@@ -5,7 +5,7 @@ import { settlesWithin } from './login-harness.js';
 // the watchdog could only fire if the test advanced the faked clock — and a test waiting on a hung
 // call is by definition not advancing it.
 //
-// THE RACE IS THE ASSERTION, not vitest's timeout. 50 ms against a 2 s arbiter: a fortyfold
+// THE RACE IS THE ASSERTION, not vitest's timeout. 50 ms against a 2 s arbiter — a fortyfold
 // margin, because this file adds the one real-clock race the branch does not remove. Written as a plain `rejects.toThrow()`, the
 // ablated version does not fail, it HANGS, and dies on "Test timed out in 5000ms" — which names
 // nothing and is exactly the failure mode this helper exists to replace. So a real timer, captured

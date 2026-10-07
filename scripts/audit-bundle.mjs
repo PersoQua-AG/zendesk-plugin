@@ -344,8 +344,19 @@ const version = manifest?.version ?? pkg?.version ?? null;
 // skipped on an error.
 const nameIsTaken = (p) => {
   try {
-    return lstatSync(p, { throwIfNoEntry: false }) !== undefined;
+    const shape = lstatSync(p, { throwIfNoEntry: false });
+    if (shape === undefined) return false;
+    // A DIRECTORY IS NOT A BUNDLE ANYBODY UPLOADS, so it is not quarantined. Guarding on `bundle`
+    // used to make that true BY ACCIDENT — `readFileSync` of a directory throws EISDIR, the buffer
+    // stayed null and the quarantine was skipped — and moving the guard to the name would have made
+    // the loss reachable: measured, `audit-bundle.mjs ./important-project` renamed the whole tree to
+    // `important-project.REJECTED` and called it CONTAMINATED. An accidental protection replaced by
+    // a deliberate one.
+    return !shape.isDirectory();
   } catch {
+    // Not ENOENT — `throwIfNoEntry: false` already answers that. EACCES and the like mean the name
+    // may well be there, so it counts as taken and the quarantine is attempted; its own catch
+    // reports what happened rather than this skipping it in silence.
     return true;
   }
 };

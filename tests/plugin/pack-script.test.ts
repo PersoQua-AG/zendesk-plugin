@@ -147,16 +147,21 @@ describe('what mcpb pack puts in the bundle', () => {
   // level up.
   it('keeps the json run record out, which the packer defaults do not', async () => {
     const { default: config } = await import('../../vitest.config.js');
-    const record = config.test?.outputFile as { json: string };
+    const outputFile = config.test?.outputFile;
+    // Narrowed, not cast. `as { json: string }` cast the optional away, so removing the key gave a
+    // TypeError from `dirname(undefined)` instead of the clear failure the comment promises.
+    expect(outputFile, 'vitest.config.ts no longer configures an outputFile').toBeTypeOf('object');
+    const record = (outputFile as { json?: unknown }).json;
+    expect(record, 'vitest.config.ts no longer configures a json outputFile').toBeTypeOf('string');
     // dirname(), not split('/')[0]. A record configured at the repo root yields `.`, which is in
     // neither ignore file, so this case FAILS rather than silently handling it — fail-closed, which
     // is the right direction for a guard.
-    const dir = `${dirname(record.json)}/`;
+    const dir = `${dirname(record as string)}/`;
     expect(ignoreLines('.gitignore')).toContain(dir);
-    expect(excludes(EXCLUDE_PATTERNS, record.json)).toBe(false);
+    expect(excludes(EXCLUDE_PATTERNS, record as string)).toBe(false);
     // Only the .mcpbignore line can make this true: PACKER_PATTERNS is EXCLUDE_PATTERNS plus that
     // file's lines, and the assertion above shows the defaults do not cover it.
-    expect(excludes(PACKER_PATTERNS, record.json)).toBe(true);
+    expect(excludes(PACKER_PATTERNS, record as string)).toBe(true);
   });
 
   it.each(['manifest.json', 'package.json', 'dist/server.js', 'README.md', 'node_modules/zod/package.json'])(
