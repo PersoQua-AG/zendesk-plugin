@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -437,10 +438,49 @@ describe('a bundle the audit could not read', () => {
     writeFileSync(join(tree.bundle, 'main.ts'), 'somebody\'s actual work');
     const run = runAudit(tree);
 
-    expect(run.status).not.toBe(0);
+    // `toBe(1)`, not `not.toBe(0)`: 2 would mean housekeeping failed, which is the opposite claim.
+    expect(run.status).toBe(1);
     expect(existsSync(join(tree.bundle, 'main.ts')), 'the directory was moved').toBe(true);
     expect(nameExists(`${tree.bundle}.REJECTED`), 'a directory was quarantined').toBe(false);
     expect(run.stderr).not.toContain('CONTAMINATED');
+    expectNoSecretEchoed(run);
+  });
+
+  // AND THROUGH AN ALIAS TO ONE. `lstat` does not follow, so a symlink whose target is a directory
+  // reported a symlink and was never asked about a directory: measured, the link was renamed to
+  // `.REJECTED` and somebody's tree announced as CONTAMINATED. The damage is bounded to the alias,
+  // but it is the one unintended move the buffer-guard prevented.
+  it('refuses a symlink pointing at a directory without moving the alias', () => {
+    const tree = makeTree();
+    const victim = join(tree.dir, 'somebody-elses-tree');
+    mkdirSync(victim);
+    writeFileSync(join(victim, 'main.ts'), "somebody's actual work");
+    rmSync(tree.bundle);
+    symlinkSync(victim, tree.bundle);
+    const run = runAudit(tree);
+
+    expect(run.status).toBe(1);
+    expect(nameExists(tree.bundle), 'the alias was renamed').toBe(true);
+    expect(existsSync(join(victim, 'main.ts')), 'the target was touched').toBe(true);
+    expect(nameExists(`${tree.bundle}.REJECTED`)).toBe(false);
+    expect(run.stderr).not.toContain('CONTAMINATED');
+  });
+
+  // THE EACCES SHAPE IS THE HEADLINE JUSTIFICATION for guarding on the name at all — `bundle` is
+  // null for every read that threw, and that is exactly when the file is still lying there — and it
+  // was pinned by nothing. A mode bit, so root is told rather than passing for the wrong reason.
+  it.skipIf(process.getuid?.() === 0)('quarantines a file it could not read for permissions', () => {
+    const tree = makeTree();
+    chmodSync(tree.bundle, 0o000);
+    try {
+      const run = runAudit(tree);
+      expect(run.status).toBe(1);
+      expect(nameExists(tree.bundle), 'the publishable name is still there').toBe(false);
+      expect(nameExists(`${tree.bundle}.REJECTED`), 'nothing was quarantined').toBe(true);
+      expect(run.stderr).toContain('CONTAMINATED');
+    } finally {
+      if (existsSync(`${tree.bundle}.REJECTED`)) chmodSync(`${tree.bundle}.REJECTED`, 0o644);
+    }
   });
 });
 

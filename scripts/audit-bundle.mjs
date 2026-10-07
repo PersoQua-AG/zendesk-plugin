@@ -18,7 +18,7 @@
 // Zero deps — plain Node, including the ZIP reader (a .mcpb is a ZIP). It is excluded from the
 // bundle by .mcpbignore's `scripts/` line.
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -344,15 +344,20 @@ const version = manifest?.version ?? pkg?.version ?? null;
 // skipped on an error.
 const nameIsTaken = (p) => {
   try {
-    const shape = lstatSync(p, { throwIfNoEntry: false });
-    if (shape === undefined) return false;
-    // A DIRECTORY IS NOT A BUNDLE ANYBODY UPLOADS, so it is not quarantined. Guarding on `bundle`
-    // used to make that true BY ACCIDENT — `readFileSync` of a directory throws EISDIR, the buffer
-    // stayed null and the quarantine was skipped — and moving the guard to the name would have made
-    // the loss reachable: measured, `audit-bundle.mjs ./important-project` renamed the whole tree to
-    // `important-project.REJECTED` and called it CONTAMINATED. An accidental protection replaced by
-    // a deliberate one.
-    return !shape.isDirectory();
+    // `lstat` FOR EXISTENCE. A dangling symlink is a name somebody can upload, and `existsSync`
+    // follows the link and says it is not there.
+    if (lstatSync(p, { throwIfNoEntry: false }) === undefined) return false;
+    // `stat` FOR SHAPE, which does follow. A DIRECTORY IS NOT A BUNDLE ANYBODY UPLOADS, so it is
+    // not quarantined — and that has to hold for an alias to one as well: measured,
+    // `zendesk.mcpb -> some-tree/` had the link renamed to `.REJECTED` and somebody's tree
+    // announced as CONTAMINATED while `lstat` reported a symlink and never asked about a directory.
+    //
+    // ONE STAT CANNOT ANSWER BOTH QUESTIONS. A followed stat alone throws ENOENT on the dangling
+    // case, which is the case the existence check above exists for; an lstat alone cannot see
+    // through the alias. Guarding on `bundle` used to make the direct directory safe BY ACCIDENT —
+    // `readFileSync` throws EISDIR and the buffer stayed null — and moving the guard to the name
+    // made the loss reachable. An accidental protection replaced by a deliberate one.
+    return !statSync(p, { throwIfNoEntry: false })?.isDirectory();
   } catch {
     // Not ENOENT — `throwIfNoEntry: false` already answers that. EACCES and the like mean the name
     // may well be there, so it counts as taken and the quarantine is attempted; its own catch
@@ -360,6 +365,7 @@ const nameIsTaken = (p) => {
     return true;
   }
 };
+
 
 // A stale artifact from an earlier, passing run must not survive a failing one — otherwise "no
 // artifact is published" holds only for the operator who never released this bundle before.
