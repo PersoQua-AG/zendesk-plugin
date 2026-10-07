@@ -92,6 +92,12 @@ jobs:
       # package.json; why that is so, why src/ stays out and what the scan misses is in the
       # script header.
       - run: npm run check:ports
+      # Type-checks every file under tests/, which `npm run build` never sees — the root tsconfig
+      # includes src/ alone (#57). Before the build, beside the other two guards, because a type
+      # error in a test is a defect in the gate itself and should fail before the slow steps. While
+      # tests/tsconfig.json carried a curated `include`, this check was local-only AND partial: a
+      # type error in a folder nobody had added was invisible to both commands.
+      - run: npm run typecheck:tests
       - run: npm run build
       # Dist-drift guard: the just-run build must leave committed dist/ byte-identical.
       # A source change without a matching dist rebuild would otherwise ship stale install

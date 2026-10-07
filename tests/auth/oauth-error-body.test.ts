@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { exchangeCodeForTokens, type OAuthConfig } from '../../src/auth/oauth-flow.js';
+import { rejection } from './rejection.js';
 
 // NFR-1 adversarially. summarizeErrorBody in src/auth/oauth-flow.ts quotes a token-endpoint
 // error body to the user, and the page that made the cap necessary was ~8 KB of Cloudflare
@@ -20,12 +21,11 @@ const OMITTED = 'Token exchange failed: 403 (non-text response body omitted)';
 
 async function messageFor(body: string, status = 403): Promise<string> {
   const fakeFetch = (async () => new Response(body, { status })) as unknown as typeof fetch;
-  const outcome = await exchangeCodeForTokens(config, 'c', 'v', 'http://localhost:18976/callback', fakeFetch).then(
-    () => null,
-    (e: Error) => e,
+  const err = await rejection(
+    `exchangeCodeForTokens with a ${status} body`,
+    exchangeCodeForTokens(config, 'c', 'v', 'http://localhost:18976/callback', fakeFetch),
   );
-  expect(outcome, 'a non-ok status must reject, not resolve').not.toBeNull();
-  return (outcome as Error).message;
+  return err.message;
 }
 
 // A marker no cut may carry out of the body. In the measured incident its real-world twin was the

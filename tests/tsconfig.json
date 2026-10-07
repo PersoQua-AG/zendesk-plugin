@@ -2,8 +2,12 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "rootDir": "..",
-    "noEmit": true
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false
   },
-  // Partial on purpose: the rest of tests/ follows once its type errors are fixed (#11 follow-up).
-  "include": ["../src", "auth", "setup", "skills", "../vitest.config.ts"]
+  // All of tests/, not a curated part of it (#57). While this list was partial, a type error in an
+  // excluded folder was invisible to `npm run build` (which sees src/ only) and to this check
+  // alike, so "the tests type-check" meant "the tests someone remembered to add here do".
+  "include": ["../src", ".", "../vitest.config.ts"]
 }

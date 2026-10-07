@@ -83,7 +83,7 @@ async function start({ liveSession = true, refreshGrant = true, breakMint = fals
 
   const { app } = buildRemoteApp(env, { resolver, issued, refreshTokens, refreshGrant });
   const refreshToken = refreshTokens.mint(IDENTITY, client.client_id);
-  const server = (app as unknown as { listen: (p: number) => Server }).listen(0, '127.0.0.1');
+  const server = (app as unknown as { listen: (p: number, host: string) => Server }).listen(0, '127.0.0.1');
   servers.push(server);
   await new Promise<void>((r) => server.once('listening', () => r()));
   const { port } = server.address() as AddressInfo;

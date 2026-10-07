@@ -23,6 +23,18 @@
 // The properties live in executor-guard-properties.test.ts; this module only generates, runs and
 // shrinks. Everything is seeded: `run(seed, n)` is reproducible, and a failure is reported as the
 // SHRUNK case so it reproduces as a fixed record without the generator.
+// THE CONTRACT, IN JSDOC, so the test files that import this module are type-checked against it
+// (#57) and the shapes are written down once where they are produced rather than at each call site.
+// The module itself stays plain JS and is not type-checked (`checkJs: false`); these annotations
+// exist for inference, which is why a drift between them and the code below is a defect in them.
+/**
+ * @typedef {{ ext: string, depth: number, wedge: boolean, behindSymlinkDir: boolean }} GeneratedFile
+ * @typedef {{ roots: number, spelling: string, kind: string, marker: string, emptyArg: boolean,
+ *             files: GeneratedFile[] }} Case
+ * @typedef {{ argv: string[], scanned: string | null }} Built
+ * @typedef {{ status: number, signal: string | null, stdout: string, stderr: string }} Result
+ * @typedef {{ seed: number, index: number, original: Case, minimal: Case, message: string }} Failure
+ */
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -85,6 +97,7 @@ export const MARKER_KINDS = [
 ];
 export const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.d.ts'];
 
+/** @param {() => number} rnd @returns {Case} */
 export function generate(rnd) {
   const files = [];
   for (let i = 0, n = int(rnd, 0, 3); i < n; i += 1) {
@@ -114,6 +127,7 @@ const DECORATION = {
 
 // Builds the case on disk and returns { argv, scanned } — scanned is the real directory the argv is
 // meant to name, or null when the case deliberately names something that is not a directory.
+/** @param {Case} c @param {string[]} temps @returns {Built} */
 export function materialise(c, temps) {
   const base = mkdtempSync(join(tmpdir(), 'exec-prop-'));
   temps.push(base);
@@ -190,18 +204,21 @@ export function materialise(c, temps) {
 
 // `guard` is a parameter so a property can be replayed against a PATCHED copy of the script. That
 // is how a failing property is shown not to be vacuous: it must pass against the fix and fail here.
+/** @param {string[]} argv @param {string} [guard] @returns {Result} */
 export function execute(argv, guard = process.env.EXECUTOR_GUARD || GUARD) {
   const r = spawnSync('node', [guard, ...argv], { encoding: 'utf8', timeout: 120000 });
   return { status: r.status ?? -1, signal: r.signal, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
 // Every `path:line:column` the run named, in either stream — the findings, independent of wording.
+/** @type {(out: string) => string[]} */
 export const locations = (out) => (out.match(/[\w./\\-]+\.(?:ts|tsx|mts|cts):\d+:\d+/g) ?? []).sort();
 
 // The same run, without blocking: one guard run costs ~200 ms of node startup and `typescript`
 // import, so a sequential pass over n trees costs n * 200 ms and nothing else. The cases are
 // independent, so the HOT PATH runs them in a pool and the sequential `execute` above stays for the
 // shrinker, which is inherently serial and only ever runs after a failure.
+/** @param {string[]} argv @param {string} [guard] @returns {Promise<Result>} */
 export function executeAsync(argv, guard = process.env.EXECUTOR_GUARD || GUARD) {
   return new Promise((done) => {
     const child = spawn('node', [guard, ...argv], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -213,6 +230,13 @@ export function executeAsync(argv, guard = process.env.EXECUTOR_GUARD || GUARD) 
   });
 }
 
+/**
+ * @template T, R
+ * @param {T[]} items
+ * @param {(item: T, index: number) => Promise<R>} worker
+ * @param {number} [concurrency]
+ * @returns {Promise<R[]>}
+ */
 export async function pool(items, worker, concurrency = 8) {
   const out = new Array(items.length);
   let next = 0;
@@ -231,6 +255,7 @@ export async function pool(items, worker, concurrency = 8) {
 // still fails". Candidates are ordered cheapest-first: drop a file, de-wedge a file, un-decorate the
 // path, move the marker towards a plain file, straighten the path kind. The loop runs until no
 // candidate reproduces, which is the local minimum this reports.
+/** @param {Case} c @returns {Case[]} */
 export function shrinkCandidates(c) {
   const out = [];
   for (let i = 0; i < c.files.length; i += 1) {
@@ -254,6 +279,7 @@ export function shrinkCandidates(c) {
   return out;
 }
 
+/** @param {Case} c @param {(candidate: Case) => boolean} fails @param {number} [budget] @returns {Case} */
 export function shrink(c, fails, budget = 400) {
   let best = c;
   let spent = 0;
@@ -278,6 +304,11 @@ export function shrink(c, fails, budget = 400) {
 // means the whole batch held. It generates n cases, runs them all in a pool, then evaluates the
 // property in generation order so the FIRST failure is deterministic for a given seed. Shrinking
 // the failure falls back to the serial path, which costs nothing on a green run.
+/**
+ * @param {(c: Case, r: Result, m: Built) => void} property  throws to fail
+ * @param {{ seed?: number, n?: number, concurrency?: number }} [options]
+ * @returns {Promise<Failure | null>}
+ */
 export async function checkParallel(property, { seed = 1, n = 32, concurrency = 8 } = {}) {
   const rnd = prng(seed);
   const temps = [];
