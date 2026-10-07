@@ -69,13 +69,8 @@ function parseSecurityLevel(raw: string | undefined): SecurityLevel {
   const value = raw?.trim().toLowerCase();
   // Absence was the one resolution with no symptom at all, and it was silent in the dangerous
   // direction (#93 gap B): an operator who believed they had configured `strict` got `standard` and
-  // nothing anywhere said so. In the installed plugin absence IS every start — and once per opened
-  // session on the remote path — which is owned rather than argued away: the alternative is an
-  // installation whose screening level nobody can find out. The text names where the variable is
-  // read instead of ordering an action the installed case cannot take (README, Security).
-  //
-  // #93 gap A — whether the shipped plugin should offer a configuration path at all — is NOT
-  // answered here. It is an open owner question and nothing in this file decides it.
+  // nothing anywhere said so. In the installed plugin absence IS every start, and once per opened
+  // session on the remote path.
   if (!value) {
     warnConfig(
       'ZENDESK_SECURITY_LEVEL is not set — injection screening runs at standard, the shipped level. ' +

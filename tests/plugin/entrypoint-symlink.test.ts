@@ -50,7 +50,15 @@ async function initializeThrough(entry: string): Promise<Record<string, unknown>
   });
   try {
     return await new Promise((resolve, reject) => {
-      createInterface({ input: child.stdout }).on('line', (line) => resolve(JSON.parse(line) as Record<string, unknown>));
+      // A non-JSON first line is a failure of the case, not of the worker: thrown out of the 'line'
+      // handler it would land outside this executor and tear the worker down instead.
+      createInterface({ input: child.stdout }).on('line', (line) => {
+        try {
+          resolve(JSON.parse(line) as Record<string, unknown>);
+        } catch (err) {
+          reject(new Error(`first stdout line was not JSON: ${JSON.stringify(line)}`, { cause: err }));
+        }
+      });
       child.on('error', reject);
       child.on('close', (code) => reject(new Error(`exited ${code} without a response`)));
       child.stdin.write(
@@ -81,8 +89,8 @@ describe('the server starts however its path is spelled', () => {
   }, 60_000);
 
   // The other half of the guard: imported as a module it must still open no transport, or the suite
-  // itself would block on stdin. Asserted on the module registry rather than on a listener delta,
-  // which another file's import of src/server.js would silently turn into a tautology.
+  // itself would block on stdin. Asserted on process.stdin's 'data' listener count, which is what a
+  // connected StdioServerTransport adds and an import must leave at zero.
   it('opens no transport when the module is merely imported', async () => {
     await import('../../src/server.js');
     expect(process.stdin.listenerCount('data')).toBe(0);
