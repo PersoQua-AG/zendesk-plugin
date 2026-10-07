@@ -148,11 +148,13 @@ export async function satisfactionRatings(
   };
 }
 
+// KPIs are counts, never percentages (ops handover 2026-08-25:33). A good/rated ratio in any
+// form — percent, fraction or rounded score — is deliberately absent: /satisfaction_ratings
+// yields good/bad tallies, and a small sample must not read as a strong result.
 export interface CsatSummary {
   good: number;
   bad: number;
-  rated: number; // good + bad (offered/unoffered excluded from the score denominator)
-  scorePct: number | null; // good / rated, rounded; null when nothing is rated
+  rated: number; // good + bad; offered/unoffered are not ratings
 }
 
 export function summariseCsat(ratings: { score: string }[]): CsatSummary {
@@ -162,6 +164,5 @@ export function summariseCsat(ratings: { score: string }[]): CsatSummary {
     if (r.score === 'good') good += 1;
     else if (r.score === 'bad') bad += 1;
   }
-  const rated = good + bad;
-  return { good, bad, rated, scorePct: rated === 0 ? null : Math.round((good / rated) * 100) };
+  return { good, bad, rated: good + bad };
 }

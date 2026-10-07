@@ -22789,6 +22789,49 @@ async function createEntity(client, cache, config2, fields, securityLevel) {
   return { summary: `Created ${config2.resourceLabel} #${record2.id}${screenNote(flagged, securityLevel)}`, cacheHandle: entry.handle };
 }
 
+// src/tools/ticket-status.ts
+var TICKET_STATUSES = ["new", "open", "pending", "hold", "solved", "closed"];
+var BIRTH_STATE_REFUSAL = "Refusing to set status `new`: it is the birth state only and cannot be set on an existing ticket.";
+function refusalReason(current, target) {
+  if (target === "new") return "birth-state";
+  if (current === null) return "unreadable";
+  if (!TICKET_STATUSES.includes(current)) return "unpublished";
+  if (current === "closed") return "terminal";
+  return null;
+}
+function transitionRefusal(current, target) {
+  switch (refusalReason(current, target)) {
+    case "birth-state":
+      return BIRTH_STATE_REFUSAL;
+    case "unreadable":
+      return `Refusing the status transition to ${target}: the ticket's current status could not be read, so the lifecycle rules cannot be checked and a closed ticket would be edited unnoticed. Read the ticket again and retry.`;
+    case "unpublished":
+      return `Refusing the status transition to ${target}: the ticket's current status is not one of the published statuses (${TICKET_STATUSES.join(", ")}), so the lifecycle rules cannot be checked and a closed ticket would be edited unnoticed. Read the ticket again and retry.`;
+    case "terminal":
+      return `Refusing the status transition closed \u2192 ${target}: a closed ticket is terminal and cannot be reopened or edited. To carry its context forward, create a linked follow-up instead: zendesk_create_ticket with followupSourceId, or zendesk_create_tickets_bulk with via_followup_source_id.`;
+    default:
+      return null;
+  }
+}
+var StatusSchema = external_exports.object({ status: external_exports.string().nullish() });
+var BatchStatusSchema = StatusSchema.extend({ id: external_exports.number() });
+async function readStatus(client, ticketId) {
+  const raw = await client.request(`/tickets/${ticketId}.json`);
+  const parsed = external_exports.object({ ticket: BatchStatusSchema }).safeParse(raw);
+  return parsed.success && parsed.data.ticket.id === ticketId ? parsed.data.ticket.status ?? null : null;
+}
+async function readStatuses(client, ids) {
+  const raw = await client.request(`/tickets/show_many.json?ids=${encodeURIComponent(ids.join(","))}`);
+  const envelope = external_exports.object({ tickets: external_exports.array(external_exports.unknown()) }).safeParse(raw);
+  const statuses = /* @__PURE__ */ new Map();
+  if (!envelope.success) return statuses;
+  for (const record2 of envelope.data.tickets) {
+    const parsed = BatchStatusSchema.safeParse(record2);
+    if (parsed.success && parsed.data.status != null) statuses.set(parsed.data.id, parsed.data.status);
+  }
+  return statuses;
+}
+
 // src/tools/tickets.ts
 var TicketSchema = external_exports.object({
   id: external_exports.number(),
@@ -22859,6 +22902,7 @@ async function createTicket(client, cache, params) {
   if (params.tags) ticket.tags = params.tags;
   if (params.groupId !== void 0) ticket.group_id = params.groupId;
   if (params.assigneeId !== void 0) ticket.assignee_id = params.assigneeId;
+  if (params.followupSourceId !== void 0) ticket.via_followup_source_id = params.followupSourceId;
   const raw = await client.request("/tickets.json", {
     method: "POST",
     body: JSON.stringify({ ticket })
@@ -22871,6 +22915,11 @@ async function updateTicket(client, cache, params, securityLevel = "standard") {
     throw new Error(
       "Refusing to update ticket without an updatedStamp: pass the updatedStamp from a prior read to enable safe optimistic-concurrency (recommended), or set force:true to deliberately overwrite without a concurrency check."
     );
+  }
+  const target = params.fields.status;
+  if (target !== void 0) {
+    const refusal = target === "new" ? BIRTH_STATE_REFUSAL : transitionRefusal(await readStatus(client, params.ticketId), target);
+    if (refusal) throw new Error(refusal);
   }
   const result = await safeUpdateWithConflict(client, cache, {
     path: `/tickets/${params.ticketId}.json`,
@@ -22983,6 +23032,16 @@ async function createTicketsBulk(client, cache, params, poll = {}, securityLevel
   if (params.tickets.length === 0) throw new Error("At least one ticket is required for a bulk create.");
   return runJob(client, cache, "zendesk_create_tickets_bulk", "/tickets/create_many.json", { tickets: params.tickets }, "POST", poll, securityLevel);
 }
+function bulkCause(reason, target) {
+  switch (reason) {
+    case "terminal":
+      return `Refused on a forbidden status transition to ${target}`;
+    case "unpublished":
+      return "Current status is not one of the published statuses, so the lifecycle rules could not be checked";
+    default:
+      return "Current status could not be read, so the lifecycle rules could not be checked";
+  }
+}
 async function updateTicketsBulk(client, cache, params, poll = {}, securityLevel = "standard") {
   if (params.ids.length === 0) throw new Error("At least one ticket id is required for a bulk update.");
   if (!params.force) {
@@ -22990,8 +23049,27 @@ async function updateTicketsBulk(client, cache, params, poll = {}, securityLevel
       "Refusing bulk field update: update_many skips per-ticket optimistic-concurrency (safe_update) and can silently overwrite concurrent changes across up to 100 tickets. Set force:true to acknowledge and proceed with the bulk overwrite."
     );
   }
-  const path = `/tickets/update_many.json?ids=${encodeURIComponent(params.ids.join(","))}`;
-  return runJob(client, cache, "zendesk_update_tickets_bulk", path, { ticket: params.fields }, "PUT", poll, securityLevel);
+  let ids = params.ids;
+  let refusedNote = "";
+  const target = params.fields.status;
+  if (target !== void 0) {
+    if (target === "new") throw new Error(BIRTH_STATE_REFUSAL);
+    const statuses = await readStatuses(client, params.ids);
+    const refusedBy = /* @__PURE__ */ new Map();
+    for (const id of params.ids) {
+      const reason = refusalReason(statuses.get(id) ?? null, target);
+      if (reason) refusedBy.set(reason, [...refusedBy.get(reason) ?? [], id]);
+    }
+    if (refusedBy.size > 0) {
+      const refused = new Set([...refusedBy.values()].flat());
+      ids = params.ids.filter((id) => !refused.has(id));
+      refusedNote = [...refusedBy].map(([reason, rs]) => ` ${bulkCause(reason, target)}, not written: ${rs.join(", ")}.`).join("");
+      if (ids.length === 0) throw new Error(`Refusing the bulk update \u2014 no ticket in the batch may move to ${target}.${refusedNote}`);
+    }
+  }
+  const path = `/tickets/update_many.json?ids=${encodeURIComponent(ids.join(","))}`;
+  const result = await runJob(client, cache, "zendesk_update_tickets_bulk", path, { ticket: params.fields }, "PUT", poll, securityLevel);
+  return refusedNote ? { ...result, summary: `${result.summary}${refusedNote}` } : result;
 }
 
 // src/tools/ticket-audits.ts
@@ -23061,7 +23139,7 @@ async function uploadAttachment(client, params) {
 
 // src/register/tickets.ts
 var ticketUpdateFieldsSchema = external_exports.object({
-  status: external_exports.enum(["new", "open", "pending", "hold", "solved", "closed"]).optional(),
+  status: external_exports.enum(TICKET_STATUSES).optional(),
   priority: external_exports.enum(["low", "normal", "high", "urgent"]).optional(),
   assignee_id: external_exports.number().int().positive().optional(),
   group_id: external_exports.number().int().positive().optional(),
@@ -23075,9 +23153,11 @@ var bulkCreateTicketSchema = ticketUpdateFieldsSchema.extend({
     body: external_exports.string().min(1).optional(),
     html_body: external_exports.string().min(1).optional(),
     public: external_exports.boolean().optional()
-  }),
-  requester_id: external_exports.number().int().positive().optional()
-});
+  }).strict(),
+  requester_id: external_exports.number().int().positive().optional(),
+  // Zendesk's write-only follow-up link (Tickets JSON format).
+  via_followup_source_id: external_exports.number().int().positive().optional()
+}).strict();
 function registerTicketTools(server, ctx) {
   const { httpClient, cache, securityLevel, markdownDefault } = ctx;
   server.registerTool(
@@ -23107,18 +23187,22 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
     "zendesk_create_ticket",
     {
       description: "Create a ticket. The comment is converted Markdown\u2192HTML unless markdown:false.",
-      inputSchema: {
+      // A ZodObject rather than a raw shape, so `.strict()` reaches the top-level args too (#66).
+      inputSchema: external_exports.object({
         subject: external_exports.string().min(1),
         comment: external_exports.string().min(1),
         requesterId: external_exports.number().int().positive().optional(),
         priority: external_exports.enum(["low", "normal", "high", "urgent"]).optional(),
-        status: external_exports.enum(["new", "open", "pending", "hold", "solved"]).optional(),
+        // A ticket is never created `closed`; the rest of the published set is derived, not retyped.
+        status: external_exports.enum(TICKET_STATUSES).exclude(["closed"]).optional(),
         tags: external_exports.array(external_exports.string()).optional(),
         groupId: external_exports.number().int().positive().optional(),
         assigneeId: external_exports.number().int().positive().optional(),
         markdown: external_exports.boolean().optional(),
-        public: external_exports.boolean().optional()
-      }
+        public: external_exports.boolean().optional(),
+        // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
+        followupSourceId: external_exports.number().int().positive().optional()
+      }).strict()
     },
     async (args) => okWithHandle(await createTicket(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault }))
   );
@@ -29014,8 +29098,7 @@ function summariseCsat(ratings) {
     if (r.score === "good") good += 1;
     else if (r.score === "bad") bad += 1;
   }
-  const rated = good + bad;
-  return { good, bad, rated, scorePct: rated === 0 ? null : Math.round(good / rated * 100) };
+  return { good, bad, rated: good + bad };
 }
 
 // src/tools/analytics/incremental.ts
@@ -29448,7 +29531,7 @@ function renderReport(report2, startTime, endTime) {
   const dur = (s) => `avg ${s.avgMinutes}m \xB7 p50 ${s.p50Minutes}m \xB7 min ${s.minMinutes}m \xB7 max ${s.maxMinutes}m (n=${s.count})`;
   const breachLines = Object.entries(report2.slaBreaches).map(([m, n]) => `  - ${m}: ${n}`);
   const breaches = breachLines.length > 0 ? breachLines.join("\n") : "  - none";
-  const csat = report2.csat.scorePct === null ? "no rated responses" : `${report2.csat.scorePct}% (${report2.csat.good} good / ${report2.csat.bad} bad)`;
+  const csat = report2.csat.rated === 0 ? "no rated responses" : `${report2.csat.good} good / ${report2.csat.bad} bad / ${report2.csat.rated} rated`;
   return [
     `Zendesk report \u2014 ${new Date(startTime * 1e3).toISOString()} \u2192 ${new Date(endTime * 1e3).toISOString()}`,
     `Ticket volume (created in range): ${report2.volume}`,
@@ -29628,7 +29711,7 @@ Summarize matches grouped by type in a compact table (id, key fields, a one-line
 
 Use the \`data-analyst\` skill. Resolve the range into \`startTime\` (and \`endTime\`) as unix epoch **seconds** \u2014 interpret shorthand like \`last-30-days\` / \`last-7-days\` / \`this-month\`, or an explicit \`YYYY-MM-DD..YYYY-MM-DD\` window. Explicit-date windows are **inclusive-end**: the end date's full day counts, so \`2026-06-01..2026-06-30\` resolves to \`startTime\` = 2026-06-01 00:00 UTC and \`endTime\` = 2026-07-01 00:00 UTC (Jun 30 included). State the resolved UTC window back to the user, then call \`zendesk_report\` with those times.
 
-Present the headline numbers: ticket volume, first-reply-time and resolution-time (label calendar vs business-hours for each), SLA-breach count, and CSAT %. If the user asks to drill in, use \`zendesk_query\` on the report's cache handle rather than re-fetching. If no range was given, default to the last 30 days and say so.`
+Present the headline numbers: ticket volume, first-reply-time and resolution-time (label calendar vs business-hours for each), SLA-breach count, and the CSAT good/bad/rated counts (KPIs are plain counts, never derived shares). If the user asks to drill in, use \`zendesk_query\` on the report's cache handle rather than re-fetching. If no range was given, default to the last 30 days and say so.`
   },
   {
     name: "escalate",

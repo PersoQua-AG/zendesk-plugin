@@ -7,6 +7,7 @@ import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, screen
 import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
 import { markdownToHtml } from '../util/markdown.js';
 import { safeUpdateWithConflict } from './write-helpers.js';
+import { readStatus, transitionRefusal, BIRTH_STATE_REFUSAL } from './ticket-status.js';
 import type { ReadResult } from './result.js';
 
 const TicketSchema = z.object({
@@ -98,6 +99,8 @@ export interface NewTicketInput {
   // Resolved boolean (register applies the markdown_conversion default); no hidden tool default.
   markdown: boolean;
   public?: boolean;
+  // Closed source ticket for a linked follow-up; maps to Zendesk's write-only via_followup_source_id.
+  followupSourceId?: number;
 }
 
 export function buildComment(text: string, useMarkdown: boolean, isPublic: boolean): Record<string, unknown> {
@@ -121,6 +124,7 @@ export async function createTicket(
   if (params.tags) ticket.tags = params.tags;
   if (params.groupId !== undefined) ticket.group_id = params.groupId;
   if (params.assigneeId !== undefined) ticket.assignee_id = params.assigneeId;
+  if (params.followupSourceId !== undefined) ticket.via_followup_source_id = params.followupSourceId;
 
   const raw = await client.request<{ ticket: { id: number } }>('/tickets.json', {
     method: 'POST',
@@ -158,6 +162,13 @@ export async function updateTicket(
     throw new Error(
       'Refusing to update ticket without an updatedStamp: pass the updatedStamp from a prior read to enable safe optimistic-concurrency (recommended), or set force:true to deliberately overwrite without a concurrency check.',
     );
+  }
+  // #61: the lifecycle table is enforced before any write, force:true included — force acknowledges
+  // a concurrency overwrite, not an impossible transition. → new needs no read, so it skips one.
+  const target = params.fields.status;
+  if (target !== undefined) {
+    const refusal = target === 'new' ? BIRTH_STATE_REFUSAL : transitionRefusal(await readStatus(client, params.ticketId), target);
+    if (refusal) throw new Error(refusal);
   }
   const result = await safeUpdateWithConflict(client, cache, {
     path: `/tickets/${params.ticketId}.json`,

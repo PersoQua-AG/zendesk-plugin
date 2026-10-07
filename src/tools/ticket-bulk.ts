@@ -5,6 +5,7 @@ import { pollJobToCompletion, type JobStatus, type JobPollerOptions } from '../c
 import type { SecurityLevel } from '../security/screen.js';
 import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import type { TicketUpdateFields } from './tickets.js';
+import { readStatuses, refusalReason, BIRTH_STATE_REFUSAL, type RefusalReason } from './ticket-status.js';
 
 type PollOverrides = Partial<Pick<JobPollerOptions, 'sleep' | 'intervalMs' | 'maxAttempts'>>;
 
@@ -56,6 +57,18 @@ export async function createTicketsBulk(
   return runJob(client, cache, 'zendesk_create_tickets_bulk', '/tickets/create_many.json', { tickets: params.tickets }, 'POST', poll, securityLevel);
 }
 
+// The bulk wording for each refusal reason refusalReason can hand back after the read.
+function bulkCause(reason: RefusalReason, target: string): string {
+  switch (reason) {
+    case 'terminal':
+      return `Refused on a forbidden status transition to ${target}`;
+    case 'unpublished':
+      return 'Current status is not one of the published statuses, so the lifecycle rules could not be checked';
+    default:
+      return 'Current status could not be read, so the lifecycle rules could not be checked';
+  }
+}
+
 export async function updateTicketsBulk(
   client: ZendeskHttpClient,
   cache: CacheStore,
@@ -74,6 +87,32 @@ export async function updateTicketsBulk(
       'Refusing bulk field update: update_many skips per-ticket optimistic-concurrency (safe_update) and can silently overwrite concurrent changes across up to 100 tickets. Set force:true to acknowledge and proceed with the bulk overwrite.',
     );
   }
-  const path = `/tickets/update_many.json?ids=${encodeURIComponent(params.ids.join(','))}`;
-  return runJob(client, cache, 'zendesk_update_tickets_bulk', path, { ticket: params.fields }, 'PUT', poll, securityLevel);
+  // #61: update_many shares one field set across up to 100 tickets, so the lifecycle table is
+  // checked per ticket and the refused ones are dropped from the batch and named in the result.
+  let ids = params.ids;
+  let refusedNote = '';
+  const target = params.fields.status;
+  if (target !== undefined) {
+    // → new is refused from every state, so the batch needs no read, and it ends with the SAME
+    // sentence the single path gives: the generic wrapper below would not say `new` is the birth state.
+    if (target === 'new') throw new Error(BIRTH_STATE_REFUSAL);
+    const statuses = await readStatuses(client, params.ids);
+    // The judgment is refusalReason's alone — the causes are only GROUPED here, because one note
+    // must name the ids per cause: "forbidden transition" sends the model to the linked-follow-up
+    // remedy, which is wrong advice for a ticket show_many never answered for.
+    const refusedBy = new Map<RefusalReason, number[]>();
+    for (const id of params.ids) {
+      const reason = refusalReason(statuses.get(id) ?? null, target);
+      if (reason) refusedBy.set(reason, [...(refusedBy.get(reason) ?? []), id]);
+    }
+    if (refusedBy.size > 0) {
+      const refused = new Set([...refusedBy.values()].flat());
+      ids = params.ids.filter((id) => !refused.has(id));
+      refusedNote = [...refusedBy].map(([reason, rs]) => ` ${bulkCause(reason, target)}, not written: ${rs.join(', ')}.`).join('');
+      if (ids.length === 0) throw new Error(`Refusing the bulk update — no ticket in the batch may move to ${target}.${refusedNote}`);
+    }
+  }
+  const path = `/tickets/update_many.json?ids=${encodeURIComponent(ids.join(','))}`;
+  const result = await runJob(client, cache, 'zendesk_update_tickets_bulk', path, { ticket: params.fields }, 'PUT', poll, securityLevel);
+  return refusedNote ? { ...result, summary: `${result.summary}${refusedNote}` } : result;
 }
