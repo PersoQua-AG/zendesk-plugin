@@ -29,11 +29,20 @@ export class ResponseCache {
     save(toolName, data) {
         const handle = `${toolName}-${randomBytes(6).toString('hex')}`;
         const path = join(this.resolvedDir, `${handle}.json`);
+        // Outside the write try: a BigInt or a cycle carries no errno, and the disk remedy below would
+        // be the wrong answer for it.
+        let body;
+        try {
+            body = JSON.stringify(data);
+        }
+        catch (err) {
+            throw new Error('Caching the response failed: it cannot be converted to JSON.', { cause: err });
+        }
         // The constructor's check goes stale: the disk fills, a quota bites, the volume remounts
         // read-only. Node's fs errors carry the absolute path and this one reaches the model, so
         // report the code and the remedy like the degrade path does, never the path.
         try {
-            writeFileSync(path, JSON.stringify(data));
+            writeFileSync(path, body);
         }
         catch (err) {
             // A write that failed PARTWAY (ENOSPC, EDQUOT — writeFileSync loops on write(2)) leaves a

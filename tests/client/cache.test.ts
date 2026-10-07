@@ -122,6 +122,16 @@ describe('ResponseCache', () => {
     }
   });
 
+  // A payload that cannot be serialised carries no errno, so the disk remedy is the wrong answer.
+  it('reports an unserialisable payload as such, not as a disk failure', () => {
+    const cache = new ResponseCache(dir);
+    const thrown = thrownBy(() => cache.save('zendesk_get_me', { a: 1n }));
+    expect(thrown?.message).toMatch(/cannot be converted to JSON/i);
+    expect(thrown?.message).not.toMatch(/free space/);
+    expect(thrown?.message).not.toMatch(/unknown error/);
+    expect(readdirSync(dir)).toHaveLength(0);
+  });
+
   // #54 names load() as well, and only save() was sanitized. The cache dir is NESTED so that a leak
   // of either path segment is caught, and both names would appear inside Node's errno message.
   it.skipIf(modeBitsIgnored)('reports an unreadable entry as a miss, by code, without the path', () => {

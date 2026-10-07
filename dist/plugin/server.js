@@ -21902,8 +21902,14 @@ var ResponseCache = class {
   save(toolName, data) {
     const handle = `${toolName}-${randomBytes3(6).toString("hex")}`;
     const path = join2(this.resolvedDir, `${handle}.json`);
+    let body;
     try {
-      writeFileSync2(path, JSON.stringify(data));
+      body = JSON.stringify(data);
+    } catch (err) {
+      throw new Error("Caching the response failed: it cannot be converted to JSON.", { cause: err });
+    }
+    try {
+      writeFileSync2(path, body);
     } catch (err) {
       try {
         rmSync(path, { force: true });
