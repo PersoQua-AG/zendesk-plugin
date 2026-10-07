@@ -93,16 +93,38 @@ describe('buildReport + renderReport', () => {
     expect(report.resolutionTime.calendar.avgMinutes).toBe(240);
     expect(report.slaBreaches).toEqual({ reply_time: 1 });
     expect(report.slaBreachTotal).toBe(1);
-    expect(report.csat).toEqual({ good: 2, bad: 1, rated: 3, scorePct: 67 });
+    expect(report.csat).toEqual({ good: 2, bad: 1, rated: 3 });
   });
 
-  it('renders a readable summary', () => {
+  // T3 (#65): the CSAT line is three counts and the whole summary carries no percent sign.
+  it('renders a readable summary whose CSAT line is counts, not a percentage', () => {
     const text = renderReport(report, 1751328000, 1754006340);
     expect(text).toContain('Ticket volume');
     expect(text).toContain('First reply time — calendar');
     expect(text).toContain('First reply time — business');
     expect(text).toContain('SLA breaches (total 1)');
-    expect(text).toContain('CSAT: 67%');
+    expect(text).toMatch(/^CSAT: 2 good \/ 1 bad \/ 3 rated$/m);
+    expect(text).not.toMatch(/%/);
+  });
+
+  // T4 (#65): an unrated window says so; it never renders 0 good / 0 bad as a measurement.
+  it('renders the null CSAT case as "no rated responses"', () => {
+    const unrated = buildReport({
+      tickets: [], events: [], ratings: [{ score: 'offered' }], rangeStartMs, rangeEndMs, config: BERLIN,
+    });
+    const text = renderReport(unrated, 1751328000, 1754006340);
+    expect(text).toMatch(/^CSAT: no rated responses$/m);
+    expect(text).not.toMatch(/0 good|0 bad|%/);
+  });
+
+  // T5-adjacent (#65): one rated response reads as a count, not as a perfect score.
+  it('renders an all-good window as 1 good / 0 bad / 1 rated, with no 100', () => {
+    const allGood = buildReport({
+      tickets: [], events: [], ratings: [{ score: 'good' }], rangeStartMs, rangeEndMs, config: BERLIN,
+    });
+    const text = renderReport(allGood, 1751328000, 1754006340);
+    expect(text).toMatch(/^CSAT: 1 good \/ 0 bad \/ 1 rated$/m);
+    expect(text.split('\n').find((l) => l.startsWith('CSAT:'))).not.toMatch(/%|100/);
   });
 });
 

@@ -28987,8 +28987,7 @@ function summariseCsat(ratings) {
     if (r.score === "good") good += 1;
     else if (r.score === "bad") bad += 1;
   }
-  const rated = good + bad;
-  return { good, bad, rated, scorePct: rated === 0 ? null : Math.round(good / rated * 100) };
+  return { good, bad, rated: good + bad };
 }
 
 // src/tools/analytics/incremental.ts
@@ -29421,7 +29420,7 @@ function renderReport(report2, startTime, endTime) {
   const dur = (s) => `avg ${s.avgMinutes}m \xB7 p50 ${s.p50Minutes}m \xB7 min ${s.minMinutes}m \xB7 max ${s.maxMinutes}m (n=${s.count})`;
   const breachLines = Object.entries(report2.slaBreaches).map(([m, n]) => `  - ${m}: ${n}`);
   const breaches = breachLines.length > 0 ? breachLines.join("\n") : "  - none";
-  const csat = report2.csat.scorePct === null ? "no rated responses" : `${report2.csat.scorePct}% (${report2.csat.good} good / ${report2.csat.bad} bad)`;
+  const csat = report2.csat.rated === 0 ? "no rated responses" : `${report2.csat.good} good / ${report2.csat.bad} bad / ${report2.csat.rated} rated`;
   return [
     `Zendesk report \u2014 ${new Date(startTime * 1e3).toISOString()} \u2192 ${new Date(endTime * 1e3).toISOString()}`,
     `Ticket volume (created in range): ${report2.volume}`,
@@ -29601,7 +29600,7 @@ Summarize matches grouped by type in a compact table (id, key fields, a one-line
 
 Use the \`data-analyst\` skill. Resolve the range into \`startTime\` (and \`endTime\`) as unix epoch **seconds** \u2014 interpret shorthand like \`last-30-days\` / \`last-7-days\` / \`this-month\`, or an explicit \`YYYY-MM-DD..YYYY-MM-DD\` window. Explicit-date windows are **inclusive-end**: the end date's full day counts, so \`2026-06-01..2026-06-30\` resolves to \`startTime\` = 2026-06-01 00:00 UTC and \`endTime\` = 2026-07-01 00:00 UTC (Jun 30 included). State the resolved UTC window back to the user, then call \`zendesk_report\` with those times.
 
-Present the headline numbers: ticket volume, first-reply-time and resolution-time (label calendar vs business-hours for each), SLA-breach count, and CSAT %. If the user asks to drill in, use \`zendesk_query\` on the report's cache handle rather than re-fetching. If no range was given, default to the last 30 days and say so.`
+Present the headline numbers: ticket volume, first-reply-time and resolution-time (label calendar vs business-hours for each), SLA-breach count, and the CSAT good/bad/rated counts (KPIs are plain counts, never derived shares). If the user asks to drill in, use \`zendesk_query\` on the report's cache handle rather than re-fetching. If no range was given, default to the last 30 days and say so.`
   },
   {
     name: "escalate",

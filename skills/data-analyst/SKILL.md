@@ -20,7 +20,7 @@ For a standard report, call **`zendesk_report`** (`startTime`, optional `endTime
 - ticket **volume**,
 - **first-reply-time** and **resolution-time**, each reported **twice**: calendar (wall-clock elapsed) and **business-hours** (only counting configured working time),
 - **SLA-breach count**, and
-- a **CSAT** summary (good/bad + satisfaction %).
+- a **CSAT** summary: the **good**, **bad** and **rated** counts (rated = good + bad).
 
 It returns a summary + a `cacheHandle`. To drill into a specific slice (e.g. the list of breaching ticket ids, or per-priority counts) call `zendesk_query` with that `cacheHandle` and a JSONPath/jq expression — no re-fetch, no extra API cost.
 
@@ -38,7 +38,7 @@ Business-hours FRT/resolution use the plugin's configured `timezone`, `work_hour
 
 ## Presenting results
 
-- Lead with the resolved window and the headline numbers (volume, median FRT calendar + business, SLA breaches, CSAT %).
+- Lead with the resolved window and the headline numbers (volume, median FRT calendar + business, SLA breaches, CSAT good/bad/rated counts). KPIs are plain counts: report them as given and never derive a share or a ratio from them.
 - For trends, bucket by day/week from the cached pull via `zendesk_query`.
 - Round durations to sensible units (minutes/hours) and always attach the calendar-vs-business label.
 - If a figure is unavailable (e.g. no CSAT ratings in the window), say so explicitly rather than reporting zero as if it were a measurement.
