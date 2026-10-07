@@ -51,33 +51,26 @@ jobs:
           unzip -l zendesk-plugin.zip | grep -q ' \.claude-plugin/plugin\.json$'
           unzip -p zendesk-plugin.zip dist/plugin/server.js | grep -q .
       # PLUGIN_GATEWAY_PUBLISH_TOKEN must be set as a repository secret before the first run;
-      # it does not exist yet. `shell: bash {0}` drops the default `-e` so the HTTP status is
-      # read and reported instead of the raw curl exit code.
+      # it does not exist yet. The gateway's status is the only verdict read here, so 409 can be
+      # told apart from every other failure.
       - name: Publish to the plugin gateway
-        shell: bash {0}
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          code=$(curl --fail-with-body -sS -X POST https://plugins.persoqua.de/admin/publish \
+          code=$(curl -sS -X POST https://plugins.persoqua.de/admin/publish \
             -H "Authorization: Bearer ${{ secrets.PLUGIN_GATEWAY_PUBLISH_TOKEN }}" \
             -H "X-Plugin: zendesk" \
             -H "X-Version: $VERSION" \
             -H "Content-Type: application/zip" \
             --data-binary @zendesk-plugin.zip \
             -o publish-body.txt -w '%{http_code}')
-          rc=$?
-          if [ "$code" = "409" ]; then
-            echo "::error::Version $VERSION is already published. Bump \"version\" in .claude-plugin/plugin.json."
-            exit 1
-          fi
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::Gateway publish of version $VERSION failed with HTTP $code (curl exit $rc)."
-            cat publish-body.txt
-            exit 1
-          fi
-      # A second, independent copy of every published archive: traceable per tag, and an
-      # emergency install path while the gateway is down. Re-runs update the asset instead of
-      # failing, so a retried release does not need a new version.
+          [ "$code" = "409" ] && { echo "::error::Version $VERSION is already published. Bump \"version\" in .claude-plugin/plugin.json."; exit 1; }
+          [ "$code" = "200" ] || { echo "::error::Gateway publish of $VERSION failed: HTTP $code."; cat publish-body.txt; exit 1; }
+      # A team artifact: one tangible, versioned ZIP per tag, grabbable without repacking, and a
+      # record of what each release shipped. Not a customer install path — the one customer has no
+      # GitHub account and this repo goes private. Its substitute exists: dist/ is committed and the
+      # dist-drift guard above forces reproducibility, so `git checkout <tag> && zip` yields the
+      # same archive. Re-runs update the asset instead of failing, so a retry needs no new version.
       - name: Attach the archive to a GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
