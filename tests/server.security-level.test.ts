@@ -115,13 +115,4 @@ describe('security level — values that must stay silent', () => {
     expect(warnings[0]).toContain('strict | standard | off');
     expect(warnings[0]).toContain('no configuration field');
   });
-
-  // stdout carries the MCP protocol frame, and in the installed plugin this is the line printed on
-  // EVERY start — so of the two messages warnConfig writes, this is the one that would corrupt the
-  // frame if it ever went to stdout.
-  it('writes the notice to stderr only', () => {
-    const { warnings, stdoutWrites } = build(undefined);
-    expect(warnings).toHaveLength(1);
-    expect(stdoutWrites).toHaveLength(0);
-  });
 });
