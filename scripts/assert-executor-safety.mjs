@@ -2,12 +2,10 @@
 // Structural guard for the defect class behind #9, not for its instance.
 //
 // THE RULE IS CHEAP. ITS EDGES AND THE CHOICE OF TREE ARE WHAT IS EXPENSIVE. The rule is one line
-// of code and has not moved since #11 — verify with
-//   for r in 873bd1d HEAD; do git show "$r":scripts/assert-executor-safety.mjs \
-//     | grep '^    const inspect'; done | sort -u | wc -l
-// (measured on dd6e564: 1). What the rounds since have cost is everything AROUND it: where
-// "synchronous path" stops (LIMITS), and which directory the walk is pointed at (#76, #87). Read
-// THE RULE once, then LIMITS and the mark — that is where the surprises are.
+// of code — `const inspect = nested || asyncExecutor` — and has not moved since #11. What the
+// rounds since have cost is everything AROUND it: where "synchronous path" stops (LIMITS), and
+// which directory the walk is pointed at (#76, #87). Read THE RULE once, then LIMITS and the
+// mark — that is where the surprises are.
 //
 // What happened (#9): `server.listen(port)` sat on the synchronous path of an INNER executor in
 // src/auth/oauth-flow.ts. An out-of-range port makes node throw SYNCHRONOUSLY; the throw rejected
@@ -35,9 +33,6 @@
 // BINDINGS, NOT NAMES. Settlers, own parameters and executor identity go through the TypeScript
 // binder, so a shadowing `reject` is not mistaken for the outer one, a local `function
 // createServer` inherits no exemption, and `router.resolve(p)` does not count as settling.
-//
-// Zero new dependencies: `typescript` is already a devDependency, built noLib/noResolve — the
-// binder is all this needs, so no lib.d.ts and no node_modules are read.
 //
 // LIMITS, named so the next reader does not think these were checked:
 //   - Only `new Promise(…)` written with the identifier `Promise`. Aliased through a variable it
@@ -104,15 +99,19 @@ const DECLARATION = /\.d\.(ts|mts|cts)$/;
 // What saves it is the OS, not the walk: the open is refused once the symlink chain is too long
 // and node drops that branch silently, so the listing TERMINATES. The cost is the counts, not the
 // findings: a file behind a cycle is collected once per level, so executors and findings in it are
-// reported repeatedly. Nothing is hidden and the exit code is right; the inventory repeats.
+// reported repeatedly. Nothing is hidden and the exit code is right; the inventory repeats. To see
+// it, build a tree of one nested-executor file plus `sub/loop -> .` and run this guard over it;
+// the entry count alone comes from
 //   node -e 'console.log(require("node:fs").readdirSync(process.argv[1],{recursive:true}).length)' <tree>
 
 // A message, not a stack trace, and ONE sentence for every way a named root refuses to be read:
 // a missing directory (ENOENT), a FILE named as the root (ENOTDIR — which used to print a node:fs
 // excerpt and a trace), and a listable-but-unstattable root (EACCES), which reaches the lstat on
 // the mark far below rather than this walk. The last fallback is for a throw that is neither:
-// `??` on `.code` alone printed `(undefined)`. Both guards are held to this bar, asserted by
-// shape rather than by a frame count (#91).
+// `??` on `.code` alone printed `(undefined)`. Asserted by shape rather than by a frame count
+// (#91), in both guards' tests. The three-way fallback is THIS guard's alone: the sibling writes
+// `err.code ?? err.message`, which on a thrown null or undefined raises a TypeError of its own —
+// the stack trace this paragraph exists to prevent. Not fixed here; comments-only commit.
 const unreadable = (err) => {
   console.error(`Nothing to inspect: ${target} (${err?.code ?? err?.message ?? err}).`);
   process.exit(1);
@@ -129,6 +128,8 @@ const files = entries
   .sort()
   .map((f) => join(target, f));
 
+// noLib/noResolve: the binder is all this guard needs, so no lib.d.ts and no node_modules are
+// read. `typescript` was already a devDependency — this guard added no dependency.
 const program = ts.createProgram(files, {
   target: ts.ScriptTarget.Latest,
   allowJs: false,

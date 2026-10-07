@@ -109,10 +109,11 @@ describe('the bound-port guard as a script', () => {
 
     // THE SWEPT PROPERTY IS THE MARK, NOT THE EXIT CODE, and the difference is measured rather
     // than theoretical: with dependencies installed, `.` is a MARKED root that exits 1 anyway,
-    // because node_modules is full of literals. Measured on c3ab1c1 plus this commit's directory
-    // skip: `.` scans 4109 files (1910 of them .ts, 1634 .ts under node_modules) and exits 1 with
-    // 27 findings — 19 in @types/node alone, all of them somebody else's documentation. (A count
-    // of this repository's own tracked .ts files is a different number and is not needed here.)
+    // because node_modules is full of literals. Re-measured on 35f4c5d: `.` scans 4172 files
+    // (1950 of them .ts, 1669 .ts under node_modules) and exits 1 with 25 findings, every one of
+    // them under node_modules and 19 in @types/node alone — somebody else's documentation. It was
+    // 27 until #79 stopped the guard's own prose from matching. (A count of this repository's own
+    // tracked .ts files is a different number and is not needed here.)
     // Without the skip the same run ended at exit 2 on the directory `node_modules/ipaddr.js`
     // before printing anything, which is what made the old `marks` spelling look green.
     // An exit-0 sweep would therefore have asserted
@@ -336,6 +337,9 @@ describe('the bound-port guard as a script', () => {
     expect(readFileSync(GUARD, 'utf8')).toContain(
       String.raw`xargs grep -lE '\bexport (async )?function freePort\('`,
     );
+    // The tail as well, not just the grep: drifting it to `| cut -d/ -f1 | uniq` and the stated
+    // result with it left this test green, so half the documented pipeline was unpinned (#79).
+    expect(readFileSync(GUARD, 'utf8')).toContain(String.raw`| xargs -n1 dirname | sort -u`);
     const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8' });
     expect(run.stdout.trim().split('\n')).toEqual(['tests/auth']);
   });
@@ -343,8 +347,9 @@ describe('the bound-port guard as a script', () => {
   // ──────────────────────────────────────────────────────────────────────────────────────────────
   // #82: the widening itself. Every case below runs the guard over the REAL repository tree with
   // the REAL wired root, because the defect being fixed was invisible to any fixture: a temp tree
-  // the test built was always scanned whole, so no fixture could show that 142 of 190 files in
-  // THIS repository were not.
+  // the test built was always scanned whole, so no fixture could show that most of the files in
+  // THIS repository were not looked at — 142 of 190 when #82 was written; the wired root scans
+  // 203 on 35f4c5d.
   // ──────────────────────────────────────────────────────────────────────────────────────────────
 
   // The probe is a real file in a real subdirectory of the real scanned tree, removed in a finally

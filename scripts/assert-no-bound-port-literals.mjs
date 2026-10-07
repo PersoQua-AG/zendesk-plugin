@@ -2,17 +2,16 @@
 // A fixed port on a bind call collides with a concurrent `vitest run` (#23); use freePort().
 //
 // THE RULE IS CHEAP. CHOOSING THE TREE IS WHAT IS EXPENSIVE. BIND_CALL below is one line and has
-// not changed a byte in three rounds — verify with
-//   for r in 05577f6 a185ce7 HEAD; do git show "$r":scripts/assert-no-bound-port-literals.mjs \
-//     | grep '^const BIND_CALL'; done | sort -u | wc -l
-// (measured on dd6e564: 1). WHICH DIRECTORY it is pointed at has cost #72, #73, #75, #82 and an
-// owner decision. Everything below the regex is about the tree, and that is where to read.
+// not changed in three rounds. WHICH DIRECTORY it is pointed at has cost #72, #73, #75, #82 and
+// an owner decision. Everything below the regex is about the tree, and that is where to read.
 //
 // ONE ROOT, NAMED BY THE CALLER (#73). argv[2], no default: a guard that picks its own directory
 // reports "scanned the wrong tree" and "found nothing" the same way (PR #72, mutation M3).
 //
-// EVERY TEST, AT EVERY DEPTH (#82). The scan is recursive and package.json names `tests`, so one
-// argument covers every test file at every depth and no hand-kept list of roots can go stale.
+// EVERY TEST, AT EVERY DEPTH (#82). Before it the root was tests/auth and the scan one level
+// deep — about a quarter of the tree, green on the rest unseen. The scan is recursive now and
+// package.json names `tests`, so one argument covers every depth and no hand-kept list of roots
+// can go stale.
 //
 // TEST-ONLY, DECIDED RATHER THAN ASSUMED (#82). src/ is NOT scanned and must not be: the rule is
 // about parallel `vitest run` collisions, which production code is not subject to. src/
@@ -35,6 +34,8 @@ const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|li
 // tests/plugin/executor-guard-property.mjs sat in this root with nothing looking at it. The JS
 // spellings are added rather than the sibling guard's `ts|tsx|mts|cts` copied, because .mjs is the
 // spelling that occurs here and that list would have left out the very file that prompted this.
+// That file holds no bind literal (measured on 35f4c5d: 0 matches), so this made the promise true
+// rather than closing an open hole.
 const SOURCE = /\.(ts|tsx|mts|cts|js|mjs|cjs)$/;
 
 // THE MARK OF THE GUARDED TREE: the tree that CONTAINS the allocator's definition, not one that
@@ -43,9 +44,9 @@ const SOURCE = /\.(ts|tsx|mts|cts|js|mjs|cjs)$/;
 // defining directory and its ancestors. Count the directories that carry the definition with
 //   git ls-files '*.ts' | xargs grep -lE '\bexport (async )?function freePort\(' \
 //     | xargs -n1 dirname | sort -u
-// measured on dd6e564: 1, tests/auth — against 4 for the weaker `\bfreePort\(` mention. That
-// command is run by tests/plugin/bound-port-literals-guard.test.ts, which also sweeps the marked
-// set, so the claim cannot rot on paper.
+// measured on 35f4c5d: 1, tests/auth — against 4 for the weaker `\bfreePort\(` mention.
+// tests/plugin/bound-port-literals-guard.test.ts runs this pipeline and asserts both halves of it
+// — the grep AND the tail — against this header, so neither can drift here without going red.
 //
 // WHY A MARK AT ALL, now that the root is the whole test tree: the danger flipped direction. A too
 // WIDE root scans more and can hide nothing; the NARROW misedit is what is left, and narrow is
@@ -68,9 +69,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // ancestors of the allocator and so marked by design, they scan more than the wired root and can
 // therefore hide nothing, and with dependencies installed they are loud rather than silent — run
 //   node scripts/assert-no-bound-port-literals.mjs .
-// (measured on dd6e564: exit 1, and every finding is somebody else's documentation under
-// node_modules). Narrowing back to `tests/auth` is not silent either, although nothing refuses it
-// at runtime: the wiring in package.json is pinned by bound-port-literals-guard.test.ts.
+// (measured on 35f4c5d: exit 1, and every finding is somebody else's documentation under
+// node_modules). CARE WHEN EDITING THIS FILE: `.` reaches scripts/ because the filter takes .mjs,
+// so a call-shaped literal in the prose here becomes a finding of the guard's own — it did twice,
+// and isBindablePort's comment below is one digit from doing it again. Narrowing back to
+// `tests/auth` is not silent either, although nothing refuses it at runtime: the wiring in
+// package.json is pinned by bound-port-literals-guard.test.ts.
 if (process.argv.length !== 3 || !process.argv[2]) {
   console.error(
     'Expected exactly one scan root, and not the empty string:' +
