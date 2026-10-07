@@ -25,7 +25,10 @@ afterEach(() => {
 function serverEnv(): NodeJS.ProcessEnv {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-placeholder-'));
   dirs.push(dataDir);
-  return { ...fullEnv(), ZENDESK_DATA_DIR: dataDir };
+  // ZENDESK_SECURITY_LEVEL is set so the #93 absence notice never fires in this suite: its subject
+  // is ZENDESK_MARKDOWN_CONVERSION, and the cases below assert that NOTHING warned, which is a
+  // stronger claim than filtering the warnings down to the ones they expected.
+  return { ...fullEnv(), ZENDESK_DATA_DIR: dataDir, ZENDESK_SECURITY_LEVEL: 'standard' };
 }
 
 describe('unsubstituted ${user_config.*} placeholders', () => {
@@ -92,10 +95,7 @@ describe('markdown conversion — an unreadable value is never read as a silent 
     const env = serverEnv();
     if (value !== undefined) env.ZENDESK_MARKDOWN_CONVERSION = value;
     const { ctx } = createServer(env, { security: keychain() });
-    // This suite's subject is ZENDESK_MARKDOWN_CONVERSION alone. Since #93 a start with no
-    // ZENDESK_SECURITY_LEVEL also names the screening level in effect, and counting that line here
-    // would make these cases fail for a reason that has nothing to do with markdown.
-    const warnings = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('ZENDESK_MARKDOWN_CONVERSION'));
+    const warnings = warn.mock.calls.map((c) => String(c[0]));
     warn.mockRestore();
     return { markdownDefault: ctx.markdownDefault, warnings };
   }

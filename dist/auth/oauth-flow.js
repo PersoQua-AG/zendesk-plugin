@@ -289,13 +289,11 @@ const LINE_BREAK = /[\n\r\u000B\u000C\u001C-\u001E\u0085\u2028\u2029]/;
 // Trojan-Source set (CVE-2021-42574) is already covered by the two ranges before them \u2014 but they are
 // invisible, and an invisible character inside a quoted line is a word the reader cannot see.
 const CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
-// The one control that carries meaning a reader would miss: dropping it with the rest turned
-// `invalid\tgrant` into `invalidgrant`. Replaced before the strip, not excluded from it, so TAB has
-// exactly one fate rather than two rules that could disagree.
-const TAB = /\t/g;
 // Returns '' for a blank body, so the caller can end the message at the status.
 function summarizeErrorBody(raw) {
-    const firstLine = raw.split(LINE_BREAK)[0].replace(TAB, ' ').replace(CONTROL_OR_BIDI, '').trim();
+    // TAB is replaced BEFORE the strip rather than excluded from it, so it has exactly one fate:
+    // dropping it with the other controls turned `invalid\tgrant` into `invalidgrant`.
+    const firstLine = raw.split(LINE_BREAK)[0].replaceAll('\t', ' ').replace(CONTROL_OR_BIDI, '').trim();
     if (/[<>]/.test(firstLine))
         return '(non-text response body omitted)';
     return firstLine.length > MAX_ERROR_BODY_CHARS

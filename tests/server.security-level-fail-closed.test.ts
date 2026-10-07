@@ -190,8 +190,10 @@ describe('security level — the blast radius of resolving to strict', () => {
 });
 
 // #93 scenario 1. The remote end-to-end case above runs the DEPRIORITISED path with a typo; this one
-// runs the path the installed plugin actually takes — createServer over stdio, reading the process
-// environment — with the level spelled correctly. `<assistant>` is a STRICT_PATTERNS-only match
+// runs the registered tool through the real McpServer with the level spelled correctly. Not the
+// installed plugin's own start: `boot` links an InMemoryTransport pair and passes a literal env
+// (tests/skills/probe.ts:82-83, :96), so it proves the level reaches screening, not how the shipped
+// process obtains it. `<assistant>` is a STRICT_PATTERNS-only match
 // (src/security/screen.ts:43), so it is the only kind of content that can tell the two levels apart:
 // a pattern `standard` also matches would be flagged either way and would prove nothing about which
 // level ran. The negative row is the same content with nothing configured, which is what makes the

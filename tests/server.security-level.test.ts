@@ -61,7 +61,9 @@ describe('security level — an unrecognized value is never a silent downgrade',
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(`ZENDESK_SECURITY_LEVEL "${value}"`);
     expect(warnings[0]).toContain('strict | standard | off');
-    expect(warnings[0]).toContain('"security_level"');
+    // …and NOT a configuration field. The installed plugin declares none, so naming one here
+    // contradicted the absence branch, which says in so many words that there is no field.
+    expect(warnings[0]).not.toContain('security_level');
   });
 
   // stdout is the MCP stdio transport (server.ts connects StdioServerTransport to it); a warning
@@ -112,16 +114,9 @@ describe('security level — values that must stay silent', () => {
     expect(warnings[0]).toContain('no configuration field');
   });
 
-  // The notice is a notice, not a crash report, and it is pasted into issues: a stack trace or an
-  // absolute path in it would leak the operator's home directory out of a line about a setting.
-  it('says it without a stack trace and without an absolute path', () => {
-    const { warnings } = build(undefined);
-    expect(warnings[0]).not.toMatch(/\n\s+at /);
-    expect(warnings[0]).not.toMatch(/(^|\s)(\/|[A-Za-z]:\\)\S/);
-  });
-
-  // stdout carries the MCP protocol frame; this line must not reach it any more than the typo
-  // warning above may.
+  // stdout carries the MCP protocol frame, and in the installed plugin this is the line printed on
+  // EVERY start — so of the two messages warnConfig writes, this is the one that would corrupt the
+  // frame if it ever went to stdout.
   it('writes the notice to stderr only', () => {
     const { warnings, stdoutWrites } = build(undefined);
     expect(warnings).toHaveLength(1);

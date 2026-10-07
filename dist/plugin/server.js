@@ -21512,9 +21512,8 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
 var MAX_ERROR_BODY_CHARS = 200;
 var LINE_BREAK = /[\n\r\u000B\u000C\u001C-\u001E\u0085\u2028\u2029]/;
 var CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
-var TAB = /\t/g;
 function summarizeErrorBody(raw) {
-  const firstLine = raw.split(LINE_BREAK)[0].replace(TAB, " ").replace(CONTROL_OR_BIDI, "").trim();
+  const firstLine = raw.split(LINE_BREAK)[0].replaceAll("	", " ").replace(CONTROL_OR_BIDI, "").trim();
   if (/[<>]/.test(firstLine)) return "(non-text response body omitted)";
   return firstLine.length > MAX_ERROR_BODY_CHARS ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS).replace(/[\uD800-\uDBFF]$/, "")}\u2026 (truncated)` : firstLine;
 }
@@ -29648,7 +29647,7 @@ function registerPrompts(server) {
 import { argv } from "node:process";
 import { join as join3 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { realpathSync } from "node:fs";
+import { statSync as statSync2 } from "node:fs";
 var DEFAULT_RATE_LIMIT_RPM = 400;
 var INCREMENTAL_RATE_LIMIT_RPM = 10;
 var SECURITY_LEVELS = ["strict", "standard", "off"];
@@ -29656,13 +29655,16 @@ function parseSecurityLevel(raw) {
   const value = raw?.trim().toLowerCase();
   if (!value) {
     warnConfig(
-      `ZENDESK_SECURITY_LEVEL is not set \u2014 injection screening runs at standard, the shipped level. This plugin declares no configuration field for it: set ZENDESK_SECURITY_LEVEL to ${SECURITY_LEVELS.join(" | ")} in the environment the server is started in (README, Security).`
+      `ZENDESK_SECURITY_LEVEL is not set \u2014 injection screening runs at standard, the shipped level. The installed plugin declares no configuration field for it, so only a hand-started server or the remote connector reads this variable (${SECURITY_LEVELS.join(" | ")}; README, Security).`
     );
     return "standard";
   }
   if (SECURITY_LEVELS.includes(value)) return value;
   warnConfig(
-    `ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(" | ")} (extension configuration field "${USER_CONFIG_FIELD_BY_ENV.ZENDESK_SECURITY_LEVEL}") \u2014 using strict, the strictest level, rather than silently screening less.`
+    // No "extension configuration field" is named here any more: the installed plugin declares none,
+    // and this branch only fires for someone who DID set the variable, so pointing at a field that
+    // does not exist contradicted the absence branch two lines up.
+    `ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(" | ")} \u2014 using strict, the strictest level, rather than silently screening less.`
   );
   return "strict";
 }
@@ -29783,7 +29785,9 @@ function createServer3(rawEnv = process.env, deps = {}) {
 function startedAsEntrypoint() {
   if (!argv[1]) return false;
   try {
-    return realpathSync(argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+    const started = statSync2(argv[1]);
+    const self = statSync2(fileURLToPath(import.meta.url));
+    return started.dev === self.dev && started.ino === self.ino;
   } catch {
     return false;
   }
