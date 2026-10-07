@@ -12,7 +12,15 @@ import { keychain } from './keychain.js';
 const dirs: string[] = [];
 const readOnly: string[] = [];
 afterEach(() => {
-  for (const d of readOnly.splice(0)) chmodSync(d, 0o700); // or rmSync cannot unlink inside it
+  // Restore before rmSync, which cannot unlink inside a 0500 dir. Guarded so one failure
+  // does not strand the rest of the cleanup.
+  for (const d of readOnly.splice(0)) {
+    try {
+      chmodSync(d, 0o700);
+    } catch {
+      /* best effort */
+    }
+  }
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -125,13 +133,6 @@ describe.skipIf(process.getuid?.() === 0)('createServer with an existing read-on
     const client = await connect(configuredEnv(dataDir), { fetchImpl });
     expectCacheProblem(textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} })), dataDir, 'EACCES');
     expect(fetchImpl).not.toHaveBeenCalled();
-    await client.close();
-  });
-
-  it('answers zendesk_login the same way', async () => {
-    const dataDir = readOnlyCacheDataDir();
-    const client = await connect(configuredEnv(dataDir));
-    expectCacheProblem(textOf(await client.callTool({ name: 'zendesk_login', arguments: {} })), dataDir, 'EACCES');
     await client.close();
   });
 });

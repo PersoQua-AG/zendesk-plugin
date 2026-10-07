@@ -13,11 +13,12 @@ export class ResponseCache {
     maxBytes;
     constructor(cacheDir, options = {}) {
         this.cacheDir = cacheDir;
-        mkdirSync(cacheDir, { recursive: true }); // no-op when it already exists
+        mkdirSync(cacheDir, { recursive: true });
         // mkdir succeeds on an EXISTING unwritable directory, so the first save() would throw EACCES
         // with the absolute path into tool output. Fail here instead: server.ts turns this into the
-        // code-only degrade message. X_OK too — a dir without it cannot be traversed to the entries.
-        accessSync(cacheDir, constants.W_OK | constants.X_OK);
+        // code-only degrade message. All three bits: sweep() reads the dir, save() writes it, and
+        // neither can reach an entry without the traverse bit.
+        accessSync(cacheDir, constants.R_OK | constants.W_OK | constants.X_OK);
         this.resolvedDir = resolve(cacheDir);
         this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
         this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -25,8 +26,18 @@ export class ResponseCache {
     save(toolName, data) {
         const handle = `${toolName}-${randomBytes(6).toString('hex')}`;
         const path = join(this.cacheDir, `${handle}.json`);
-        writeFileSync(path, JSON.stringify(data));
-        this.sweep();
+        // The constructor's check goes stale: the disk fills, a quota bites, the volume remounts
+        // read-only. Node's fs errors carry the absolute path and this one reaches the model, so
+        // report the code and the remedy like the degrade path does, never the path.
+        try {
+            writeFileSync(path, JSON.stringify(data));
+            this.sweep();
+        }
+        catch (err) {
+            const code = err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
+            throw new Error(`Caching the response failed (${code}). Make sure the extension's data directory is a ` +
+                'writable directory with free space, then reload the extension.');
+        }
         return { handle, path };
     }
     load(handle) {

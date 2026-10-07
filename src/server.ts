@@ -141,8 +141,8 @@ function resolveOrDegrade(env: NodeJS.ProcessEnv, security: RunSecurity): AuthRe
   }
 }
 
-// Opening the cache can throw (EACCES/ENOSPC/ENOTDIR — the dir is created AND checked writable);
-// tokens share the dir, so degrade like a bad config. The stub answers every tool with the reason.
+// Opening the cache can throw (EACCES/ENOSPC/ENOTDIR — the dir is created AND checked usable);
+// tokens share the dir, so degrade like a bad config.
 function openCacheOrDegrade(auth: AuthResolution): { auth: AuthResolution; cache: CacheStore; cacheOk: boolean } {
   try {
     return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')), cacheOk: true };

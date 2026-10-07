@@ -21887,7 +21887,7 @@ var ResponseCache = class {
   constructor(cacheDir, options = {}) {
     this.cacheDir = cacheDir;
     mkdirSync2(cacheDir, { recursive: true });
-    accessSync(cacheDir, constants.W_OK | constants.X_OK);
+    accessSync(cacheDir, constants.R_OK | constants.W_OK | constants.X_OK);
     this.resolvedDir = resolve(cacheDir);
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -21899,8 +21899,15 @@ var ResponseCache = class {
   save(toolName, data) {
     const handle = `${toolName}-${randomBytes3(6).toString("hex")}`;
     const path = join2(this.cacheDir, `${handle}.json`);
-    writeFileSync2(path, JSON.stringify(data));
-    this.sweep();
+    try {
+      writeFileSync2(path, JSON.stringify(data));
+      this.sweep();
+    } catch (err) {
+      const code = err instanceof Error && "code" in err ? String(err.code) : "unknown error";
+      throw new Error(
+        `Caching the response failed (${code}). Make sure the extension's data directory is a writable directory with free space, then reload the extension.`
+      );
+    }
     return { handle, path };
   }
   load(handle) {

@@ -72,11 +72,54 @@ describe('ResponseCache', () => {
     mkdirSync(readOnly);
     chmodSync(readOnly, 0o500);
     try {
-      expect(() => new ResponseCache(readOnly)).toThrow(
-        expect.objectContaining({ code: 'EACCES' }) as unknown as Error,
-      );
+      let code: unknown;
+      try {
+        new ResponseCache(readOnly);
+      } catch (err) {
+        code = (err as NodeJS.ErrnoException).code;
+      }
+      expect(code).toBe('EACCES');
     } finally {
       chmodSync(readOnly, 0o700);
+    }
+  });
+
+  // sweep() reads the directory on every save, so write+traverse alone is not enough to use it.
+  it.skipIf(process.getuid?.() === 0)('throws EACCES at construction for a write-only directory (0300)', () => {
+    const writeOnly = join(dir, 'cache-0300');
+    mkdirSync(writeOnly);
+    chmodSync(writeOnly, 0o300);
+    try {
+      let code: unknown;
+      try {
+        new ResponseCache(writeOnly);
+      } catch (err) {
+        code = (err as NodeJS.ErrnoException).code;
+      }
+      expect(code).toBe('EACCES');
+    } finally {
+      chmodSync(writeOnly, 0o700);
+    }
+  });
+
+  // The constructor's check goes stale (ENOSPC, EROFS, a quota, plain TOCTOU). save() must still
+  // not hand Node's raw error — which carries the absolute path — to the tool result.
+  it.skipIf(process.getuid?.() === 0)('reports a write failure by code, without the path', () => {
+    const cache = new ResponseCache(dir);
+    chmodSync(dir, 0o500); // becomes unwritable AFTER construction succeeded
+    try {
+      let message = '';
+      try {
+        cache.save('zendesk_get_me', { a: 1 });
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toContain('EACCES');
+      expect(message).toMatch(/free space/);
+      expect(message).not.toContain(dir);
+      expect(message).not.toContain('.json');
+    } finally {
+      chmodSync(dir, 0o700);
     }
   });
 });

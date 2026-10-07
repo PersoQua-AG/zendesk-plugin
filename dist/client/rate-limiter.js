@@ -26,7 +26,8 @@ export class RateLimiter {
         }
     }
     reportRetryAfter(seconds) {
-        // NaN fails `<`: unknown wait -> longest safe wait, not the parser's 60 s default.
+        // parseRetryAfter already caps, so this is a guard for direct callers only. NaN fails `<`,
+        // which sends an unknown wait to the longest safe one rather than through as NaN.
         const capped = seconds < MAX_RETRY_AFTER_SECONDS ? seconds : MAX_RETRY_AFTER_SECONDS;
         // Extend, never shorten: a second 429 with a smaller header must not reopen a window
         // Zendesk still holds shut.
