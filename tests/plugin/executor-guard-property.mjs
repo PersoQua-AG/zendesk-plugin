@@ -25,13 +25,13 @@
 // SHRUNK case so it reproduces as a fixed record without the generator.
 // THE CONTRACT, IN JSDOC, so the test files that import this module are type-checked against it
 // (#57) and the shapes are written down once where they are produced rather than at each call site.
-// The module itself stays plain JS and is not type-checked (`checkJs: false`); these annotations
-// exist for inference, which is why a drift between them and the code below is a defect in them.
+// `checkJs` is ON for tests/, so these are CHECKED against the code below rather than trusted:
+// turning it on is what found `Built` claiming two fields where materialise() returns three.
 /**
  * @typedef {{ ext: string, depth: number, wedge: boolean, behindSymlinkDir: boolean }} GeneratedFile
  * @typedef {{ roots: number, spelling: string, kind: string, marker: string, emptyArg: boolean,
  *             files: GeneratedFile[] }} Case
- * @typedef {{ argv: string[], scanned: string | null }} Built
+ * @typedef {{ argv: string[], scanned: string | null, dir: string }} Built
  * @typedef {{ status: number, signal: string | null, stdout: string, stderr: string }} Result
  * @typedef {{ seed: number, index: number, original: Case, minimal: Case, message: string }} Failure
  */
@@ -45,6 +45,7 @@ export const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const GUARD = join(REPO, 'scripts', 'assert-executor-safety.mjs');
 
 // mulberry32 — a seeded PRNG, so every case in this file is replayable from its seed alone.
+/** @param {number} seed @returns {() => number} */
 function prng(seed) {
   let a = seed >>> 0;
   return () => {
@@ -55,7 +56,9 @@ function prng(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+/** @type {<T>(rnd: () => number, xs: readonly T[]) => T} */
 const pick = (rnd, xs) => xs[Math.floor(rnd() * xs.length)];
+/** @type {(rnd: () => number, lo: number, hi: number) => number} */
 const int = (rnd, lo, hi) => lo + Math.floor(rnd() * (hi - lo + 1));
 
 // The exact #9 shape: a call on the synchronous path of an executor nested in another one, with the
@@ -99,6 +102,7 @@ export const EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.d.ts'];
 
 /** @param {() => number} rnd @returns {Case} */
 export function generate(rnd) {
+  /** @type {GeneratedFile[]} */
   const files = [];
   for (let i = 0, n = int(rnd, 0, 3); i < n; i += 1) {
     files.push({
@@ -118,6 +122,7 @@ export function generate(rnd) {
   };
 }
 
+/** @type {Record<string, string>} */
 const DECORATION = {
   space: 'a dir',
   newline: 'a\ndir',
@@ -170,6 +175,7 @@ export function materialise(c, temps) {
   }
 
   let named = dir;
+  /** @type {string | null} */
   let scanned = dir;
   if (c.kind === 'file') {
     named = join(dir, 'standalone.ts');
@@ -257,6 +263,7 @@ export async function pool(items, worker, concurrency = 8) {
 // candidate reproduces, which is the local minimum this reports.
 /** @param {Case} c @returns {Case[]} */
 export function shrinkCandidates(c) {
+  /** @type {Case[]} */
   const out = [];
   for (let i = 0; i < c.files.length; i += 1) {
     out.push({ ...c, files: c.files.filter((_, j) => j !== i) });
@@ -311,6 +318,7 @@ export function shrink(c, fails, budget = 400) {
  */
 export async function checkParallel(property, { seed = 1, n = 32, concurrency = 8 } = {}) {
   const rnd = prng(seed);
+  /** @type {string[]} */
   const temps = [];
   try {
     const cases = Array.from({ length: n }, () => generate(rnd));
@@ -320,6 +328,7 @@ export async function checkParallel(property, { seed = 1, n = 32, concurrency = 
       try {
         property(c, results[i], built[i]);
       } catch (error) {
+        /** @param {Case} candidate @returns {boolean} */
         const fails = (candidate) => {
           try {
             const m = materialise(candidate, temps);
@@ -330,12 +339,12 @@ export async function checkParallel(property, { seed = 1, n = 32, concurrency = 
           }
         };
         const minimal = shrink(c, fails);
-        let message = String(error?.message ?? error);
+        let message = error instanceof Error ? error.message : String(error);
         try {
           const m = materialise(minimal, temps);
           property(minimal, execute(m.argv), m);
         } catch (err) {
-          message = String(err?.message ?? err);
+          message = err instanceof Error ? err.message : String(err);
         }
         return { seed, index: i, original: c, minimal, message };
       }

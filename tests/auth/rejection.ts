@@ -9,8 +9,9 @@
 // So this asserts the rejection first and narrows afterwards, and it names both ways it can be
 // disappointed: a promise that resolved, and a rejection that is not an Error. The label is the
 // caller's, because by the time the message is read the expression that produced it is gone.
+const RESOLVED = Symbol('resolved');
+
 export async function rejection(label: string, promise: Promise<unknown>): Promise<Error> {
-  const RESOLVED = Symbol('resolved');
   const outcome: unknown = await promise.then(
     () => RESOLVED,
     (e: unknown) => e,

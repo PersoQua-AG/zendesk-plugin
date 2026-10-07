@@ -3,8 +3,14 @@
   "compilerOptions": {
     "rootDir": "..",
     "noEmit": true,
+    // tests/ holds one .mjs helper (plugin/executor-guard-property.mjs). `allowJs` is what lets
+    // its CONSUMERS be checked at all — without it the import answers TS7016 and eight errors
+    // follow in executor-guard-properties.test.ts. `checkJs` is what keeps the helper itself from
+    // becoming the one exempted file in a folder whose whole claim is that nothing is exempt:
+    // turning it on surfaced 30 errors, one of which was a real JSDoc drift (`Built` was missing
+    // the `dir` field it has returned all along).
     "allowJs": true,
-    "checkJs": false
+    "checkJs": true
   },
   // All of tests/, not a curated part of it (#57). While this list was partial, a type error in an
   // excluded folder was invisible to `npm run build` (which sees src/ only) and to this check

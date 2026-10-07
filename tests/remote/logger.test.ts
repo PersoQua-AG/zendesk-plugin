@@ -24,7 +24,7 @@ describe('redacting logger', () => {
     expect(out).toContain('[redacted]');
   });
 
-  it('emits a single valid JSON line preserving non-sensitive fields', () => {
+  it('emits a single valid JSON line preserving every field LogFields has', () => {
     const out = capture(() => log({ outcome: 'ok', msg: 'done' }));
     expect(out.endsWith('\n')).toBe(true);
     const parsed = JSON.parse(out.trim());
