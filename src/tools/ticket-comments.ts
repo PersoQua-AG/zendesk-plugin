@@ -1,7 +1,7 @@
 // src/tools/ticket-comments.ts
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeScreener, screenRecordDeep, screenNote, type RecordScreen, type Screener } from './screening.js';
 import { listCbp } from './cbp-list.js';
@@ -10,7 +10,7 @@ import type { ReadResult } from './result.js';
 
 export async function addComment(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   // `markdown` is a resolved boolean (the register layer applies the markdown_conversion default);
   // the tool holds no hidden default of its own, matching the Guide write path.
   params: { ticketId: number; body: string; public?: boolean; markdown: boolean },
@@ -49,7 +49,7 @@ function describeComment(c: Comment, screen: Screener): RecordScreen<Comment> {
 
 export async function listComments(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ticketId: number; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {

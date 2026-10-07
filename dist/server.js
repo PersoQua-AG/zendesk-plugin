@@ -5,6 +5,7 @@ import { TokenStore } from './auth/token-store.js';
 import { callbackPortOrDefault, dataDirOf, DEFAULT_SCOPES, resolveAuthConfig, stripPlaceholders, USER_CONFIG_FIELD_BY_ENV, } from './auth/config.js';
 import { readKeychainConfig, resolveTokenStoreKey, runSecurity, writeKeychainConfig, } from './auth/store-key.js';
 import { warnConfig } from './util/warn-config.js';
+import { errorCode } from './util/error-code.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
 import { ResponseCache } from './client/cache.js';
@@ -105,22 +106,21 @@ function resolveOrDegrade(env, security) {
         };
     }
 }
-// mkdir can throw (EACCES/ENOSPC/ENOTDIR); tokens share the dir, so degrade like a bad config.
+// Opening the cache can throw (EACCES/ENOSPC/ENOTDIR — the dir is created AND checked usable);
+// tokens share the dir, so degrade like a bad config.
 function openCacheOrDegrade(auth) {
     try {
         return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')), cacheOk: true };
     }
     catch (err) {
-        const code = err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
+        const code = errorCode(err);
         const problem = `The extension's data directory cannot be used (${code}), so responses cannot be cached and ` +
             `tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;
         const reason = auth.ok ? problem : `${auth.reason.replace(/,? then reload the extension\.$/, '.')} ${problem}`;
         const fail = () => {
             throw new Error(reason);
         };
-        // ResponseCache is nominal (private fields); tools only call save/load.
-        const stub = { save: fail, load: fail };
-        const cache = stub;
+        const cache = { save: fail, load: fail };
         return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
     }
 }

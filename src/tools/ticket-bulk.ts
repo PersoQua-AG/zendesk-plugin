@@ -1,6 +1,6 @@
 // src/tools/ticket-bulk.ts
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import { pollJobToCompletion, type JobStatus, type JobPollerOptions } from '../client/job-poller.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
@@ -17,7 +17,7 @@ export interface BulkResult {
 
 async function runJob(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   toolName: string,
   path: string,
   payload: unknown,
@@ -47,7 +47,7 @@ async function runJob(
 
 export async function createTicketsBulk(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { tickets: unknown[] },
   poll: PollOverrides = {},
   securityLevel: SecurityLevel = 'standard',
@@ -58,7 +58,7 @@ export async function createTicketsBulk(
 
 export async function updateTicketsBulk(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ids: number[]; fields: TicketUpdateFields; force?: boolean },
   poll: PollOverrides = {},
   securityLevel: SecurityLevel = 'standard',

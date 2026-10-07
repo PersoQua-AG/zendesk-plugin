@@ -5,7 +5,7 @@
 // comments ARE attacker-authored free text and are fenced explicitly (describeRating below).
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../../client/http-client.js';
-import type { ResponseCache } from '../../client/cache.js';
+import type { CacheStore } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
 import {
   makeScreener,
@@ -45,7 +45,7 @@ const SingleTicketMetricSchema = z.object({ ticket_metric: TicketMetricSchema })
 
 export async function ticketMetrics(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ticketId?: number; pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -134,7 +134,7 @@ export async function fetchRatings(
 
 export async function satisfactionRatings(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { startTime?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {

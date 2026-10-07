@@ -20,9 +20,10 @@ import {
 } from './auth/store-key.js';
 import type { OAuthConfig } from './auth/oauth-flow.js';
 import { warnConfig } from './util/warn-config.js';
+import { errorCode } from './util/error-code.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
-import { ResponseCache } from './client/cache.js';
+import { ResponseCache, type CacheStore } from './client/cache.js';
 import type { SecurityLevel } from './security/screen.js';
 import type { TokenProvider } from './client/token-provider.js';
 import type { ToolContext } from './register/context.js';
@@ -141,12 +142,13 @@ function resolveOrDegrade(env: NodeJS.ProcessEnv, security: RunSecurity): AuthRe
   }
 }
 
-// mkdir can throw (EACCES/ENOSPC/ENOTDIR); tokens share the dir, so degrade like a bad config.
-function openCacheOrDegrade(auth: AuthResolution): { auth: AuthResolution; cache: ResponseCache; cacheOk: boolean } {
+// Opening the cache can throw (EACCES/ENOSPC/ENOTDIR — the dir is created AND checked usable);
+// tokens share the dir, so degrade like a bad config.
+function openCacheOrDegrade(auth: AuthResolution): { auth: AuthResolution; cache: CacheStore; cacheOk: boolean } {
   try {
     return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')), cacheOk: true };
   } catch (err) {
-    const code = err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
+    const code = errorCode(err);
     const problem =
       `The extension's data directory cannot be used (${code}), so responses cannot be cached and ` +
       `tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;
@@ -154,9 +156,7 @@ function openCacheOrDegrade(auth: AuthResolution): { auth: AuthResolution; cache
     const fail = (): never => {
       throw new Error(reason);
     };
-    // ResponseCache is nominal (private fields); tools only call save/load.
-    const stub = { save: fail, load: fail } satisfies Pick<ResponseCache, 'save' | 'load'>;
-    const cache = stub as unknown as ResponseCache;
+    const cache: CacheStore = { save: fail, load: fail };
     return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
   }
 }
@@ -181,7 +181,7 @@ export interface ServerDeps {
   authManager?: TokenProvider;
   rateLimiter?: RateLimiter;
   incrementalRateLimiter?: RateLimiter;
-  cache?: ResponseCache;
+  cache?: CacheStore;
   // Test seam only: a mocked Zendesk fetch for the per-session http client. Default (stdio and
   // prod) leaves it unset → the client uses the global fetch, byte-identical to today.
   fetchImpl?: typeof fetch;
