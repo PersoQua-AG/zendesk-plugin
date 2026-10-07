@@ -1009,29 +1009,37 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
   // the whole validation was deletable with the suite green. These three cases are why it cannot
   // be deleted any more. Each one was a live blocker before it was pinned.
   describe('the declared version has to be usable as a file name', () => {
-    // THE SHAPE THAT ACTUALLY ESCAPES, and the first version of this case did not use it:
-    // `../VICTIM` yields `zendesk-../VICTIM.mcpb`, where `zendesk-..` is a literal segment that
-    // goes nowhere. `0/../../../VICTIM` does — measured against the ablated script: `artifact
-    // ../../VICTIM.mcpb`, exit 0, and a file three levels above `root` overwritten. The victim is
-    // therefore placed where the artifact path really lands.
-    it('refuses a version with path segments, and deletes nothing outside the tree', () => {
-      const tree = makeTree();
-      const outside = mkdtempSync(join(tmpdir(), 'audit-victim-'));
-      temps.push(outside);
-      const victim = join(outside, 'VICTIM.mcpb');
-      writeFileSync(victim, 'somebody else\'s file');
-      writeFileSync(`${victim}.sha256`, 'and its checksum');
-      // Relative from the tree to the victim, as a version: `zendesk-<version>.mcpb` then resolves
-      // onto the victim itself.
-      const escape = `0${relative(tree.dir, victim).replace(/\.mcpb$/, '')}`;
-      writeFileSync(join(tree.dir, 'manifest.json'), JSON.stringify({ name: 't', version: escape }));
-      writeFileSync(join(tree.dir, 'package.json'), JSON.stringify({ name: 't', version: escape }));
+    // A SEPARATOR IS WHAT TRAVERSES, and the first two spellings of this case carried none that
+    // worked. The artifact path is `join(root, `zendesk-${version}.mcpb`)`, so `../VICTIM` gives
+    // `zendesk-../VICTIM.mcpb` — `zendesk-..` is a literal segment and goes nowhere, which is why
+    // both earlier fixtures were inert. `0/../VICTIM` enters a segment and leaves it again, so the
+    // artifact lands somewhere the version name does not appear at all. The test COMPUTES that
+    // landing place and asserts it moved, then puts the victim there — an inert fixture is exactly
+    // how the two earlier spellings passed.
+    //
+    // It deliberately stops one `..` short of leaving the tree: `0/../../VICTIM` lands in the
+    // shared temp root, and the first draft of this case pushed that onto the cleanup list and
+    // tried to `rm -rf` it (EPERM on `/var/folders/.../T`). The mechanism under test is the
+    // separator, and one is enough to show it.
+    //
+    // `entries: clean(escape)` as well, or the ablated run exits 1 on a version mismatch and never
+    // reaches the write.
+    it('refuses a version with path segments, and overwrites nothing through one', () => {
+      const escape = '0/../VICTIM';
+      const tree = makeTree({ manifestVersion: escape, packageVersion: escape, entries: clean(escape) });
+      const wouldLandOn = join(tree.dir, `zendesk-${escape}.mcpb`);
+      // The fixture is only a fixture if the separator really moved the path.
+      expect(wouldLandOn).toBe(join(tree.dir, 'VICTIM.mcpb'));
+      expect(wouldLandOn).not.toContain('zendesk-');
+      writeFileSync(wouldLandOn, "somebody else's file");
+      writeFileSync(`${wouldLandOn}.sha256`, 'and its checksum');
+
       const run = runAudit(tree);
       expect(run.status).toBe(2);
       expect(run.stderr).toContain('is not a usable file-name component');
       expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
-      expect(readFileSync(victim, 'utf8')).toBe('somebody else\'s file');
-      expect(readFileSync(`${victim}.sha256`, 'utf8')).toBe('and its checksum');
+      expect(readFileSync(wouldLandOn, 'utf8')).toBe("somebody else's file");
+      expect(readFileSync(`${wouldLandOn}.sha256`, 'utf8')).toBe('and its checksum');
       expect(existsSync(tree.bundle)).toBe(true);
     });
 
@@ -1059,21 +1067,17 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
       expect(run.stderr).not.toContain('not a usable file-name component');
     });
 
-    // Every legitimate semver shape still releases. A validation that bricks a real release would
-    // be worse than the traversal it prevents.
     // ONE ROW. The gate is a charset regex with no ordering, so this shape strictly covers
     // `1.0.0-rc.1` and `1.0.0+build.5`, and plain `1.0.0` is makeTree()'s default and so already
     // the subject of 'a clean bundle passes'. The case exists because a validation that bricks a
     // real release would be worse than the traversal it prevents.
-    it.each(['1.0.0-rc.1+exp.sha.5114f85'])(
-      'still releases version %s',
-      (v) => {
-        const tree = makeTree({ manifestVersion: v, packageVersion: v, entries: clean(v) });
-        const run = runAudit(tree);
-        expect(run.status, run.stderr).toBe(0);
-        expect(existsSync(tree.artifact)).toBe(true);
-      },
-    );
+    it('still releases a full semver with prerelease and build metadata', () => {
+      const v = '1.0.0-rc.1+exp.sha.5114f85';
+      const tree = makeTree({ manifestVersion: v, packageVersion: v, entries: clean(v) });
+      const run = runAudit(tree);
+      expect(run.status, run.stderr).toBe(0);
+      expect(existsSync(tree.artifact)).toBe(true);
+    });
   });
 
   // A partial clearing is the round-1 blocker one window narrower: the artifact goes, the checksum
@@ -1091,7 +1095,7 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(existsSync(tree.artifact), 'the artifact was removed, as the code intends').toBe(false);
     // The sentence has to match the disk.
     expect(run.stderr).not.toContain('Nothing was deleted');
-    expect(run.stderr).toContain('was already removed before this was found');
+    expect(run.stderr).toContain('Already removed before this run finished, and NOT coming back');
     expect(run.stderr).toContain(basename(tree.artifact));
   });
 
@@ -1104,7 +1108,7 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     const run = runAudit(tree);
     expect(run.status).toBe(2);
     expect(run.stderr).toContain('could not be cleared');
-    expect(run.stderr).not.toContain('was already removed');
+    expect(run.stderr).not.toContain('Already removed before this run finished');
     expect(run.stderr).not.toContain(basename(tree.artifact) + ' was');
   });
 
@@ -1120,8 +1124,42 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(run.status).toBe(1);
     expect(run.stderr).toContain('CONTAMINATED');
     expect(existsSync(tree.artifact), 'the artifact was removed, as the code intends').toBe(false);
-    expect(run.stderr).toContain('was already removed before this was found');
+    expect(run.stderr).toContain('Already removed before this run finished, and NOT coming back');
     expect(run.stderr).toContain(basename(tree.artifact));
+  });
+
+  // THE CELL FOUR REVIEW ROUNDS KEPT MISSING: sound tree, clear slots, a bundle finding. The
+  // clearing succeeds on BOTH files — which is #90's intended behaviour, a failing run must leave
+  // nothing shippable — and the only artifact sentence in the run used to be "No artifact and no
+  // checksum were produced by this run", which is true of this run and silent about the operator's
+  // previous release. Nothing in the three cases added for the other cells could see it, because
+  // the notice lived inside a `catch` that never fired here.
+  it('names what it cleared even when both slots came away clean', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    writeFileSync(tree.artifact, 'the release this tree published');
+    writeFileSync(tree.checksum, 'and its checksum');
+    const run = runAudit(tree);
+    expect(run.status).toBe(1);
+    expect(existsSync(tree.artifact), 'a failing run leaves nothing shippable — #90').toBe(false);
+    expect(existsSync(tree.checksum)).toBe(false);
+    expect(run.stderr).toContain('Already removed before this run finished, and NOT coming back');
+    expect(run.stderr).toContain(basename(tree.artifact));
+    expect(run.stderr).toContain(basename(tree.checksum));
+  });
+
+  // And the other order of the same fault, which the previous spelling also missed: the ARTIFACT
+  // slot refuses and the checksum is a real file, so the deletion happens AFTER the fault. A notice
+  // read inside the catch saw only deletions that preceded it.
+  it('names a deletion that happened after the fault', () => {
+    const tree = makeTree();
+    mkdirSync(tree.artifact);
+    writeFileSync(tree.checksum, 'the checksum of an earlier release');
+    const run = runAudit(tree);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('could not be cleared');
+    expect(existsSync(tree.checksum), 'removed after the fault').toBe(false);
+    expect(run.stderr).toContain('Already removed before this run finished, and NOT coming back');
+    expect(run.stderr).toContain(basename(tree.checksum));
   });
 
   // A foreign bundle gets the FULL report. The coverage disclosure is the part its caller most

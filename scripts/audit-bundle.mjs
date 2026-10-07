@@ -508,15 +508,16 @@ const samePlace = (a, b) => {
 };
 const ownBundle = samePlace(dirname(bundlePath), root);
 
+// WHATEVER THIS RUN REMOVED, IT SAYS SO. One list, filled as the clearing goes, reported once
+// after every verdict — not inside a `catch`, not inside one arm of one paragraph. Four review
+// rounds each found a cell where the operator's published artifact was deleted and the output did
+// not say it: first the sentence claimed the opposite, then the notice reached only the arm with no
+// bundle finding, then only deletions that happened BEFORE a fault. The arms were the defect.
+// A run that removes something names it, and there is no cell left to hide in.
+const cleared = [];
+
 function clearStaleArtifact() {
   if (!artifactPath || !ownBundle) return;
-  // Both paths, in order, and the FAULT LINE CARRIES WHAT WAS ALREADY GONE. The artifact can be
-  // removed and the checksum then refuse, which is a tree fault — and the tree paragraph below
-  // went on to say "nothing was deleted" while the operator's artifact was already gone, the same
-  // sentence and the same loss as the defect this whole ticket is about. Only one of the two can
-  // have succeeded when this reports (the loop stops reporting after the first fault and the
-  // clearing runs only on an otherwise sound tree), so it is one name, not a list.
-  const gone = [];
   for (const stale of [artifactPath, checksumPath]) {
     // `state` is only ever asked "was it there", because that is the only question whose answer
     // changes a message. A separate 'unknown' arm was written here and taken back out: it is
@@ -530,15 +531,25 @@ function clearStaleArtifact() {
       // "non-empty", which is wrong), and an unwritable parent throws EACCES. Unguarded, that
       // throw ended the run as a stack trace.
       rmSync(stale, { force: true });
-      if (state === 'taken') gone.push(basename(stale));
+      if (state === 'taken') cleared.push(basename(stale));
     } catch (error) {
       treeFaults.push(
         `the stale artifact ${basename(stale)} could not be cleared: ${error.code ?? error.message}` +
-          ' — this tree cannot be released from until that path is gone' +
-          (gone.length > 0 ? `; ${gone[0]} was already removed before this was found and is NOT coming back` : ''),
+          ' — this tree cannot be released from until that path is gone',
       );
     }
   }
+}
+
+// Printed after the verdicts, in every outcome that is not a pass. A pass rewrites both files and
+// says so in its own summary, so there the removal is not news.
+function reportCleared() {
+  if (cleared.length === 0) return;
+  console.error(
+    `\nAlready removed before this run finished, and NOT coming back: ${cleared.join(' and ')}.` +
+      " That is an earlier passing run's output, cleared because this tree was about to replace it;" +
+      ' this run produced nothing to put in its place.',
+  );
 }
 
 // TWO version families since #68, by owner decision: manifest.json is the MCPB extension, which that
@@ -719,8 +730,6 @@ if (treeFaults.length > 0) {
       : `\nThis is NOT a verdict on the bundle, and it is not a .mcpbignore problem. Nothing was` +
           ` renamed: whatever is at ${bundlePath} is STILL THERE, under that name` +
           `${shape.fault ? '' : ', and can still be uploaded under it'}.` +
-          // Nothing is DELETED on this path either, with one exception, and that exception names
-          // itself on its own fault line above rather than through a flag read down here.
           ' Fix the tree and run the audit again; until then the file is the operator\'s to deal' +
           ' with.',
   );
@@ -793,8 +802,14 @@ if (problems.length > 0) {
 // been judged and quarantined in that very run, which contradicts #105 AC 2 ("the exit code for a
 // contaminated bundle is unchanged") and contradicted the comment that stood here. Exit 2 is now
 // exactly the case it names: no bundle verdict was reached.
-if (problems.length > 0) process.exit(1);
-if (treeFaults.length > 0) process.exit(2);
+if (problems.length > 0) {
+  reportCleared();
+  process.exit(1);
+}
+if (treeFaults.length > 0) {
+  reportCleared();
+  process.exit(2);
+}
 
 const sha256 = createHash('sha256').update(bundle).digest('hex');
 
@@ -807,49 +822,49 @@ const sha256 = createHash('sha256').update(bundle).digest('hex');
 // landed here as a stack trace — under exit 1, the code that means "this bundle did not pass",
 // for a bundle that had passed every rule. Measured with the tree at mode 0555.
 //
-// SKIPPED ENTIRELY FOR A FOREIGN BUNDLE. A bundle that is not in `root` is audited and reported on
-// in full — the coverage disclosure below is the part its caller most needs, since they cannot see
-// this tree — but it does not get to claim this tree's release name. The slot is in `root` because
-// the version is, and writing it from a downloaded bundle re-pointed this checkout's published
-// release at a file from somewhere else. Measured.
+// `writing` names the path a failure is ABOUT. It named the artifact unconditionally, so a checksum
+// write that failed was reported against the wrong file.
 //
-// A SYMLINK IN `root` UNDER THE PUBLISHABLE NAME IS THIS TREE'S BUNDLE, deliberately: the operator
-// aimed this tree's own publishable name at that file, and the quarantine path treats such a link
-// the same way (it moves the target, not only the link). Decided and pinned, not left to be found.
-//
-// `writing` names the path a failure is ABOUT. It named the artifact unconditionally, so a
-// checksum write that failed was reported against the wrong file.
+// THE CATCH IS ENOSPC-ONLY AND NO FIXTURE REACHES IT, said out loud rather than left to look like
+// coverage: every deterministic route to a failed CHECKSUM write is pre-empted by the clearing
+// above, which refuses the same path first (measured with a 242-character version — ENAMETOOLONG
+// lands on the clearing). It stays because a half-written release, a file under the release name
+// with nothing to verify it against, is the one outcome worse than a stack trace, and nothing else
+// guards it.
 let writing = artifactPath;
-if (ownBundle) try {
-  writeFileSync(artifactPath, bundle);
-  writing = checksumPath;
-  // `shasum -a 256 -c <file>.sha256` format: digest, two spaces, the name it applies to.
-  writeFileSync(checksumPath, `${sha256}  ${basename(artifactPath)}\n`);
-} catch (error) {
-  console.error(`${basename(bundlePath)} PASSED the audit, and this tree could not write the artifact.`);
-  console.error(`  - ${basename(writing)}: ${error.code ?? error.message}`);
-  // A HALF-WRITTEN RELEASE IS WORSE THAN NO RELEASE AND WORSE THAN THE STACK TRACE. If the
-  // artifact landed and the checksum did not, what is left on disk is a file under the release
-  // name with nothing to verify it against — and the stale pair was already cleared, so there is
-  // no older checksum to contradict it either. Both go.
-  const leftBehind = [];
-  for (const partial of [artifactPath, checksumPath]) {
-    if (nameState(partial) !== 'taken') continue;
-    try {
-      rmSync(partial, { force: true });
-    } catch {
-      leftBehind.push(basename(partial));
+if (ownBundle) {
+  try {
+    writeFileSync(artifactPath, bundle);
+    writing = checksumPath;
+    // `shasum -a 256 -c <file>.sha256` format: digest, two spaces, the name it applies to.
+    writeFileSync(checksumPath, `${sha256}  ${basename(artifactPath)}\n`);
+  } catch (error) {
+    console.error(`${basename(bundlePath)} PASSED the audit, and this tree could not write the artifact.`);
+    console.error(`  - ${basename(writing)}: ${error.code ?? error.message}`);
+    // A HALF-WRITTEN RELEASE IS WORSE THAN NO RELEASE AND WORSE THAN THE STACK TRACE. If the
+    // artifact landed and the checksum did not, what is left on disk is a file under the release
+    // name with nothing to verify it against — and the stale pair was already cleared, so there is
+    // no older checksum to contradict it either. Both go.
+    const leftBehind = [];
+    for (const partial of [artifactPath, checksumPath]) {
+      if (nameState(partial) !== 'taken') continue;
+      try {
+        rmSync(partial, { force: true });
+      } catch {
+        leftBehind.push(basename(partial));
+      }
     }
+    if (leftBehind.length > 0) {
+      console.error(`  - could not clean up ${leftBehind.join(' and ')} — DELETE BY HAND, they verify nothing`);
+    }
+      console.error(
+        `\n${leftBehind.length > 0 ? 'What is named above verifies nothing and has to go by hand.' : 'No artifact and no checksum were left behind.'}` +
+          ' The bundle is fine and is still under its own name. This is the tree: fix the path and' +
+          ' run the audit again.',
+      );
+    reportCleared();
+    process.exit(2);
   }
-  if (leftBehind.length > 0) {
-    console.error(`  - could not clean up ${leftBehind.join(' and ')} — DELETE BY HAND, they verify nothing`);
-  }
-  console.error(
-    `\n${leftBehind.length > 0 ? 'What is named above verifies nothing and has to go by hand.' : 'No artifact and no checksum were left behind.'}` +
-      ' The bundle is fine and is still under its own name. This is the tree: fix the path and run' +
-      ' the audit again.',
-  );
-  process.exit(2);
 }
 
 const dependencies = accepted.filter((a) => a.rule === 'runtime-dependencies').length;

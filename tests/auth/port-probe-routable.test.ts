@@ -21,6 +21,12 @@ import { freePort, portHeldOn } from './login-harness.js';
 // dual-bind.test.ts asks about (firstNonLoopbackIPv4), and excluding internal keeps a loopback
 // alias such as 127.0.0.2 from being tested under the name "a routable address". A machine with
 // none is SKIPPED by name rather than passed silently.
+function hasIPv6Loopback(): boolean {
+  return Object.values(networkInterfaces())
+    .flat()
+    .some((i) => i !== undefined && i.family === 'IPv6' && i.address === '::1');
+}
+
 function routableIPv4(): string | undefined {
   return Object.values(networkInterfaces())
     .flat()
@@ -64,7 +70,10 @@ describe('portHeldOn() and a stranger on a routable address', () => {
   // than what the caller named, so `portHeldOn(p, ['127.0.0.1'])` dropped `::1` from the probe —
   // it is in the constant — and an `::1` holder was answered FREE. Reverting that one filter left
   // the whole suite byte-identical, so the rule had no case of its own. This is it.
-  it('still sees a holder on an address the caller did not name', async () => {
+  // `::1` is named rather than discovered here, which the sibling case above deliberately does not
+  // do — the point is an address the CALLER did not name but the constant does. A host without IPv6
+  // loopback is SKIPPED rather than failed, or the case would redden for the wrong reason.
+  it.skipIf(!hasIPv6Loopback())('still sees a holder on an address the caller did not name', async () => {
     const port = freePort();
     const stranger = createServer();
     stranger.listen(port, '::1');

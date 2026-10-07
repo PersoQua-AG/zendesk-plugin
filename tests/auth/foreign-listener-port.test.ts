@@ -4,7 +4,7 @@
 // Structural, not statistical: `nextCandidate` advances by exactly one per candidate examined, so
 // the port freePort() will look at NEXT is the one it just returned plus one. The foreign listener
 // goes there, and the case is reached on every run rather than waited for.
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { once } from 'node:events';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
@@ -61,12 +61,8 @@ describe('freePort() and a foreign listener in the band', () => {
   //
   // THE ATTEMPT LOG STAYS. It is what turned "20 attempts" from a count into a measurement, and
   // the next failure here has to arrive with its ports and its reasons attached.
-  // `steppedOver` is the ports the walk had to pass by, which is the ONLY set `freePort()` may
-  // legitimately answer from without having examined the stranger. See the assertion below.
-  const steppedOver: number[] = [];
   async function foreignListenerOnNextCandidate(host?: string): Promise<number> {
     const refused: string[] = [];
-    steppedOver.length = 0;
     const anchor = freePort();
     // IT WRAPS, like the cursor it follows. `for (next = anchor + 1; next <= PORT_BAND_LAST)` ran
     // zero times when freePort() returned the last port of the band, and the case then failed
@@ -81,7 +77,6 @@ describe('freePort() and a foreign listener in the band', () => {
         writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' });
       } catch (err) {
         refused.push(`${next} claim ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
-        steppedOver.push(next);
         continue;
       }
       try {
@@ -89,7 +84,6 @@ describe('freePort() and a foreign listener in the band', () => {
       } catch (err) {
         rmSync(portClaimPath(next), { force: true });
         refused.push(`${next} bind ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
-        steppedOver.push(next);
         continue;
       }
       rmSync(portClaimPath(next), { force: true });
@@ -105,43 +99,30 @@ describe('freePort() and a foreign listener in the band', () => {
   // bind; for the other three that bind SUCCEEDS and the more specific socket takes the traffic —
   // measured, with no EADDRINUSE anywhere, which is the quiet half of #48.
   for (const host of [undefined, '0.0.0.0', '127.0.0.1', '::1']) {
+    // WHAT THIS CASE PROVES, AND WHERE THE REST IS PROVED. It asserts the #48 property
+    // unconditionally: a band port held without a claim is not handed out. It does NOT prove that
+    // freePort() *examined* that particular port, and under concurrency it cannot — measured.
+    //
+    // Two attempts to assert the examination here both flaked, and the second one is the reason
+    // this comment exists rather than a third. freePort() announces each skip on stderr, so an
+    // assertion on that line looked exact; but another run can claim `foreign` in the window
+    // between this helper's `rmSync` of its own claim and freePort()'s `claimPort`, and freePort()
+    // then skips the stranger for a link() with no probe and no line. Instrumented:
+    //   DIAG foreign=27115 returned=27116 steppedOver=[27114] claim held by pid 17114, me 17113
+    // Adding a disjunct for "a port the walk stepped over" did not cover that cell and the full
+    // suite went red in 2 of 5 runs — a flake introduced by the ticket whose subject is flakes.
+    //
+    // So the examination is pinned where it can be deterministic, and it is pinned:
+    //   - that a stranger IS seen, per address: 'does not call a port nobody holds held' below,
+    //     tests/auth/port-probe-routable.test.ts, and the platform matrix above portHeldOn;
+    //   - that freePort() consults portHeldOn AFTER taking the claim and before returning:
+    //     'binds nothing before the claim is taken (#13)' below, read from the source because the
+    //     window is not observable from inside one process.
+    // Those two together are the property, without a race in the assertion.
     it(`skips a band port held on ${host ?? 'the wildcard'} without a claim`, async () => {
       const foreign = await foreignListenerOnNextCandidate(host);
-      // NOT MERELY "did not return it" — that passes vacuously whenever the walk had to step over
-      // ports another run had claimed and that run released them before this call, because
-      // freePort() then answers from below `foreign` without ever looking at it. freePort()
-      // announces every skip on stderr (login-harness.ts, `[test-ports] skipping band port …`),
-      // so the examination itself is observable and is what gets asserted.
-      const skips: string[] = [];
-      const write = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
-        skips.push(String(chunk));
-        return true;
-      });
-      let port: number;
-      try {
-        port = freePort();
-      } finally {
-        write.mockRestore();
-      }
+      const port = freePort();
       expect(port).not.toBe(foreign);
-      // EITHER PROOF, and the second one is NAMED rather than inferred from the ordering. The case
-      // is non-vacuous when freePort() reached `foreign` and said so. It can legitimately answer
-      // from one of the ports the WALK stepped over instead — another run had claimed one and
-      // released it (`sweepDeadClaims()` runs at module load in every worker, and the bind-failure
-      // path here releases its own claim too). Demanding the skip line in that case would turn the
-      // old vacuous pass into a flake, which is the opposite of this ticket.
-      //
-      // `port < foreign` was the first spelling of that second proof and it was wrong twice: the
-      // walk WRAPS, so at the band edge `foreign` is numerically below `anchor` and a legitimate
-      // answer-from-below is numerically above it — red for no defect — while a port the walk
-      // stepped over after a failed BIND is below `foreign` with the stranger never examined —
-      // green for no reason. The set the walk actually passed by is neither.
-      const examined = skips.join('').includes(`skipping band port ${foreign}`);
-      expect(
-        examined || steppedOver.includes(port),
-        `freePort() returned ${port}; it did not examine ${foreign} and ${port} is not one of the ` +
-          `${steppedOver.length} ports the walk stepped over`,
-      ).toBe(true);
       opened.push(await bind(port));
     });
   }
