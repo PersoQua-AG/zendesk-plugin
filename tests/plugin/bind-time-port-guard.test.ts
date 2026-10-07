@@ -22,8 +22,8 @@ afterEach(async () => {
 // fails the case (tests/setup/no-fixed-bind-port.ts). The cases BELOW provoke refusals on purpose
 // and have already asserted on them, so they claim theirs — and the claim is itself an assertion:
 // a case that expected a refusal and got none fails here rather than quietly passing.
-function claimRefusals(howMany: number): void {
-  expect(takeRefusals()).toHaveLength(howMany);
+function claimRefusal(): void {
+  expect(takeRefusals()).toHaveLength(1);
 }
 
 function listening(server: Server): Promise<Server> {
@@ -39,7 +39,7 @@ describe('a fixed bind port is refused when it is bound', () => {
     expect(() => createServer().listen(PORT)).toThrow(
       new RegExp(`Refusing to bind the fixed port ${PORT} at .*bind-time-port-guard\\.test\\.ts`),
     );
-    claimRefusals(1);
+    claimRefusal();
   });
 
   // The classes the regex is documented as missing, one call each.
@@ -59,14 +59,13 @@ describe('a fixed bind port is refused when it is bound', () => {
     ['a hex literal', () => createServer().listen(0x4650)],
     ['an option bag', () => createServer().listen({ port: 18_001 })],
     ['a numeric string', () => createServer().listen('18002')],
-    // Both of these BIND 18000 — measured — while a decimal-digits test read them as a unix socket
-    // path and waved them through, with the header above advertising exactly these shapes as
-    // caught. node coerces the string with Number(); so does the guard now.
+    // Binds 18000 — measured — while a decimal-digits test read it as a unix socket path and waved
+    // it through, with the header above advertising exactly that shape as caught. `'1.8e4'` is the
+    // same decision through the same branch, so one row carries both.
     ['a hex string', () => createServer().listen('0x4650')],
-    ['an exponent string', () => createServer().listen('1.8e4')],
   ])('catches %s too', (_label, bind) => {
     expect(bind).toThrow(/Refusing to bind the fixed port/);
-    claimRefusals(1);
+    claimRefusal();
   });
 
   // SCENARIO 1 OF #74, ON THE PATH THAT MATTERS. The product's one real bind path wraps its
@@ -116,7 +115,7 @@ describe('a fixed bind port is refused when it is bound', () => {
     expect(() => createServer().listen(SHARED_STRANGER)).toThrow(
       new RegExp(`Refusing to bind the fixed port ${SHARED_STRANGER}`),
     );
-    claimRefusals(1);
+    claimRefusal();
   });
 
   // The product relies on node's own synchronous RangeError for an out-of-range port

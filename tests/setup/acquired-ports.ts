@@ -5,12 +5,15 @@
 // WHY A REGISTER AND NOT A RANGE CHECK. "Is this port inside PORT_BAND?" would pass any literal
 // somebody writes inside the band, which is the mistake one layer up. Only a port this process
 // actually took out of freePort() is in here.
-const reasons = new Map<number, string>();
+// A SET, not a map of reasons. The `why` strings went in and were never read back: `isDeclaredPort`
+// is the only consumer and it asks one question. The `why` parameter stays, because it is the
+// call-site documentation the refusal message advertises — it just is not stored.
+const acquired = new Set<number>();
 
 // Called by freePort() at the moment it hands a port over, so the register can never be ahead of
 // what was really acquired.
 export function recordAcquiredPort(port: number): number {
-  reasons.set(port, 'freePort()');
+  acquired.add(port);
   return port;
 }
 
@@ -28,19 +31,15 @@ export function recordAcquiredPort(port: number): number {
 // NOT one shot. Measured: src/tools/diagnostics.ts binds its probe port more than once per call,
 // so consuming the entry at the first bind turned a declared stranger back into a refusal halfway
 // through the product's own retry.
-const foreign = new Map<number, string>();
+const foreign = new Set<number>();
 
-export function allowForeignBind(port: number, why: string): number {
-  foreign.set(port, why);
+export function allowForeignBind(port: number, _why: string): number {
+  foreign.add(port);
   return port;
 }
 
-export function endForeignBindScope(): void {
-  foreign.clear();
-}
-
-export function bindReason(port: number): string | undefined {
-  return reasons.get(port) ?? foreign.get(port);
+export function isDeclaredPort(port: number): boolean {
+  return acquired.has(port) || foreign.has(port);
 }
 
 // A REFUSAL THAT WAS SWALLOWED MUST STILL FAIL THE RUN. The guard throws at the bind, and the one
@@ -55,7 +54,13 @@ export function recordRefusal(message: string): void {
   refusals.push(message);
 }
 
-/** Drains the refusals, for the cases that provoke one on purpose. */
+/**
+ * Drains the refusals, for the cases that provoke one on purpose, and ends the foreign-bind scope.
+ *
+ * One call instead of two, because the only caller of either is the setup file's afterEach — and a
+ * case that drains mid-test is also a case whose declared strangers are spent.
+ */
 export function takeRefusals(): string[] {
+  foreign.clear();
   return refusals.splice(0);
 }

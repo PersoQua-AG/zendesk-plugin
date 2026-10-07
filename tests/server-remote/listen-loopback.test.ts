@@ -75,10 +75,6 @@ describe('the port a remote test server is put on', () => {
     const taken = track(createServer());
     await new Promise<void>((r) => taken.listen(0, '127.0.0.1', r));
     const occupied = (taken.address() as AddressInfo).port;
-    // Nothing is declared to the bind-time guard here any more: the OS chose this port through the
-    // listen(0) above, and the guard records what the OS chose as acquired. Re-binding it is not a
-    // fixed port by the guard's own definition, so the escape hatch it used to need was an escape
-    // hatch opened for a case that never qualified.
     // An app whose listen ignores the port it is given and walks into an EADDRINUSE.
     const refusing = { listen: (_p: number, host: string) => track(createServer()).listen(occupied, host) };
 

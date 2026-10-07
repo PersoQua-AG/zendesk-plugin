@@ -13,7 +13,7 @@
 // however it was written, but only along a path a test actually runs. Neither subsumes the other.
 import { Server } from 'node:net';
 import { afterEach } from 'vitest';
-import { bindReason, endForeignBindScope, recordAcquiredPort, recordRefusal, takeRefusals } from './acquired-ports.js';
+import { isDeclaredPort, recordAcquiredPort, recordRefusal, takeRefusals } from './acquired-ports.js';
 
 // 0 is chosen by the OS and anything outside 1-65535 is refused by listen() itself — neither is a
 // fixed port, and the out-of-range case must keep reaching node so that the RangeError the product
@@ -26,20 +26,13 @@ function isFixedBindPort(port: unknown): port is number {
 // A non-numeric string is a unix socket path, not a port.
 function portOf(args: unknown[]): unknown {
   const first = args[0];
-  if (typeof first === 'object' && first !== null && 'port' in first) {
-    const port = (first as { port?: unknown }).port;
-    if (typeof port !== 'string') return port;
-    const coerced = Number(port);
-    return Number.isNaN(coerced) ? port : coerced;
-  }
+  const raw = typeof first === 'object' && first !== null && 'port' in first ? (first as { port?: unknown }).port : first;
+  if (typeof raw !== 'string') return raw;
   // `Number()`, not /^\d+$/: node coerces the string the same way, so `listen('0x4650')` and
   // `listen('1.8e4')` both bind 18000 — measured — and both walked past a decimal-digits test while
   // the header advertised exactly those shapes as caught. Only a NaN is a unix socket path.
-  if (typeof first === 'string') {
-    const coerced = Number(first);
-    return Number.isNaN(coerced) ? undefined : coerced;
-  }
-  return first;
+  const coerced = Number(raw);
+  return Number.isNaN(coerced) ? undefined : coerced;
 }
 
 // The frame that asked for the bind, not the frames of this file or of node's own internals — a
@@ -58,7 +51,7 @@ const realListen = Server.prototype.listen;
 // eslint-disable-next-line func-names
 Server.prototype.listen = function (this: Server, ...args: unknown[]) {
   const port = portOf(args);
-  if (isFixedBindPort(port) && bindReason(port) === undefined) {
+  if (isFixedBindPort(port) && !isDeclaredPort(port)) {
     const message =
       `Refusing to bind the fixed port ${port} at ${callSite()}.\n` +
       'A fixed port collides with a concurrent `vitest run` (#23), whether it is written as a ' +
@@ -91,9 +84,8 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
 // A refusal the code under test swallowed still fails the case that produced it. Cases that
 // provoke a refusal on purpose claim it with takeRefusals().
 afterEach(() => {
-  // A declared stranger is declared for the case that declared it, and not for every case that
-  // runs after it in the same worker.
-  endForeignBindScope();
+  // takeRefusals() also ends the foreign-bind scope: a declared stranger is declared for the case
+  // that declared it, and not for every case that runs after it in the same worker.
   const swallowed = takeRefusals();
   if (swallowed.length > 0) {
     throw new Error(
