@@ -27,8 +27,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const linkedRoot = join(scratch, 'linked-plugin-root');
 symlinkSync(root, linkedRoot, 'dir');
 
-// A third spelling, available only where the filesystem folds case. On a case-sensitive volume
-// `DIST/server.js` is a different, missing path, and the row is skipped rather than asserted wrongly.
+// Both shipped artifacts, each rowed below on its real path and through the symlinked root.
 const ENTRIES = [
   ['the module entry point', ['dist', 'server.js']],
   ['the bundle .claude-plugin/plugin.json launches', ['dist', 'plugin', 'server.js']],
