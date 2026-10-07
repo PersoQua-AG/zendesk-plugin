@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, utimesSync } from 'node:fs';
+import { mkdtempSync, rmSync, utimesSync, mkdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ResponseCache } from '../../src/client/cache.js';
@@ -63,5 +63,20 @@ describe('ResponseCache', () => {
     const second = cache.save('zendesk_get_ticket', { d: 'bbbbbbbbbbbbbbbbbbbb' });
     expect(() => cache.load(first.handle)).toThrow(/not found/i);
     expect(cache.load(second.handle)).toBeDefined();
+  });
+
+  // #54: the constructor, not the first save(), must reject a cache dir it cannot write. chmod is
+  // not enforced for root, so under root the directory would stay writable and prove nothing.
+  it.skipIf(process.getuid?.() === 0)('throws EACCES at construction for an existing read-only directory', () => {
+    const readOnly = join(dir, 'cache');
+    mkdirSync(readOnly);
+    chmodSync(readOnly, 0o500);
+    try {
+      expect(() => new ResponseCache(readOnly)).toThrow(
+        expect.objectContaining({ code: 'EACCES' }) as unknown as Error,
+      );
+    } finally {
+      chmodSync(readOnly, 0o700);
+    }
   });
 });

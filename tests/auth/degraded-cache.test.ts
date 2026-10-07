@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -10,7 +10,9 @@ import { keychain } from './keychain.js';
 // A FILE as data dir makes mkdirSync throw ENOTDIR deterministically, no chmod, even as root.
 
 const dirs: string[] = [];
+const readOnly: string[] = [];
 afterEach(() => {
+  for (const d of readOnly.splice(0)) chmodSync(d, 0o700); // or rmSync cannot unlink inside it
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -20,6 +22,18 @@ function unwritableDataDir(): string {
   const file = join(dir, 'not-a-directory');
   writeFileSync(file, '');
   return file;
+}
+
+// #54: a cache/ that EXISTS but is not writable. mkdir does not fail on it, so without the
+// writability check the first save() throws EACCES with the absolute path into the tool result.
+function readOnlyCacheDataDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'zd-ro-cache-'));
+  dirs.push(dir);
+  const cache = join(dir, 'cache');
+  mkdirSync(cache);
+  chmodSync(cache, 0o500);
+  readOnly.push(cache);
+  return dir;
 }
 
 function configuredEnv(dataDir: string): NodeJS.ProcessEnv {
@@ -43,8 +57,8 @@ function textOf(result: unknown): string {
   return ((result as { content: { text?: string }[] }).content ?? []).map((c) => c.text ?? '').join('\n');
 }
 
-function expectCacheProblem(text: string, dataDir: string): void {
-  expect(text).toContain('ENOTDIR');
+function expectCacheProblem(text: string, dataDir: string, code = 'ENOTDIR'): void {
+  expect(text).toContain(code);
   expect(text).toMatch(/data directory cannot be used/);
   expect(text).not.toContain(dataDir);
   expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
@@ -99,6 +113,25 @@ describe('createServer with a data directory the cache cannot be created in', ()
     expect(text).toContain('zendesk_subdomain');
     expectCacheProblem(text, dataDir);
     expect(text.match(/reload the extension/g)).toHaveLength(1);
+    await client.close();
+  });
+});
+
+// chmod is not enforced for root, so the directory would stay writable and the test prove nothing.
+describe.skipIf(process.getuid?.() === 0)('createServer with an existing read-only cache directory', () => {
+  it('answers a caching tool with the errno code and no path', async () => {
+    const dataDir = readOnlyCacheDataDir();
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+    const client = await connect(configuredEnv(dataDir), { fetchImpl });
+    expectCacheProblem(textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} })), dataDir, 'EACCES');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await client.close();
+  });
+
+  it('answers zendesk_login the same way', async () => {
+    const dataDir = readOnlyCacheDataDir();
+    const client = await connect(configuredEnv(dataDir));
+    expectCacheProblem(textOf(await client.callTool({ name: 'zendesk_login', arguments: {} })), dataDir, 'EACCES');
     await client.close();
   });
 });

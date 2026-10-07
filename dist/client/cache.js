@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, accessSync, constants } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 const HANDLE_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -13,8 +13,11 @@ export class ResponseCache {
     maxBytes;
     constructor(cacheDir, options = {}) {
         this.cacheDir = cacheDir;
-        if (!existsSync(cacheDir))
-            mkdirSync(cacheDir, { recursive: true });
+        mkdirSync(cacheDir, { recursive: true }); // no-op when it already exists
+        // mkdir succeeds on an EXISTING unwritable directory, so the first save() would throw EACCES
+        // with the absolute path into tool output. Fail here instead: server.ts turns this into the
+        // code-only degrade message. X_OK too — a dir without it cannot be traversed to the entries.
+        accessSync(cacheDir, constants.W_OK | constants.X_OK);
         this.resolvedDir = resolve(cacheDir);
         this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
         this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
