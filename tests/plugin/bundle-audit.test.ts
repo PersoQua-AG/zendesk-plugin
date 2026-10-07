@@ -1117,6 +1117,10 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
       expect(run.stderr).toContain('PASSED the audit, and this tree could not write the artifact');
       expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
       expect(existsSync(tree.bundle), 'the bundle is fine and stays where it is').toBe(true);
+      // Nothing half-written: a file under the release name with no checksum beside it is worse
+      // than no release at all, and the stale pair was already cleared so nothing contradicts it.
+      expect(existsSync(tree.artifact)).toBe(false);
+      expect(existsSync(tree.checksum)).toBe(false);
     } finally {
       chmodSync(tree.dir, 0o755); // or afterEach cannot remove it
     }
@@ -1329,6 +1333,20 @@ describe('the caller names the bundle', () => {
     expect(readFileSync(tree.checksum, 'utf8')).toBe('and the checksum of that');
     expect(run.stdout).toContain('No artifact was written');
     expect(run.stdout).toContain("is not this tree's own bundle");
+  });
+
+  // `root` is resolved through symlinks by node; the caller's cwd is whatever they typed. On macOS
+  // /tmp is a symlink to /private/tmp, so a string compare of the two would have called this
+  // tree's OWN bundle foreign and silently stopped writing artifacts.
+  it('recognises its own bundle through a symlinked path', () => {
+    const tree = makeTree();
+    const link = join(mkdtempSync(join(tmpdir(), 'audit-link-')), 'tree');
+    temps.push(dirname(link));
+    symlinkSync(tree.dir, link);
+    const run = runAudit(tree, [join(link, 'zendesk.mcpb')]);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).not.toContain('No artifact was written');
+    expect(existsSync(tree.artifact)).toBe(true);
   });
 
   it('resolves a relative argument against the caller cwd, not the script tree', () => {

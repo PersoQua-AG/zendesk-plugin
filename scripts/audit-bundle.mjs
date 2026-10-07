@@ -504,7 +504,20 @@ const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 // downloaded bundle must neither clear it nor write it: clearing destroyed the operator's release
 // on a run that was only ever going to report, and writing re-pointed this tree's release name at
 // a file from somewhere else. Both measured. One rule, both ends.
-const ownBundle = dirname(bundlePath) === root;
+// REALPATHS, not strings. `root` comes from `import.meta.url`, which node resolves through
+// symlinks, while `bundlePath` comes from the caller's cwd, which is whatever they typed. On macOS
+// `/tmp` is a symlink to `/private/tmp`, and a checkout reached through any symlinked component
+// would therefore have compared unequal to itself — `npm run pack` would have stopped writing
+// artifacts and said the repository's own bundle was not its own. Falls back to the string compare
+// if either path cannot be resolved, which is the conservative answer: not ours, so touch nothing.
+const samePlace = (a, b) => {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return a === b;
+  }
+};
+const ownBundle = samePlace(dirname(bundlePath), root);
 
 const staleRemoved = [];
 function clearStaleArtifact() {
@@ -818,9 +831,25 @@ try {
 } catch (error) {
   console.error(`${basename(bundlePath)} PASSED the audit, and this tree could not write the artifact.`);
   console.error(`  - ${basename(artifactPath)}: ${error.code ?? error.message}`);
+  // A HALF-WRITTEN RELEASE IS WORSE THAN NO RELEASE AND WORSE THAN THE STACK TRACE. If the
+  // artifact landed and the checksum did not, what is left on disk is a file under the release
+  // name with nothing to verify it against — and the stale pair was already cleared, so there is
+  // no older checksum to contradict it either. Both go.
+  const leftBehind = [];
+  for (const partial of [artifactPath, checksumPath]) {
+    if (nameState(partial) !== 'taken') continue;
+    try {
+      rmSync(partial, { force: true });
+    } catch {
+      leftBehind.push(basename(partial));
+    }
+  }
+  if (leftBehind.length > 0) {
+    console.error(`  - could not clean up ${leftBehind.join(' and ')} — DELETE BY HAND, they verify nothing`);
+  }
   console.error(
-    '\nThe bundle is fine and is still under its own name. This is the tree: fix the path and run' +
-      ' the audit again.',
+    '\nNo artifact and no checksum were left behind. The bundle is fine and is still under its own' +
+      ' name. This is the tree: fix the path and run the audit again.',
   );
   process.exit(2);
 }
