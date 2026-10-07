@@ -409,11 +409,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants);
+          this.rhs = optimizeExpr(this.rhs, names, constants2);
         return this;
       }
       get names() {
@@ -430,10 +430,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants);
+        this.rhs = optimizeExpr(this.rhs, names, constants2);
         return this;
       }
       get names() {
@@ -494,8 +494,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants) {
-        this.code = optimizeExpr(this.code, names, constants);
+      optimizeNames(names, constants2) {
+        this.code = optimizeExpr(this.code, names, constants2);
         return this;
       }
       get names() {
@@ -524,12 +524,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants))
+          if (n.optimizeNames(names, constants2))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -582,12 +582,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants);
-        if (!(super.optimizeNames(names, constants) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
+        if (!(super.optimizeNames(names, constants2) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants);
+        this.condition = optimizeExpr(this.condition, names, constants2);
         return this;
       }
       get names() {
@@ -610,10 +610,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
+      optimizeNames(names, constants2) {
+        if (!super.optimizeNames(names, constants2))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants);
+        this.iteration = optimizeExpr(this.iteration, names, constants2);
         return this;
       }
       get names() {
@@ -649,10 +649,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
+      optimizeNames(names, constants2) {
+        if (!super.optimizeNames(names, constants2))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants);
+        this.iterable = optimizeExpr(this.iterable, names, constants2);
         return this;
       }
       get names() {
@@ -694,11 +694,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         var _a, _b;
-        super.optimizeNames(names, constants);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants);
+        super.optimizeNames(names, constants2);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
         return this;
       }
       get names() {
@@ -999,7 +999,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants) {
+    function optimizeExpr(expr, names, constants2) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1014,14 +1014,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants[n.str];
+        const c = constants2[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -21700,40 +21700,14 @@ var TokenStore = class {
   }
 };
 
-// src/client/rate-limiter.ts
-var MAX_RETRY_AFTER_SECONDS = 300;
-var RateLimiter = class {
-  requestsPerMinute;
-  // the configured account bucket size, for wiring inspection
-  intervalMs;
-  now;
-  sleepFn;
-  nextAvailableAt;
-  retryAfterUntil = 0;
-  constructor(options) {
-    this.requestsPerMinute = options.requestsPerMinute;
-    this.intervalMs = 6e4 / options.requestsPerMinute;
-    this.now = options.now ?? Date.now;
-    this.sleepFn = options.sleep ?? ((ms) => new Promise((resolve2) => setTimeout(resolve2, ms)));
-    this.nextAvailableAt = this.now();
-  }
-  async acquire() {
-    const current = this.now();
-    const waitUntil = Math.max(this.nextAvailableAt, this.retryAfterUntil, current);
-    this.nextAvailableAt = waitUntil + this.intervalMs;
-    const delay = waitUntil - current;
-    if (delay > 0) {
-      await this.sleepFn(delay);
-    }
-  }
-  reportRetryAfter(seconds) {
-    const capped = seconds < MAX_RETRY_AFTER_SECONDS ? seconds : MAX_RETRY_AFTER_SECONDS;
-    this.retryAfterUntil = this.now() + capped * 1e3;
-  }
-};
+// src/util/error-code.ts
+function errorCode(err) {
+  return err instanceof Error && "code" in err ? String(err.code) : "unknown error";
+}
 
 // src/client/errors.ts
 var DEFAULT_RETRY_AFTER_SECONDS = 60;
+var MAX_RETRY_AFTER_SECONDS = 300;
 var ZendeskApiError = class extends Error {
   constructor(message, status) {
     super(message);
@@ -21771,10 +21745,10 @@ var ZendeskValidationError = class extends ZendeskApiError {
 function parseRetryAfter(header, now = Date.now) {
   if (header == null) return DEFAULT_RETRY_AFTER_SECONDS;
   const trimmed = header.trim();
-  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+  if (/^\d+$/.test(trimmed)) return Math.min(Number(trimmed), MAX_RETRY_AFTER_SECONDS);
   const dateMs = Date.parse(trimmed);
   if (!Number.isNaN(dateMs)) {
-    return Math.max(0, Math.ceil((dateMs - now()) / 1e3));
+    return Math.min(Math.max(0, Math.ceil((dateMs - now()) / 1e3)), MAX_RETRY_AFTER_SECONDS);
   }
   return DEFAULT_RETRY_AFTER_SECONDS;
 }
@@ -21793,6 +21767,37 @@ async function mapErrorResponse(response) {
       return new ZendeskApiError(`Zendesk API error ${response.status}: ${bodyText}`, response.status);
   }
 }
+
+// src/client/rate-limiter.ts
+var RateLimiter = class {
+  requestsPerMinute;
+  // the configured account bucket size, for wiring inspection
+  intervalMs;
+  now;
+  sleepFn;
+  nextAvailableAt;
+  retryAfterUntil = 0;
+  constructor(options) {
+    this.requestsPerMinute = options.requestsPerMinute;
+    this.intervalMs = 6e4 / options.requestsPerMinute;
+    this.now = options.now ?? Date.now;
+    this.sleepFn = options.sleep ?? ((ms) => new Promise((resolve2) => setTimeout(resolve2, ms)));
+    this.nextAvailableAt = this.now();
+  }
+  async acquire() {
+    const current = this.now();
+    const waitUntil = Math.max(this.nextAvailableAt, this.retryAfterUntil, current);
+    this.nextAvailableAt = waitUntil + this.intervalMs;
+    const delay = waitUntil - current;
+    if (delay > 0) {
+      await this.sleepFn(delay);
+    }
+  }
+  reportRetryAfter(seconds) {
+    const capped = seconds < MAX_RETRY_AFTER_SECONDS ? seconds : MAX_RETRY_AFTER_SECONDS;
+    this.retryAfterUntil = Math.max(this.retryAfterUntil, this.now() + capped * 1e3);
+  }
+};
 
 // src/client/http-client.ts
 var MAX_RATE_LIMIT_RETRIES = 3;
@@ -21877,49 +21882,71 @@ var ZendeskHttpClient = class {
 };
 
 // src/client/cache.ts
-import { writeFileSync as writeFileSync2, readFileSync as readFileSync2, mkdirSync as mkdirSync2, existsSync as existsSync2, readdirSync, statSync, rmSync } from "node:fs";
+import { writeFileSync as writeFileSync2, readFileSync as readFileSync2, mkdirSync as mkdirSync2, readdirSync, statSync, rmSync, accessSync, constants } from "node:fs";
 import { join as join2, resolve, sep } from "node:path";
 import { randomBytes as randomBytes3 } from "node:crypto";
 var HANDLE_PATTERN = /^[A-Za-z0-9_-]+$/;
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 var DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
 var ResponseCache = class {
-  constructor(cacheDir, options = {}) {
-    this.cacheDir = cacheDir;
-    if (!existsSync2(cacheDir)) mkdirSync2(cacheDir, { recursive: true });
-    this.resolvedDir = resolve(cacheDir);
-    this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
-    this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-  }
-  cacheDir;
   resolvedDir;
   ttlMs;
   maxBytes;
+  constructor(cacheDir, options = {}) {
+    mkdirSync2(cacheDir, { recursive: true });
+    this.resolvedDir = resolve(cacheDir);
+    accessSync(this.resolvedDir, constants.R_OK | constants.W_OK | constants.X_OK);
+    this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+    this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  }
   save(toolName, data) {
     const handle = `${toolName}-${randomBytes3(6).toString("hex")}`;
-    const path = join2(this.cacheDir, `${handle}.json`);
-    writeFileSync2(path, JSON.stringify(data));
-    this.sweep();
+    const path = join2(this.resolvedDir, `${handle}.json`);
+    let body;
+    try {
+      body = JSON.stringify(data);
+    } catch (err) {
+      throw new Error("Caching the response failed: it cannot be converted to JSON.", { cause: err });
+    }
+    try {
+      writeFileSync2(path, body);
+    } catch (err) {
+      try {
+        rmSync(path, { force: true });
+      } catch {
+      }
+      throw new Error(
+        `Caching the response failed (${errorCode(err)}). Make sure the extension's data directory is a writable directory with free space, then reload the extension.`,
+        { cause: err }
+      );
+    }
+    try {
+      this.sweep();
+    } catch (err) {
+      warnConfig(
+        `Cache housekeeping failed (${errorCode(err)}); the cache may grow past its size cap.`
+      );
+    }
     return { handle, path };
   }
   load(handle) {
     const path = this.resolveHandlePath(handle);
-    if (!existsSync2(path) || this.isExpired(path)) {
-      rmSync(path, { force: true });
-      throw new Error(`Cache handle not found: ${handle}`);
+    try {
+      if (this.isExpired(path)) rmSync(path, { force: true });
+      return JSON.parse(readFileSync2(path, "utf8"));
+    } catch (err) {
+      throw new Error(`Cache handle not found: ${handle} (${errorCode(err)})`, { cause: err });
     }
-    return JSON.parse(readFileSync2(path, "utf8"));
   }
   isExpired(path) {
     return Date.now() - statSync(path).mtimeMs > this.ttlMs;
   }
-  // One sweep per write: drop expired entries, then evict oldest-first until the total on-disk
-  // size is back under the cap. Cheap because a single MCP session holds few, small payloads.
+  // One sweep per write: drop expired entries, then evict oldest-first back under the size cap.
   sweep() {
     const live = [];
-    for (const name of readdirSync(this.cacheDir)) {
+    for (const name of readdirSync(this.resolvedDir)) {
       if (!name.endsWith(".json")) continue;
-      const path = join2(this.cacheDir, name);
+      const path = join2(this.resolvedDir, name);
       const stat = statSync(path);
       if (Date.now() - stat.mtimeMs > this.ttlMs) {
         rmSync(path, { force: true });
@@ -29774,14 +29801,13 @@ function openCacheOrDegrade(auth) {
   try {
     return { auth, cache: new ResponseCache(join3(auth.dataDir, "cache")), cacheOk: true };
   } catch (err) {
-    const code = err instanceof Error && "code" in err ? String(err.code) : "unknown error";
+    const code = errorCode(err);
     const problem = `The extension's data directory cannot be used (${code}), so responses cannot be cached and tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;
     const reason = auth.ok ? problem : `${auth.reason.replace(/,? then reload the extension\.$/, ".")} ${problem}`;
     const fail = () => {
       throw new Error(reason);
     };
-    const stub = { save: fail, load: fail };
-    const cache = stub;
+    const cache = { save: fail, load: fail };
     return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
   }
 }

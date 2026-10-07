@@ -1,7 +1,7 @@
 // src/tools/tickets.ts
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, screenNote } from './screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
@@ -26,7 +26,7 @@ const describeTicket = makeDescribe<Ticket>('ticket', (t) => `#${t.id} [${t.stat
 
 export async function listTickets(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -50,7 +50,7 @@ const SingleTicketSchema = z.object({ ticket: TicketSchema });
 
 export async function getTicket(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ticketId: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult & { updatedStamp: string | null }> {
@@ -70,7 +70,7 @@ const ManyTicketsSchema = z.object({ tickets: z.array(TicketSchema) });
 
 export async function getTicketsMany(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ids: number[] },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -111,7 +111,7 @@ export function buildComment(text: string, useMarkdown: boolean, isPublic: boole
 
 export async function createTicket(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: NewTicketInput,
 ): Promise<{ summary: string; cacheHandle: string }> {
   const ticket: Record<string, unknown> = {
@@ -150,7 +150,7 @@ export type UpdateTicketResult =
 
 export async function updateTicket(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ticketId: number; fields: TicketUpdateFields; updatedStamp?: string; force?: boolean },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<UpdateTicketResult> {

@@ -19,7 +19,7 @@ import {
   type MetricEvent,
 } from './incremental.js';
 import type { ZendeskHttpClient } from '../../client/http-client.js';
-import type { ResponseCache } from '../../client/cache.js';
+import type { CacheStore } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
 import { makeDescribe, screenNote } from '../screening.js';
 import type { ReadResult } from '../result.js';
@@ -213,7 +213,7 @@ const describeReportEvent = makeDescribe<MetricEvent>('report-event', (e) => `#$
 
 export async function report(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { startTime: number; endTime?: number },
   config: BusinessHoursConfig,
   securityLevel: SecurityLevel = 'standard',
