@@ -52,7 +52,16 @@ Rules:
 
 ### Creating a follow-up for a closed ticket
 
-To carry a closed ticket's context forward, create a **linked** follow-up. The link field `via_followup_source_id` is only settable through a raw ticket record, so use `zendesk_create_tickets_bulk` with a single record:
+To carry a closed ticket's context forward, create a **linked** follow-up. Both create tools accept the link, so use the single-create tool unless you are creating several at once:
+
+```
+zendesk_create_ticket  subject:"Follow-up: <original subject>"
+                       comment:"<opening message>"
+                       requesterId:<original requester id>
+                       followupSourceId:<closed ticket id>
+```
+
+For several at once, `zendesk_create_tickets_bulk` takes the raw Zendesk field name per record:
 
 ```
 zendesk_create_tickets_bulk  tickets:[{
@@ -63,7 +72,7 @@ zendesk_create_tickets_bulk  tickets:[{
 }]
 ```
 
-(For an unlinked new ticket, `zendesk_create_ticket` with `subject` + `comment` is simpler — mention the trade-off and let the user choose.) Confirm before creating.
+Pass the source id whenever the follow-up belongs to an existing closed ticket: omitting it creates an **unlinked** ticket whose history does not carry forward. Zendesk ignores `submitter_id` on a follow-up create. Confirm before creating.
 
 ## Replies and internal notes
 

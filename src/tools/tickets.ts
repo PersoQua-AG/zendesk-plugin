@@ -98,6 +98,8 @@ export interface NewTicketInput {
   // Resolved boolean (register applies the markdown_conversion default); no hidden tool default.
   markdown: boolean;
   public?: boolean;
+  // Closed source ticket for a linked follow-up; maps to Zendesk's write-only via_followup_source_id.
+  followupSourceId?: number;
 }
 
 export function buildComment(text: string, useMarkdown: boolean, isPublic: boolean): Record<string, unknown> {
@@ -121,6 +123,7 @@ export async function createTicket(
   if (params.tags) ticket.tags = params.tags;
   if (params.groupId !== undefined) ticket.group_id = params.groupId;
   if (params.assigneeId !== undefined) ticket.assignee_id = params.assigneeId;
+  if (params.followupSourceId !== undefined) ticket.via_followup_source_id = params.followupSourceId;
 
   const raw = await client.request<{ ticket: { id: number } }>('/tickets.json', {
     method: 'POST',

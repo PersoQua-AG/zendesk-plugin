@@ -35,6 +35,10 @@ const bulkCreateTicketSchema = ticketUpdateFieldsSchema.extend({
     public: z.boolean().optional(),
   }),
   requester_id: z.number().int().positive().optional(),
+  // Zendesk's write-only follow-up link (Tickets JSON format). Declared because a zod object
+  // strips undeclared keys, which silently dropped the link and created an UNLINKED ticket
+  // while the tool still reported success (#66).
+  via_followup_source_id: z.number().int().positive().optional(),
 });
 
 export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
@@ -79,6 +83,8 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
         assigneeId: z.number().int().positive().optional(),
         markdown: z.boolean().optional(),
         public: z.boolean().optional(),
+        // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
+        followupSourceId: z.number().int().positive().optional(),
       },
     },
     async (args) => okWithHandle(await createTicket(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault })),

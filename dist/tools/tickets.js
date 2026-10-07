@@ -83,6 +83,8 @@ export async function createTicket(client, cache, params) {
         ticket.group_id = params.groupId;
     if (params.assigneeId !== undefined)
         ticket.assignee_id = params.assigneeId;
+    if (params.followupSourceId !== undefined)
+        ticket.via_followup_source_id = params.followupSourceId;
     const raw = await client.request('/tickets.json', {
         method: 'POST',
         body: JSON.stringify({ ticket }),

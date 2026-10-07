@@ -29,5 +29,5 @@
   "input": {
     "prompt": "Reopen ticket #1003 (status: closed) and set it back to new."
   },
-  "expected": "Refuses: closed is terminal and new is birth-only. Offers a linked follow-up via zendesk_create_tickets_bulk with via_followup_source_id. Finding: the description says \"Enforces ... valid status transitions\", but the tool schema accepts new and closed and no code checks the transition."
+  "expected": "Refuses: closed is terminal and new is birth-only. Offers a linked follow-up: zendesk_create_ticket with followupSourceId, or zendesk_create_tickets_bulk with via_followup_source_id for several at once. Finding: the description says \"Enforces ... valid status transitions\", but the tool schema accepts new and closed and no code checks the transition."
 }

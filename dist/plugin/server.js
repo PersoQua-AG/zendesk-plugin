@@ -22832,6 +22832,7 @@ async function createTicket(client, cache, params) {
   if (params.tags) ticket.tags = params.tags;
   if (params.groupId !== void 0) ticket.group_id = params.groupId;
   if (params.assigneeId !== void 0) ticket.assignee_id = params.assigneeId;
+  if (params.followupSourceId !== void 0) ticket.via_followup_source_id = params.followupSourceId;
   const raw = await client.request("/tickets.json", {
     method: "POST",
     body: JSON.stringify({ ticket })
@@ -23049,7 +23050,11 @@ var bulkCreateTicketSchema = ticketUpdateFieldsSchema.extend({
     html_body: external_exports.string().min(1).optional(),
     public: external_exports.boolean().optional()
   }),
-  requester_id: external_exports.number().int().positive().optional()
+  requester_id: external_exports.number().int().positive().optional(),
+  // Zendesk's write-only follow-up link (Tickets JSON format). Declared because a zod object
+  // strips undeclared keys, which silently dropped the link and created an UNLINKED ticket
+  // while the tool still reported success (#66).
+  via_followup_source_id: external_exports.number().int().positive().optional()
 });
 function registerTicketTools(server, ctx) {
   const { httpClient, cache, securityLevel, markdownDefault } = ctx;
@@ -23090,7 +23095,9 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
         groupId: external_exports.number().int().positive().optional(),
         assigneeId: external_exports.number().int().positive().optional(),
         markdown: external_exports.boolean().optional(),
-        public: external_exports.boolean().optional()
+        public: external_exports.boolean().optional(),
+        // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
+        followupSourceId: external_exports.number().int().positive().optional()
       }
     },
     async (args) => okWithHandle(await createTicket(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault }))
