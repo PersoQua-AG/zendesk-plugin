@@ -214,6 +214,43 @@ function claimPort(port: number): boolean {
 // CI run 36845405954 printed 44 724 skips, every one of them 127.0.0.1, and then declared the band
 // exhausted.
 //
+// MEASURED ON BOTH PLATFORMS (#107), which the table above was not — it was reasoned from a
+// darwin run. Same script on both sides, one holder at a time on one band port, each of the five
+// addresses probed in its own child. darwin 25.3.0 / node v26.5.0; linux via
+// `docker run --user node --sysctl net.ipv4.ip_unprivileged_port_start=1024 node:20-bookworm`,
+// image node@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5, node
+// v20.20.2, one routable address 192.168.215.2. B = the probe BOUND beside the holder,
+// X = EADDRINUSE.
+//
+//   holder \ probe        0.0.0.0   ::   127.0.0.1   ::1   routable
+//   darwin
+//     no host (wildcard)      X      X        B        B       B
+//     0.0.0.0                 X      B        B        B       B
+//     ::                      X      X        B        B       B
+//     127.0.0.1               B      B        X        B       B
+//     routable                B      B        B        B       X
+//     nobody                  B      B        B        B       B
+//   linux
+//     no host (wildcard)      X      X        X        X       X
+//     0.0.0.0                 X      X        X        B       X
+//     ::                      X      X        X        X       X
+//     127.0.0.1               X      X        X        B       B
+//     routable                X      X        B        B       X
+//     nobody                  B      B        B        B       B
+//
+// THE DIFFERENCE, stated so the darwin run stops passing for general: on Linux a wildcard probe
+// sees EVERY holder — one address would do — because Linux refuses a specific bind that overlaps a
+// wildcard one and vice versa. On darwin SO_REUSEADDR allows exactly that, so only the holder's
+// OWN address refuses, and a probe set missing an address is BLIND to a holder on it. That is
+// #106 finding 2 (the routable row) and its follow-up (the `::` row) in one picture: both are
+// invisible on darwin and both are loud on Linux. The address list is therefore sized for darwin
+// and merely redundant on Linux, which is the right way round — CI is Linux and the developer
+// machine is where the flake was measured.
+//
+// Also measured in that container, for the OS-chosen-port record this band rests on:
+// `net.ipv4.ip_local_port_range = 32768 60999` against PORT_BAND 20000-29999 — no overlap, so the
+// record holds there. Both numbers are sysctl-tunable and neither is a guarantee.
+//
 // A child process, because Node cannot bind a NAMED address synchronously: `listen(port, host)`
 // goes through lookupAndListen -> dns.lookup, and `server.listening` is still false when listen()
 // returns, even for a free port and a numeric literal host (measured). An async freePort() is not
