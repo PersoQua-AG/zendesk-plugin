@@ -136,6 +136,52 @@ describe('a fixed bind port is refused when it is bound', () => {
     );
   });
 
+  // THE FOUR MORE SHAPES THAT BOUND A FIXED PORT, one value over from the pair below. `!= null`
+  // admitted `fd: -1` — the canonical absent-fd sentinel — as well as `handle: 0`, `handle: false`
+  // and `fd: NaN`, all of which node binds on the `port` in the same bag. Measured by
+  // `qa-engineer`: four fixed ports bound with the guard silent. node asks `options.fd >= 0` and
+  // whether `options.handle` is truthy; the guard asks the same.
+  it.each([
+    ['fd: -1', { fd: -1, port: 18_020 }],
+    ['handle: 0', { handle: 0, port: 18_021 }],
+    ['handle: false', { handle: false, port: 18_022 }],
+    ['fd: NaN', { fd: Number.NaN, port: 18_023 }],
+  ])('refuses a fixed port in a bag whose %s is not a handle', (_label, bag) => {
+    expect(() => createServer().listen(bag as never)).toThrow(/Refusing to bind the fixed port/);
+  });
+
+  // `listen(undefined, cb)` asks for an ephemeral port too, and was missed: measured, node chose
+  // the port, nothing recorded it, and a later legitimate re-bind of that number was refused.
+  it('records the port the OS chose when the first argument is undefined', async () => {
+    const server = await listening(createServer().listen(undefined, () => {}));
+    const chosen = (server.address() as { port: number }).port;
+    await new Promise<void>((done) => server.close(() => done()));
+    const again = await listening(createServer().listen(chosen, '127.0.0.1'));
+    expect((again.address() as { port: number }).port).toBe(chosen);
+  });
+
+  // THE WARNING IS THE DIAGNOSTIC the hook enforcement was removed in favour of, so it is pinned:
+  // commenting the emit out left the whole file green, which makes the answer to a review round
+  // deletable without anything noticing.
+  it('emits the refusal as a process warning, which is how a swallowed one stays visible', () => {
+    // Split, like every fixed port written at a call site in this file: the source scan walks this
+    // tree and a bare literal immediately after `listen(` is the one shape it matches.
+    const WARNED = Number(`180${'24'}`);
+    const seen: string[] = [];
+    const real = process.emitWarning;
+    (process as { emitWarning: unknown }).emitWarning = (warning: unknown, name?: unknown): void => {
+      seen.push(`${String(name)}: ${String(warning)}`);
+    };
+    try {
+      expect(() => createServer().listen(WARNED)).toThrow(/Refusing/);
+    } finally {
+      (process as { emitWarning: unknown }).emitWarning = real;
+    }
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain('BindTimePortRefusal');
+    expect(seen[0]).toContain(`Refusing to bind the fixed port ${WARNED}`);
+  });
+
   // THE TWO SHAPES THAT BOUND A FIXED PORT ANYWAY, each measured by `qa-engineer` and each
   // unpinned until now. `'handle' in bag` is true of an ordinary optional-handle call, and a bag
   // whose handle decides the bind used to register that handle's FIXED port as if the OS had

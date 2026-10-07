@@ -69,7 +69,7 @@ const SOURCE = /\.(ts|tsx|mts|cts|js|mjs|cjs)$/;
 // WHY A MARK AT ALL, once the root is the whole test tree: the direction of danger flipped. A root
 // too WIDE now scans more and can hide nothing. What is left is the NARROW misedit, and narrow is
 // silent without a mark — `tests/plugin` and `tests/tools` would each read exactly like a clean
-// scan of all 199 files. The mark refuses both, which is the reasoning the sibling guard records
+// scan of all 206 files. The mark refuses both, which is the reasoning the sibling guard records
 // for #76/PR #87, reached from the opposite starting point.
 //
 // THE FALSE PASS IT REPLACED, kept because it is the measurement that makes the mark worth having:

@@ -33,12 +33,15 @@ function portOf(args: unknown[]): unknown {
   // whether `portOf` answered nothing. `wantsEphemeral` reads the ARGUMENTS, which is what closed
   // the mis-registration a sentinel was briefly added for as well.
   //
-  // A VALUE CHECK, NOT `in`. `'handle' in bag` is true of `{ handle: undefined, port: 18931 }`,
-  // which is an ordinary optional-handle shape and which node binds on 18931: measured, it BOUND
-  // 18931 with the guard silent. node's own test is `options.fd >= 0` / `options.handle` being
-  // truthy, and so is this.
+  // NODE'S OWN TEST, not an approximation of it. `'handle' in bag` is true of
+  // `{ handle: undefined, port: 18931 }`, an ordinary optional-handle shape that node binds on
+  // 18931 — measured, it BOUND 18931 with the guard silent. `!= null` then admitted `fd: -1`, the
+  // canonical absent-fd sentinel, as well as `handle: 0`, `handle: false` and `fd: NaN`: measured,
+  // four more fixed ports bound with the guard silent, the same class one value over. node asks
+  // `options.fd >= 0` and whether `options.handle` is truthy, and so does this.
   const bag = typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : null;
-  if (bag && (bag.handle != null || bag.fd != null)) return undefined;
+  const byHandle = bag !== null && ((typeof bag.fd === 'number' && bag.fd >= 0) || Boolean(bag.handle));
+  if (byHandle) return undefined;
   const raw = bag && 'port' in bag ? bag.port : first;
   if (typeof raw !== 'string') return raw;
   // `Number()`, not /^\d+$/: node coerces the string the same way, so `listen('0x4650')` and
@@ -96,15 +99,18 @@ Server.prototype.listen = function (this: Server, ...args: unknown[]) {
   // then succeeded, undeclared and unrefused. Exactly the mis-registration this comment used to claim
   // it had avoided.
   //
-  // Asking for an ephemeral port means: no arguments at all, a callback first, or a port of 0.
-  // A handle or an fd is NOT asking — the handle decides, and the guard records nothing.
+  // Asking for an ephemeral port means: no arguments at all, nothing in the first one, a callback
+  // first, or a port of 0. A handle or an fd is NOT asking — the handle decides, and the guard
+  // records nothing. `args[0] === undefined` is the arm that was missing: measured,
+  // `listen(undefined, cb)` had node choose 49613 and recorded nothing, so a later legitimate
+  // re-bind of that number was refused — the same defect as the callback arm, one shape over.
   //
   // The entry is permanent, unlike a declared stranger: a server bound once in a beforeAll is
   // re-bound by the cases, so a per-case scope would refuse it. What keeps that safe is that an
   // ephemeral range cannot excuse a PORT_BAND literal — measured on darwin, 49152-65535 against a
   // band of 20000-29999, and on Linux the default is 32768-60999. Both are sysctl-tunable, so this
   // is a property of the machines this suite runs on and not a law.
-  const wantsEphemeral = args.length === 0 || typeof args[0] === 'function' || port === 0;
+  const wantsEphemeral = args.length === 0 || args[0] === undefined || typeof args[0] === 'function' || port === 0;
   if (wantsEphemeral) {
     this.once('listening', () => {
       const chosen = this.address();
