@@ -82,13 +82,17 @@ export async function updateTicketsBulk(
   let refusedNote = '';
   const target = params.fields.status;
   if (target !== undefined) {
-    // → new is refused from every state, so the batch needs no read to settle it.
-    const statuses = target === 'new' ? new Map<number, string | null>() : await readStatuses(client, params.ids);
+    // → new is refused from every state, so the batch needs no read and no per-id arithmetic: it
+    // ends here, with the SAME sentence the single-update path gives. The generic wrapper below
+    // would tell the model only that the batch was refused, not that `new` is the birth state and
+    // cannot be restored — which is the sentence skills/ticket-manager/SKILL.md:48 asks it to pass on.
+    if (target === 'new') throw new Error(transitionRefusal(null, 'new') as string);
+    const statuses = await readStatuses(client, params.ids);
     // Two causes, reported apart. An id show_many did not answer for (a deleted ticket, a truncated
     // response, a record that did not parse) has no known status, so it is refused — but calling
     // that "a forbidden status transition" sends the model to the linked-follow-up remedy for a
     // ticket that may not exist. The lifecycle refusal is only for ids whose status was read.
-    const unreadable = target === 'new' ? [] : params.ids.filter((id) => !statuses.has(id) || statuses.get(id) === null);
+    const unreadable = params.ids.filter((id) => !statuses.has(id) || statuses.get(id) === null);
     const unreadableSet = new Set(unreadable);
     const forbidden = params.ids.filter((id) => !unreadableSet.has(id) && transitionRefusal(statuses.get(id) ?? null, target));
     const refused = new Set([...unreadable, ...forbidden]);

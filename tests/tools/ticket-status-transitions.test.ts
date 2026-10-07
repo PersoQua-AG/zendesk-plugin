@@ -139,10 +139,13 @@ describe('zendesk_update_tickets_bulk enforces the lifecycle table (#61)', () =>
     expect(b.calls.filter((c) => c.method !== 'GET')).toEqual([]);
   });
 
-  it('→ new is refused for the whole batch without reading anything', async () => {
+  it('→ new is refused for the whole batch without reading anything, with the birth-state reason', async () => {
     const r = await once('zendesk_update_tickets_bulk', { ids: [1001, 1002], fields: { status: 'new' }, force: true }, bulkReply);
     expect(r.isError).toBe(true);
     expect(r.calls).toEqual([]);
+    // The same sentence the single-update path gives, not the generic batch wrapper: the model has
+    // to be able to tell the user that `new` cannot be restored and offer `open` instead.
+    expect(r.text).toContain('birth state only and cannot be set on an existing ticket');
   });
 });
 

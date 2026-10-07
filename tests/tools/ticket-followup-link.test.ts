@@ -14,7 +14,7 @@ const bulkReply = (_c: Call, n: number): Response => jobReply(n, [{ id: 9001, su
 
 const singleReply = (): Response => json({ ticket: { id: 9001 } });
 
-const bodyOf = (calls: Call[], path: string): Record<string, never> =>
+const bodyOf = (calls: Call[], path: string): Record<string, unknown> =>
   JSON.parse(calls.find((c) => c.path.endsWith(path))?.body ?? '{}');
 
 describe('follow-up tickets keep their link to the closed source ticket (#66)', () => {
@@ -25,7 +25,7 @@ describe('follow-up tickets keep their link to the closed source ticket (#66)', 
       bulkReply,
     );
     expect(r.isError).toBe(false);
-    const body = bodyOf(r.calls, '/tickets/create_many.json') as unknown as { tickets: Record<string, unknown>[] };
+    const body = bodyOf(r.calls, '/tickets/create_many.json') as { tickets: Record<string, unknown>[] };
     expect(body.tickets[0].via_followup_source_id).toBe(SOURCE);
     // requester_id is the control: a declared field that always reached the body.
     expect(body.tickets[0].requester_id).toBe(7);
@@ -38,7 +38,7 @@ describe('follow-up tickets keep their link to the closed source ticket (#66)', 
       singleReply,
     );
     expect(r.isError).toBe(false);
-    const body = bodyOf(r.calls, '/tickets.json') as unknown as { ticket: Record<string, unknown> };
+    const body = bodyOf(r.calls, '/tickets.json') as { ticket: Record<string, unknown> };
     expect(body.ticket.via_followup_source_id).toBe(SOURCE);
     expect(body.ticket.requester_id).toBe(7);
   });
@@ -61,11 +61,11 @@ describe('follow-up tickets keep their link to the closed source ticket (#66)', 
 
   it('no link requested: the key is absent from both bodies, not merely undefined', async () => {
     const bulk = await once('zendesk_create_tickets_bulk', { tickets: [{ subject: 'Plain', comment: COMMENT }] }, bulkReply);
-    const bulkRecord = (bodyOf(bulk.calls, '/tickets/create_many.json') as unknown as { tickets: object[] }).tickets[0];
+    const bulkRecord = (bodyOf(bulk.calls, '/tickets/create_many.json') as { tickets: object[] }).tickets[0];
     expect(Object.keys(bulkRecord)).not.toContain('via_followup_source_id');
 
     const single = await once('zendesk_create_ticket', { subject: 'Plain', comment: 'hi' }, singleReply);
-    const ticket = (bodyOf(single.calls, '/tickets.json') as unknown as { ticket: object }).ticket;
+    const ticket = (bodyOf(single.calls, '/tickets.json') as { ticket: object }).ticket;
     expect(Object.keys(ticket)).not.toContain('via_followup_source_id');
   });
 });

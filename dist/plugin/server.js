@@ -23005,8 +23005,9 @@ async function updateTicketsBulk(client, cache, params, poll = {}, securityLevel
   let refusedNote = "";
   const target = params.fields.status;
   if (target !== void 0) {
-    const statuses = target === "new" ? /* @__PURE__ */ new Map() : await readStatuses(client, params.ids);
-    const unreadable2 = target === "new" ? [] : params.ids.filter((id) => !statuses.has(id) || statuses.get(id) === null);
+    if (target === "new") throw new Error(transitionRefusal(null, "new"));
+    const statuses = await readStatuses(client, params.ids);
+    const unreadable2 = params.ids.filter((id) => !statuses.has(id) || statuses.get(id) === null);
     const unreadableSet = new Set(unreadable2);
     const forbidden = params.ids.filter((id) => !unreadableSet.has(id) && transitionRefusal(statuses.get(id) ?? null, target));
     const refused = /* @__PURE__ */ new Set([...unreadable2, ...forbidden]);
