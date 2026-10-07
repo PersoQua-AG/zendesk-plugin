@@ -7,6 +7,7 @@ import {
   ZendeskPermissionError,
   ZendeskConflictError,
   ZendeskValidationError,
+  MAX_RETRY_AFTER_SECONDS,
 } from '../../src/client/errors.js';
 
 describe('mapErrorResponse', () => {
@@ -15,6 +16,22 @@ describe('mapErrorResponse', () => {
     const error = await mapErrorResponse(response);
     expect(error).toBeInstanceOf(ZendeskRateLimitError);
     expect((error as ZendeskRateLimitError).retryAfterSeconds).toBe(30);
+    expect(error.message).toContain('retry after 30s');
+  });
+
+  // #53: the limiter waits 300 s at most, so the text must not promise longer.
+  it('caps the reported Retry-After of a 429 at 300 s', async () => {
+    const response = new Response('', { status: 429, headers: { 'Retry-After': '2000000' } });
+    const error = await mapErrorResponse(response);
+    expect((error as ZendeskRateLimitError).retryAfterSeconds).toBe(300);
+    expect(error.message).toContain('retry after 300s');
+  });
+
+  it('never reports Infinity for a Retry-After too long for a double', async () => {
+    const response = new Response('', { status: 429, headers: { 'Retry-After': '9'.repeat(400) } });
+    const error = await mapErrorResponse(response);
+    expect(error.message).toContain('retry after 300s');
+    expect(error.message).not.toContain('Infinity');
   });
 
   it('maps 403 to ZendeskPermissionError mentioning scope ∩ role', async () => {
@@ -72,6 +89,18 @@ describe('parseRetryAfter', () => {
   it('never returns a negative delay for a past HTTP-date', () => {
     const now = () => Date.parse('2026-07-22T12:00:00Z');
     expect(parseRetryAfter('Wed, 22 Jul 2026 11:59:00 GMT', now)).toBe(0);
+  });
+
+  // #53: one cap for the limiter and the reported value. 300 is pinned as a literal here on
+  // purpose — asserting against the imported constant would survive raising it.
+  it('caps at 300 seconds, on both the integer and the HTTP-date path', () => {
+    expect(MAX_RETRY_AFTER_SECONDS).toBe(300);
+    expect(parseRetryAfter('300')).toBe(300);
+    expect(parseRetryAfter('301')).toBe(300);
+    expect(parseRetryAfter('2000000')).toBe(300);
+    expect(parseRetryAfter('9'.repeat(400))).toBe(300);
+    const now = () => Date.parse('2026-07-22T12:00:00Z');
+    expect(parseRetryAfter('Thu, 23 Jul 2026 12:00:00 GMT', now)).toBe(300);
   });
 
   it('falls back to 60 for garbage or missing headers (never NaN)', () => {
