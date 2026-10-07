@@ -1,6 +1,12 @@
 // scripts/assert-no-attribution.mjs
-// The owner's rule — no Claude attribution anywhere in this repository — enforced instead of
-// remembered.
+// The owner's rule — no Claude attribution — enforced instead of remembered.
+//
+// WHAT THIS SCRIPT INSPECTS, AND WHAT IT THEREFORE DOES NOT. Commit MESSAGE BODIES in a named
+// range, and text handed on stdin. Not file contents: a trailer committed into a README or a pull
+// request template passes here, and is a review matter. Not the author or committer IDENTITY
+// either — a commit authored as `Claude <noreply@anthropic.com>` has no trailer and passes. Both
+// are deliberate omissions and not oversights; widening to either is its own change, with its own
+// false-positive question to answer.
 //
 // WHY IT IS A SCRIPT AND NOT A HABIT. The rule is recorded in the hub memory
 // (ops/memory/feedback_no-claude-attribution-any-repo.md) and that file asserts CI enforces it.
@@ -40,8 +46,10 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 const RULES = [
-  [/^Co-Authored-By:.*(claude|@anthropic\.com)/im, 'a Co-Authored-By trailer naming Claude'],
-  [/^Claude-Session:/im, 'a Claude-Session trailer'],
+  // `violations()` tests one line at a time, so `^` anchors to the line without `m`; `m` is kept
+  // off rather than carried as decoration that suggests a multi-line subject these never see.
+  [/^Co-Authored-By:.*(claude|@anthropic\.com)/i, 'a Co-Authored-By trailer naming Claude'],
+  [/^Claude-Session:/i, 'a Claude-Session trailer'],
   [/Generated with \[?Claude Code/i, "Claude Code's generated-with sign-off"],
 ];
 
