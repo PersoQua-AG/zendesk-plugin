@@ -16,6 +16,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createServer as createUnixServer } from 'node:net';
 import { crc32, deflateRawSync } from 'node:zlib';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -464,6 +465,31 @@ describe('a bundle the audit could not read', () => {
     expect(existsSync(join(victim, 'main.ts')), 'the target was touched').toBe(true);
     expect(nameExists(`${tree.bundle}.REJECTED`)).toBe(false);
     expect(run.stderr).not.toContain('CONTAMINATED');
+  });
+
+  // AND A SOCKET, which the first two spellings of the shape rule both let through: it excluded
+  // the direct directory, then directories at all. Measured, a bound AF_UNIX socket under the
+  // publishable name was renamed to `.REJECTED` and announced CONTAMINATED, the refusal quoting
+  // `Unknown system error -102`. The rule is a whitelist now — a bundle is a regular file, or a
+  // dangling alias to one — because "is it a file" has one answer and does not grow.
+  it('refuses a socket under the publishable name without moving it', async () => {
+    const tree = makeTree();
+    rmSync(tree.bundle);
+    const server = createUnixServer();
+    await new Promise<void>((bound, failed) => {
+      server.on('error', failed);
+      server.listen(tree.bundle, () => bound());
+    });
+    try {
+      const run = runAudit(tree);
+      expect(run.status).not.toBe(0);
+      expect(nameExists(tree.bundle), 'the socket was moved').toBe(true);
+      expect(nameExists(`${tree.bundle}.REJECTED`)).toBe(false);
+      expect(run.stderr).not.toContain('CONTAMINATED');
+    } finally {
+      await new Promise<void>((done) => server.close(() => done()));
+      rmSync(tree.bundle, { force: true });
+    }
   });
 
   // THE EACCES SHAPE IS THE HEADLINE JUSTIFICATION for guarding on the name at all — `bundle` is

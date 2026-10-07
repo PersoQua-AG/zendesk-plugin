@@ -347,17 +347,24 @@ const nameIsTaken = (p) => {
     // `lstat` FOR EXISTENCE. A dangling symlink is a name somebody can upload, and `existsSync`
     // follows the link and says it is not there.
     if (lstatSync(p, { throwIfNoEntry: false }) === undefined) return false;
-    // `stat` FOR SHAPE, which does follow. A DIRECTORY IS NOT A BUNDLE ANYBODY UPLOADS, so it is
-    // not quarantined — and that has to hold for an alias to one as well: measured,
-    // `zendesk.mcpb -> some-tree/` had the link renamed to `.REJECTED` and somebody's tree
-    // announced as CONTAMINATED while `lstat` reported a symlink and never asked about a directory.
+    // `stat` FOR SHAPE, which does follow. A BUNDLE IS A REGULAR FILE, or a dangling alias to one
+    // — `stat` answers `undefined` there rather than throwing, so the alias still counts. Anything
+    // else under the publishable name is not something anybody uploads, and renaming it announced
+    // somebody else's thing as CONTAMINATED: measured for a directory, for a symlink to one, and
+    // for a bound AF_UNIX socket, whose refusal quoted `Unknown system error -102`.
     //
-    // ONE STAT CANNOT ANSWER BOTH QUESTIONS. A followed stat alone throws ENOENT on the dangling
-    // case, which is the case the existence check above exists for; an lstat alone cannot see
-    // through the alias. Guarding on `bundle` used to make the direct directory safe BY ACCIDENT —
-    // `readFileSync` throws EISDIR and the buffer stayed null — and moving the guard to the name
-    // made the loss reachable. An accidental protection replaced by a deliberate one.
-    return !statSync(p, { throwIfNoEntry: false })?.isDirectory();
+    // A WHITELIST, not a list of shapes to exclude, because the exclusion list was wrong twice —
+    // first it had only the direct directory, then only directories at all. "Is it a file" has one
+    // answer and does not grow.
+    //
+    // ONE STAT CANNOT ANSWER BOTH QUESTIONS. A followed stat alone throws nothing but reports
+    // nothing either for a dangling link, which the existence check above is what distinguishes;
+    // an lstat alone cannot see through an alias. Guarding on `bundle` used to make the direct
+    // directory safe BY ACCIDENT — `readFileSync` throws EISDIR and the buffer stayed null — and
+    // moving the guard to the name made the loss reachable. An accidental protection replaced by a
+    // deliberate one.
+    const target = statSync(p, { throwIfNoEntry: false });
+    return target === undefined || target.isFile();
   } catch {
     // Not ENOENT — `throwIfNoEntry: false` already answers that. EACCES and the like mean the name
     // may well be there, so it counts as taken and the quarantine is attempted; its own catch
@@ -365,7 +372,6 @@ const nameIsTaken = (p) => {
     return true;
   }
 };
-
 
 // A stale artifact from an earlier, passing run must not survive a failing one — otherwise "no
 // artifact is published" holds only for the operator who never released this bundle before.
