@@ -21510,10 +21510,11 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
   });
 }
 var MAX_ERROR_BODY_CHARS = 200;
-var LINE_BREAK = /[\n\r\u0085\u2028\u2029]/;
-var CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]/g;
+var LINE_BREAK = /[\n\r\u000B\u000C\u001C-\u001E\u0085\u2028\u2029]/;
+var CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+var TAB = /\t/g;
 function summarizeErrorBody(raw) {
-  const firstLine = raw.split(LINE_BREAK)[0].replace(CONTROL_OR_BIDI, "").trim();
+  const firstLine = raw.split(LINE_BREAK)[0].replace(TAB, " ").replace(CONTROL_OR_BIDI, "").trim();
   if (/[<>]/.test(firstLine)) return "(non-text response body omitted)";
   return firstLine.length > MAX_ERROR_BODY_CHARS ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS).replace(/[\uD800-\uDBFF]$/, "")}\u2026 (truncated)` : firstLine;
 }

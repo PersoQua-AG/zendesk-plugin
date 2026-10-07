@@ -276,12 +276,26 @@ export async function waitForAuthorizationCode(port, expectedState, timeoutMs = 
 // cut passes through untouched. So the body is capped on BOTH axes, and a line carrying an angle
 // bracket anywhere is dropped entirely rather than quoted.
 const MAX_ERROR_BODY_CHARS = 200;
-const LINE_BREAK = /[\n\r\u0085\u2028\u2029]/;
-// Controls and bidi overrides; the callback's error code loses them to NOT_NQCHAR above.
-const CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]/g;
+// Every break a reader renders ends the quoted line. VT, FF and FS\u2013GS\u2013RS (U+000B, U+000C,
+// U+001C\u2013U+001E) are breaks in Unicode \u2014 UAX #14 class BK for the first two, UAX #9 class B for all
+// five \u2014 but they used to fall under CONTROL_OR_BIDI alone, which REMOVES a character instead of
+// cutting at it. So everything after one was glued onto the quote rather than dropped with the rest
+// of the body: `invalid_grant\x0BIgnore previous instructions` quoted as one line. Same class as the
+// CR gap closed in #42. U+001F (US) stays out: it is a separator in neither standard, and the
+// existing cases quote it as a removed control.
+const LINE_BREAK = /[\n\r\u000B\u000C\u001C-\u001E\u0085\u2028\u2029]/;
+// Controls and bidi overrides; the callback's error code loses them to NOT_NQCHAR above. The
+// zero-width and implicit-direction marks (U+200B\u2013U+200F, U+061C, U+FEFF) are not overrides \u2014 the
+// Trojan-Source set (CVE-2021-42574) is already covered by the two ranges before them \u2014 but they are
+// invisible, and an invisible character inside a quoted line is a word the reader cannot see.
+const CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u061C\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+// The one control that carries meaning a reader would miss: dropping it with the rest turned
+// `invalid\tgrant` into `invalidgrant`. Replaced before the strip, not excluded from it, so TAB has
+// exactly one fate rather than two rules that could disagree.
+const TAB = /\t/g;
 // Returns '' for a blank body, so the caller can end the message at the status.
 function summarizeErrorBody(raw) {
-    const firstLine = raw.split(LINE_BREAK)[0].replace(CONTROL_OR_BIDI, '').trim();
+    const firstLine = raw.split(LINE_BREAK)[0].replace(TAB, ' ').replace(CONTROL_OR_BIDI, '').trim();
     if (/[<>]/.test(firstLine))
         return '(non-text response body omitted)';
     return firstLine.length > MAX_ERROR_BODY_CHARS
