@@ -18,7 +18,7 @@
 // Zero deps — plain Node, including the ZIP reader (a .mcpb is a ZIP). It is excluded from the
 // bundle by .mcpbignore's `scripts/` line.
 import { createHash } from 'node:crypto';
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -473,14 +473,22 @@ if (problems.length > 0) {
   // Clearing only the versioned copy left the FILE package.json names sitting there with the
   // secret inside it — the one somebody would upload. It is renamed rather than deleted so the
   // evidence survives for whoever has to find out how it got in.
+  //
+  // The condition is "the file is still lying there", not "we managed to read it". `bundle` is null
+  // for every read that threw — EACCES, EISDIR, a mid-pack truncation — and on exactly those runs
+  // the file is still sitting under its publishable name. Guarding on `bundle` skipped the
+  // quarantine on the cases that need it most, which is the #90 defect one level down.
   let quarantined = null;
-  if (bundle) {
+  if (existsSync(bundlePath)) {
     quarantined = `${bundlePath}.REJECTED`;
     try {
       rmSync(quarantined, { force: true });
       renameSync(bundlePath, quarantined);
     } catch (error) {
       quarantined = null;
+      // A quarantine this script could not perform is housekeeping it could not do, so it exits 2
+      // and not 1: the caller is being told to fix the TREE, by hand, before anything is uploaded.
+      housekeepingFailed = true;
       console.error(`  - could not quarantine ${basename(bundlePath)}: ${error.message} — DELETE IT BY HAND`);
     }
   }

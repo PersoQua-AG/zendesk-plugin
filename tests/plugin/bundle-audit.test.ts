@@ -386,6 +386,59 @@ describe('a stale artifact that cannot be cleared', () => {
 });
 
 // =============================================================================================
+// Scenario: the quarantine itself is the thing that fails (#90, one level down)
+//
+// The quarantine used to be guarded on `bundle`, the BUFFER — so every run whose read threw left
+// the file lying under its publishable name, unquarantined and unmentioned. And when the rename
+// failed, the run still exited 1: "a bundle to fix", when what it meant was "a tree to fix, by
+// hand". Same class as #90 itself: the safeguard is skipped on exactly the runs that need it.
+// =============================================================================================
+describe('a bundle the audit could not read', () => {
+  // Unreadable AND still present: the audit's path is a non-empty DIRECTORY, which readFileSync
+  // answers with EISDIR. Chosen over chmod 000 for the same reason the stale-artifact fixture
+  // above avoids a 0555 parent — a mode bit does not stop root, and CI containers run as root.
+  function unreadableBundle(tree: Tree): void {
+    rmSync(tree.bundle);
+    mkdirSync(tree.bundle);
+    writeFileSync(join(tree.bundle, 'occupant'), 'not an archive');
+  }
+
+  it('quarantines it anyway — a path it could not read is still a path somebody can upload', () => {
+    const tree = makeTree();
+    unreadableBundle(tree);
+    const run = runAudit(tree);
+
+    expect(existsSync(tree.bundle)).toBe(false);
+    expect(existsSync(`${tree.bundle}.REJECTED`)).toBe(true);
+    expect(run.stderr).toContain('could not be read as a bundle');
+    expect(run.stderr).toContain('CONTAMINATED');
+  });
+});
+
+describe('a quarantine that cannot be performed', () => {
+  // The .REJECTED slot is occupied by a non-empty directory, so the `rmSync` that clears it throws
+  // ERR_FS_EISDIR inside the quarantine's own try. Nothing can be renamed, and the publishable
+  // name survives — which is precisely why the operator has to be told to act by hand.
+  function blockRejectedSlot(tree: Tree): void {
+    mkdirSync(`${tree.bundle}.REJECTED`);
+    writeFileSync(join(`${tree.bundle}.REJECTED`, 'occupant'), 'left by an earlier run');
+  }
+
+  it('exits 2, not 1: this is a tree to fix by hand, not a bundle to fix', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    blockRejectedSlot(tree);
+    const run = runAudit(tree);
+
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('could not quarantine zendesk.mcpb');
+    expect(run.stderr).toContain('DELETE IT BY HAND');
+    // The whole point of the louder status: the uploadable name is still there.
+    expect(existsSync(tree.bundle)).toBe(true);
+    expectNoSecretEchoed(run);
+  });
+});
+
+// =============================================================================================
 // Scenario: a forbidden path is caught even if the content looks harmless
 // =============================================================================================
 describe('forbidden paths, at any depth, whatever the content', () => {
