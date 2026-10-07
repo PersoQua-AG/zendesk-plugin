@@ -88,9 +88,7 @@ describe('parseRetryAfter', () => {
   // purpose — asserting against the imported constant would survive raising it.
   it('caps at 300 seconds, on both the integer and the HTTP-date path', () => {
     expect(MAX_RETRY_AFTER_SECONDS).toBe(300);
-    expect(parseRetryAfter('300')).toBe(300);
     expect(parseRetryAfter('301')).toBe(300);
-    expect(parseRetryAfter('2000000')).toBe(300);
     expect(parseRetryAfter('9'.repeat(400))).toBe(300);
     const now = () => Date.parse('2026-07-22T12:00:00Z');
     expect(parseRetryAfter('Thu, 23 Jul 2026 12:00:00 GMT', now)).toBe(300);

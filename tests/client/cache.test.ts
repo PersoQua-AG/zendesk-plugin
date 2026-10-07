@@ -74,41 +74,20 @@ describe('ResponseCache', () => {
     expect(cache.load(second.handle)).toBeDefined();
   });
 
-  // #54: the constructor, not the first save(), must reject a cache dir it cannot write. chmod is
-  // not enforced for root, so under root the directory would stay writable and prove nothing.
-  it.skipIf(modeBitsIgnored)('throws EACCES at construction for an existing read-only directory', () => {
-    const readOnly = join(dir, 'cache');
-    mkdirSync(readOnly);
-    chmodSync(readOnly, 0o500);
+  // #54: the constructor, not the first save(), must reject a cache dir it cannot use. One row per
+  // mode bit the check names; chmod does not bite for root, where the dir would prove nothing.
+  it.skipIf(modeBitsIgnored).each([
+    { what: 'an existing read-only directory (0500)', mode: 0o500 },
+    { what: 'a write-only directory (0300), which sweep() cannot read', mode: 0o300 },
+    { what: 'a non-traversable directory (0600), whose entries cannot be reached', mode: 0o600 },
+  ])('throws EACCES at construction for $what', ({ mode }) => {
+    const target = join(dir, `cache-${mode.toString(8)}`);
+    mkdirSync(target);
+    chmodSync(target, mode);
     try {
-      expect(() => new ResponseCache(readOnly)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+      expect(() => new ResponseCache(target)).toThrow(expect.objectContaining({ code: 'EACCES' }));
     } finally {
-      chmodSync(readOnly, 0o700);
-    }
-  });
-
-  // sweep() reads the directory on every save, so write+traverse alone is not enough to use it.
-  it.skipIf(modeBitsIgnored)('throws EACCES at construction for a write-only directory (0300)', () => {
-    const writeOnly = join(dir, 'cache-0300');
-    mkdirSync(writeOnly);
-    chmodSync(writeOnly, 0o300);
-    try {
-      expect(() => new ResponseCache(writeOnly)).toThrow(expect.objectContaining({ code: 'EACCES' }));
-    } finally {
-      chmodSync(writeOnly, 0o700);
-    }
-  });
-
-  // 0600 is read+write without traverse: no path under the directory can be reached at all, so the
-  // traverse bit is load-bearing and not only claimed by a comment.
-  it.skipIf(modeBitsIgnored)('throws EACCES at construction for a non-traversable directory (0600)', () => {
-    const noTraverse = join(dir, 'cache-0600');
-    mkdirSync(noTraverse);
-    chmodSync(noTraverse, 0o600);
-    try {
-      expect(() => new ResponseCache(noTraverse)).toThrow(expect.objectContaining({ code: 'EACCES' }));
-    } finally {
-      chmodSync(noTraverse, 0o700);
+      chmodSync(target, 0o700);
     }
   });
 

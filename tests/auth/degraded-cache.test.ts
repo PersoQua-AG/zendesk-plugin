@@ -11,18 +11,16 @@ import { modeBitsIgnored } from '../setup/mode-bits.js';
 // A FILE as data dir makes mkdirSync throw ENOTDIR deterministically, no chmod, even as root.
 
 const dirs: string[] = [];
-const readOnly: string[] = [];
 afterEach(() => {
-  // Restore before rmSync, which cannot unlink inside a 0500 dir. Guarded so one failure
-  // does not strand the rest of the cleanup.
-  for (const d of readOnly.splice(0)) {
+  for (const d of dirs.splice(0)) {
+    // rmSync cannot unlink inside a 0500 cache/; restore it first, guarded as most cases have none.
     try {
-      chmodSync(d, 0o700);
+      chmodSync(join(d, 'cache'), 0o700);
     } catch {
       /* best effort */
     }
+    rmSync(d, { recursive: true, force: true });
   }
-  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
 function unwritableDataDir(): string {
@@ -41,7 +39,6 @@ function readOnlyCacheDataDir(): string {
   const cache = join(dir, 'cache');
   mkdirSync(cache);
   chmodSync(cache, 0o500);
-  readOnly.push(cache);
   return dir;
 }
 

@@ -21941,8 +21941,7 @@ var ResponseCache = class {
   isExpired(path) {
     return Date.now() - statSync(path).mtimeMs > this.ttlMs;
   }
-  // One sweep per write: drop expired entries, then evict oldest-first until the total on-disk
-  // size is back under the cap. Cheap because a single MCP session holds few, small payloads.
+  // One sweep per write: drop expired entries, then evict oldest-first back under the size cap.
   sweep() {
     const live = [];
     for (const name of readdirSync(this.resolvedDir)) {

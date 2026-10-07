@@ -14,14 +14,9 @@ export class ResponseCache {
     maxBytes;
     constructor(cacheDir, options = {}) {
         mkdirSync(cacheDir, { recursive: true });
-        // mkdir succeeds on an EXISTING unwritable directory, so the first save() would throw EACCES
-        // with the absolute path into tool output. Fail here instead: server.ts turns this into the
-        // code-only degrade message. All three bits: sweep() reads the dir, save() writes it, and
-        // neither can reach an entry without the traverse bit.
+        // mkdir succeeds on an EXISTING unusable directory, so fail here, not in the first save().
         this.resolvedDir = resolve(cacheDir);
-        // Checked on the RESOLVED path, the one every other method addresses the store through: keeping
-        // the raw spelling as a second representation let a relative cacheDir plus a process.chdir
-        // desynchronise the guard from the traversal check that trusts it.
+        // Checked on the RESOLVED path, the one every other method addresses the store through.
         accessSync(this.resolvedDir, constants.R_OK | constants.W_OK | constants.X_OK);
         this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
         this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -45,12 +40,7 @@ export class ResponseCache {
             writeFileSync(path, body);
         }
         catch (err) {
-            // A write that failed PARTWAY (ENOSPC, EDQUOT — writeFileSync loops on write(2)) leaves a
-            // truncated file that nothing else unlinks, and it counts against maxBytes until its TTL
-            // expires. Deliberately untested: every failure this suite can produce fails at open(2) and
-            // creates nothing, so no test here can tell this line apart from its absence. Best-effort,
-            // not unconditional: `force` only swallows ENOENT, and the cleanup must never replace the
-            // sanitized message below with a raw fs error that carries the path.
+            // A write that failed PARTWAY (ENOSPC, EDQUOT) leaves a truncated file nothing else unlinks.
             try {
                 rmSync(path, { force: true });
             }
@@ -87,8 +77,7 @@ export class ResponseCache {
     isExpired(path) {
         return Date.now() - statSync(path).mtimeMs > this.ttlMs;
     }
-    // One sweep per write: drop expired entries, then evict oldest-first until the total on-disk
-    // size is back under the cap. Cheap because a single MCP session holds few, small payloads.
+    // One sweep per write: drop expired entries, then evict oldest-first back under the size cap.
     sweep() {
         const live = [];
         for (const name of readdirSync(this.resolvedDir)) {

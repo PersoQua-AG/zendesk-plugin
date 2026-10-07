@@ -36,13 +36,9 @@ export class RateLimiter {
   }
 
   reportRetryAfter(seconds: number): void {
-    // Both in-repo callers pass parseRetryAfter output, which is already capped — but this is a
-    // public method, and the cap is what keeps NaN out: it fails `<`, so an unknown wait becomes
-    // the longest safe one. Without it Math.max below returns NaN and the window stops holding at
-    // all. Kept for that property, not for the cap.
+    // The cap also keeps NaN out: NaN fails `<`, so an unknown wait becomes the longest safe one.
     const capped = seconds < MAX_RETRY_AFTER_SECONDS ? seconds : MAX_RETRY_AFTER_SECONDS;
-    // Extend, never shorten: a second 429 with a smaller header must not reopen a window
-    // Zendesk still holds shut.
+    // Extend, never shorten: a smaller second 429 must not reopen a window Zendesk still holds.
     this.retryAfterUntil = Math.max(this.retryAfterUntil, this.now() + capped * 1000);
   }
 }
