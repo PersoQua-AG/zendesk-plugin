@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, readFileSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { createServer, type RequestListener, type Server } from 'node:http';
@@ -155,6 +155,25 @@ describe('the sweep that reclaims the band', () => {
     }
   }
 
+  /**
+   * The claim's inode, with that inode HELD OPEN under a second name until afterEach drops it.
+   *
+   * The pin is the whole point. `linkSync` does not mint a new inode — it shares the one it links
+   * to — so "the inode under this name changed" means "removed and republished" only for as long
+   * as the old NUMBER cannot come back. APFS hands a just-freed inode number straight out again,
+   * and the staging file a concurrent `claimPort()` creates is precisely the next allocation: a
+   * flake built into the branch whose job is to remove flakes. A second link keeps the number
+   * allocated, so nothing created after this call can be given it.
+   */
+  function pinInode(claim: string): number | null {
+    const ino = inodeOf(claim);
+    if (ino === null) return null;
+    const pin = `${claim}.inode-pin-${randomUUID()}`;
+    linkSync(claim, pin);
+    planted.push(pin);
+    return ino;
+  }
+
   function expectReclaimed(claim: string, plantedOwner: string, inodeBefore: number | null): void {
     const owner = claimOwner(claim);
     if (owner === null) return;
@@ -163,11 +182,12 @@ describe('the sweep that reclaims the band', () => {
     expect(pidIsLive(Number(owner))).toBe(true);
     // REMOVAL, not a rewrite (#52). Everything above is also true of a sweep that OVERWRITES the
     // claim in place with any live third pid, which is not reclamation at all: the dead owner's
-    // name was never freed. The inode tells the two apart, because the only legitimate way this
-    // name can carry a foreign owner is a concurrent run's claimPort() publishing by linkSync
-    // (login-harness.ts:172) after the removal — and a link is always a NEW inode. An in-place
-    // overwrite keeps the old one. Measured: mutations O1 ('1') and O2 (process.ppid) survived
-    // every assertion above with 9 passed, and are red on this line.
+    // name was never freed. The inode tells the two apart: an in-place overwrite keeps it, while
+    // the only legitimate way this name can carry a foreign owner is a concurrent run's
+    // claimPort() publishing a DIFFERENT file by linkSync (login-harness.ts:172) after the
+    // removal. `inodeBefore` comes from pinInode(), which is what makes "different" safe to read
+    // off the number alone. Measured: mutations O1 ('1') and O2 (process.ppid) survived every
+    // assertion above with 9 passed, and are red on this line.
     expect(inodeOf(claim)).not.toBe(inodeBefore);
   }
 
@@ -208,7 +228,7 @@ describe('the sweep that reclaims the band', () => {
     const port = freePort();
     const claim = portClaimPath(port);
     truncateSync(claim, 0);
-    const before = inodeOf(claim);
+    const before = pinInode(claim);
     sweepDeadClaims();
     expectReclaimed(claim, '', before);
   });
@@ -221,7 +241,7 @@ describe('the sweep that reclaims the band', () => {
     const abandoned = portClaimPath(abandonedPort);
     writeFileSync(abandoned, String(dead.pid));
     const ours = portClaimPath(freePort());
-    const before = inodeOf(abandoned);
+    const before = pinInode(abandoned);
 
     sweepDeadClaims();
 
