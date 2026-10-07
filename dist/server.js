@@ -48,18 +48,11 @@ export const SECURITY_LEVELS = ['strict', 'standard', 'off'];
 function parseSecurityLevel(raw) {
     const value = raw?.trim().toLowerCase();
     // Absence was the one resolution with no symptom at all, and it was silent in the dangerous
-    // direction (#93 gap B): an operator who believed they had configured `strict` got `standard`, so
-    // STRICT_PATTERNS never applied and nothing anywhere said so. Since the owner decision on #59 the
-    // shipped plugin declares no field for this level, which makes that belief MORE likely rather than
-    // less — the only thing left that can correct it is the start naming the level in effect.
-    //
-    // In the installed plugin absence IS every start, so yes, this is a line on every start of every
-    // installation — and once per opened session on the remote path (src/remote/session-manager.ts:155
-    // constructs a server per session), which is unbounded. That is owned rather than argued away: the alternative is an installation whose
-    // screening level nobody can find out, and a value that WAS read needs no line because it proves
-    // itself through the level it produced. The text must not tell the operator to do something the
-    // installed case cannot do, so it names where the variable is read instead of ordering them to
-    // set it (README, Security: "only a hand-started server reads ZENDESK_SECURITY_LEVEL").
+    // direction (#93 gap B): an operator who believed they had configured `strict` got `standard` and
+    // nothing anywhere said so. In the installed plugin absence IS every start — and once per opened
+    // session on the remote path — which is owned rather than argued away: the alternative is an
+    // installation whose screening level nobody can find out. The text names where the variable is
+    // read instead of ordering an action the installed case cannot take (README, Security).
     //
     // #93 gap A — whether the shipped plugin should offer a configuration path at all — is NOT
     // answered here. It is an open owner question and nothing in this file decides it.
@@ -71,11 +64,7 @@ function parseSecurityLevel(raw) {
     }
     if (SECURITY_LEVELS.includes(value))
         return value;
-    warnConfig(
-    // No "extension configuration field" is named here any more: the installed plugin declares none,
-    // and this branch only fires for someone who DID set the variable, so pointing at a field that
-    // does not exist contradicted the absence branch two lines up.
-    `ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(' | ')} \u2014 using ` +
+    warnConfig(`ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(' | ')} \u2014 using ` +
         `strict, the strictest level, rather than silently screening less.`);
     return 'strict';
 }
@@ -92,10 +81,7 @@ function parseMarkdownDefault(raw) {
         return true;
     if (value === 'true' || value === 'false')
         return value === 'true';
-    warnConfig(
-    // Same correction as the screening level above: the installed plugin declares no configuration
-    // field, so naming one here pointed at something that does not exist.
-    `ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false \u2014 using true, the shipped ` +
+    warnConfig(`ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false \u2014 using true, the shipped ` +
         `default, rather than reading it as a "no".`);
     return true;
 }
@@ -280,24 +266,12 @@ export function createServer(rawEnv = process.env, deps = {}) {
 // Connect stdio only when run as the process entrypoint (node dist/server.js), so importing this
 // module for tests does not attempt to open a transport.
 //
-// Compared by file IDENTITY, not by name (#63). Two spellings of one file must not read as two
-// files: for an ES module Node resolves symlinks in import.meta.url but leaves argv[1] exactly as
-// the host spelled it, so a CLAUDE_PLUGIN_ROOT reached through a symlink made the old URL
-// comparison unequal — the module loaded, no transport was connected, and the process exited 0 with
-// an empty stderr, so the plugin's tools simply never appeared.
-//
-// dev+ino rather than realpathSync, which also fixes the symlink case: realpath still compares
-// strings and does not canonicalise case on APFS (measured: realpathSync('DIST/server.js') comes
-// back verbatim). A case-differing launch does NOT reproduce the bug — measured, because Node keeps
-// argv[1]'s own spelling in the entry module's import.meta.url, so both sides fold together — but
-// dev+ino is what the filesystem itself calls identity, it costs the same two syscalls, and it
-// closes the "two names for one file" class instead of the two spellings we happen to know. A
-// hardlinked entry is the spelling realpath does get wrong (measured: realpaths differ, inode does
-// not); it is not given a test row because a hardlink outside dist/ cannot resolve the relative
-// imports anyway.
-//
-// statSync throws when argv[1] names no file, which is the same answer as "this is not the
-// entrypoint", so it is caught rather than guarded for.
+// Compared by file IDENTITY, not by name (#63): Node resolves symlinks in an ES module's
+// import.meta.url but leaves argv[1] as the host spelled it, so a plugin root reached through a
+// symlink made a name comparison unequal — the module loaded, no transport was connected, and the
+// process exited 0 with an empty stderr. dev+ino is what the filesystem itself calls identity, so
+// no spelling can split one file into two. statSync throws when argv[1] names no file, which is
+// the same answer as "not the entrypoint", so it is caught rather than guarded for.
 function startedAsEntrypoint() {
     if (!argv[1])
         return false;

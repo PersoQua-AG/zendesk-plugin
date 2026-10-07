@@ -25,9 +25,8 @@ afterEach(() => {
 function serverEnv(): NodeJS.ProcessEnv {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-placeholder-'));
   dirs.push(dataDir);
-  // ZENDESK_SECURITY_LEVEL is set so the #93 absence notice never fires in this suite: its subject
-  // is ZENDESK_MARKDOWN_CONVERSION, and the cases below assert that NOTHING warned, which is a
-  // stronger claim than filtering the warnings down to the ones they expected.
+  // ZENDESK_SECURITY_LEVEL is set so the #93 absence notice never fires: the cases below assert
+  // that NOTHING warned, which is stronger than filtering down to the warnings they expected.
   return { ...fullEnv(), ZENDESK_DATA_DIR: dataDir, ZENDESK_SECURITY_LEVEL: 'standard' };
 }
 
@@ -68,8 +67,7 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
     expect(config.clientSecret).toBeUndefined();
   });
 
-  // console.warn is silenced here: an unsubstituted ZENDESK_SECURITY_LEVEL re-fires the #93
-  // absence notice, and an unmocked one prints to the suite's stderr with no case attached to it.
+  // Silenced: an unsubstituted ZENDESK_SECURITY_LEVEL re-fires the #93 absence notice.
   it('a placeholder security level and markdown flag fall back to the shipped defaults', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { ctx } = createServer({

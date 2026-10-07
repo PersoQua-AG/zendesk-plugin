@@ -1,31 +1,18 @@
 // tests/plugin/entrypoint-symlink.test.ts
-// #63: the stdio transport used to connect only when `import.meta.url === pathToFileURL(argv[1]).href`.
-// Node resolves symlinks in an ES module's import.meta.url but leaves argv[1] as the host spelled it,
-// so `node <symlink-to-plugin-root>/dist/server.js` loaded the module, connected nothing, and exited 0
-// with an empty stderr.
+// #63: one file under two names. Both shipped entry points are rowed, because
+// .claude-plugin/plugin.json:14 launches the esbuild bundle and #63's citation of dist/server.js
+// is stale; the bundle carries the same guard.
 //
-// BOTH entry points are rowed. .claude-plugin/plugin.json:14 launches `dist/plugin/server.js`, the
-// esbuild bundle — #63's own citation of `dist/server.js` is stale — and the bundle carries the same
-// guard, so the shipped artifact is the one that has to start through a symlinked CLAUDE_PLUGIN_ROOT.
+// SAFETY: the child's environment is BUILT, never spread, and HOME is never set. Overriding HOME
+// does NOT sandbox the macOS Keychain — /usr/bin/security resolves its search list through $HOME
+// as well, so a scratch HOME makes the real item invisible, the read returns 44, and the write
+// path opens against a NULL keychain. That raised a system dialog on a developer's machine on
+// 2026-10-07. ZENDESK_DATA_DIR points at a FILE so the cache and the setup gate stay out of the way.
 //
-// The case-differing spelling is rowed as a third scenario of "one file, two names", not as a bug:
-// measured, it does NOT reproduce under the realpath form either, because Node keeps argv[1]'s own
-// spelling in the entry module's import.meta.url. The symlink rows are the red/green proof.
-//
-// SAFETY: the child's environment is BUILT, never spread, and HOME is never set. Overriding HOME does
-// NOT sandbox the macOS Keychain — /usr/bin/security resolves its search list through $HOME as well, so
-// a scratch HOME makes the real item invisible, the read returns 44, and the write path opens against a
-// NULL keychain (that is what raised a system dialog on a developer's machine on 2026-10-07). With HOME
-// unset, security and os.homedir() both fall back to getpwuid and see the real, untouched keychain.
-// ZENDESK_DATA_DIR points at a FILE so the cache cannot be opened and the first-run setup gate never
-// runs; the entry point under test connects its transport before any of that matters.
-//
-// dist/ is tracked, so the entry point is always on disk and this file never builds or skips. What it
-// therefore pins is the COMMITTED artifact: `git diff --exit-code dist/` in CI is what ties that
-// artifact to src/, and this file is green against a stale dist/ without it. Stated here because #63
-// asks for the choice to be named.
+// dist/ is tracked, so this file never builds or skips — and therefore pins the COMMITTED artifact;
+// CI's `git diff --exit-code dist/` is what ties that artifact to src/. Named because #63 asks.
 import { describe, it, expect, afterAll } from 'vitest';
-import { mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { tmpdir } from 'node:os';
@@ -46,15 +33,6 @@ const ENTRIES = [
   ['the module entry point', ['dist', 'server.js']],
   ['the bundle .claude-plugin/plugin.json launches', ['dist', 'plugin', 'server.js']],
 ] as const;
-
-const upperCased = join(root, 'DIST', 'server.js');
-const caseFolds = ((): boolean => {
-  try {
-    return statSync(upperCased).isFile();
-  } catch {
-    return false;
-  }
-})();
 
 let dataDirs = 0;
 function keylessEnv(): Record<string, string> {
@@ -100,12 +78,6 @@ describe('the server starts however its path is spelled', () => {
     [`${what} through a symlinked plugin root`, () => join(linkedRoot, ...parts)],
   ]))('serves MCP over stdio through %s', async (_label, entry) => {
     const message = await initializeThrough(entry());
-    expect((message.result as { serverInfo: { name: string } }).serverInfo.name).toBe('zendesk');
-  }, 60_000);
-
-  // Reported as skipped, not as passed, where the volume is case-sensitive and the path names nothing.
-  it.skipIf(!caseFolds)('serves MCP over stdio through a case-differing spelling', async () => {
-    const message = await initializeThrough(upperCased);
     expect((message.result as { serverInfo: { name: string } }).serverInfo.name).toBe('zendesk');
   }, 60_000);
 

@@ -29660,9 +29660,6 @@ function parseSecurityLevel(raw) {
   }
   if (SECURITY_LEVELS.includes(value)) return value;
   warnConfig(
-    // No "extension configuration field" is named here any more: the installed plugin declares none,
-    // and this branch only fires for someone who DID set the variable, so pointing at a field that
-    // does not exist contradicted the absence branch two lines up.
     `ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(" | ")} \u2014 using strict, the strictest level, rather than silently screening less.`
   );
   return "strict";
@@ -29672,8 +29669,6 @@ function parseMarkdownDefault(raw) {
   if (!value) return true;
   if (value === "true" || value === "false") return value === "true";
   warnConfig(
-    // Same correction as the screening level above: the installed plugin declares no configuration
-    // field, so naming one here pointed at something that does not exist.
     `ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false \u2014 using true, the shipped default, rather than reading it as a "no".`
   );
   return true;
