@@ -10,7 +10,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { freePort, portClaimPath, portHeldOn } from './login-harness.js';
+import { PORT_BAND_LAST, freePort, portClaimPath, portHeldOn } from './login-harness.js';
 
 // The body of a named function in the harness source, for the two cases whose rule is not
 // observable from inside one process.
@@ -40,28 +40,51 @@ describe('freePort() and a foreign listener in the band', () => {
   // be handed it in between; the claim comes off afterwards, which is what makes it look foreign.
   //
   // The candidate freePort() will examine next is the one it just returned plus one — nextCandidate
-  // advances by exactly one per candidate. That port can already be claimed or already be listened
-  // on by another run of this user (measured: port-probe-budget.test.ts reserves 64 of them, and
-  // the collision reddened this file). Then it is not ours to make a stranger of, and freePort()
-  // would skip it for a link() anyway, so the next candidate is tried instead.
+  // advances by exactly one per candidate. That port can already be claimed, or already be listened
+  // on, by another run of this user; then it is not ours to make a stranger of and the walk below
+  // steps to the one after it.
+  //
+  // THE CURSOR MOVES BY ONE, SO THE WALK MOVES BY ONE (#106 finding 3). The attempt log below was
+  // added first and answered the question in one run: every one of the twenty attempts failed with
+  // `claim EEXIST`, and the ports stepped by exactly TWO —
+  //   host ::1: 23233 claim EEXIST, 23235 claim EEXIST, 23237 claim EEXIST, … 23271 claim EEXIST
+  // Not the 64 reservations of port-probe-budget, which the ticket suspected, and not a stranger
+  // anywhere: two concurrent acquirers in LOCKSTEP. The old loop answered an occupied candidate by
+  // calling freePort() AGAIN, which advances the shared band cursor by one and so the candidate by
+  // two — straight onto the claim the other run had just taken for itself, every time.
+  //
+  // Walking forward by one costs no extra attempts and no luck. Every port skipped here is one
+  // another run has CLAIMED, and freePort() skips a claimed port for a link() and no probe at all,
+  // so its walk still arrives at exactly the port the stranger is put on — which is the property
+  // this file exists to hold, kept structural rather than made statistical. The bound is the band
+  // itself, and running out of band is a different sentence with a different cause.
+  //
+  // THE ATTEMPT LOG STAYS. It is what turned "20 attempts" from a count into a measurement, and
+  // the next failure here has to arrive with its ports and its reasons attached.
   async function foreignListenerOnNextCandidate(host?: string): Promise<number> {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const next = freePort() + 1;
+    const refused: string[] = [];
+    const anchor = freePort();
+    for (let next = anchor + 1; next <= PORT_BAND_LAST; next += 1) {
       try {
         writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' });
-      } catch {
+      } catch (err) {
+        refused.push(`${next} claim ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
         continue;
       }
       try {
         opened.push(await bind(next, host));
-      } catch {
+      } catch (err) {
         rmSync(portClaimPath(next), { force: true });
+        refused.push(`${next} bind ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
         continue;
       }
       rmSync(portClaimPath(next), { force: true });
       return next;
     }
-    return expect.fail('no band port free to put a stranger on in 20 attempts');
+    return expect.fail(
+      `no band port left to put a stranger on between ${anchor + 1} and ${PORT_BAND_LAST} ` +
+        `(host ${host ?? 'wildcard'}): ${refused.join(', ')}`,
+    );
   }
 
   // Every address a stranger can hold the port on. Only the first collides with the production

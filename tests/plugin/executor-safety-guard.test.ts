@@ -1,18 +1,16 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-executor-safety.mjs');
 
 const temps: string[] = [];
-const mutants: string[] = [];
 afterEach(() => {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
-  for (const f of mutants.splice(0)) rmSync(f, { force: true });
 });
 
 type Run = { status: number; stdout: string; stderr: string };
@@ -61,16 +59,35 @@ function runGuard(source?: string, fileName = 'subject.ts'): Run {
   return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
 }
 
-// A mutant is the guard with one rule ablated. It has to live beside the real one so that its
-// `import ts from 'typescript'` resolves against the repo's node_modules.
+// A mutant is the guard with one rule ablated. It lives in a temp directory with a node_modules
+// symlink, NOT in scripts/, so that `import ts from 'typescript'` still resolves while the file
+// stays OUT OF THE TRACKED TREE (#106 finding 1). As `scripts/.mutant-<random>.mjs` it raced the
+// sibling guard: `tests/plugin/bound-port-literals-guard.test.ts` runs that guard over `.`, its
+// readFileSync hit a mutant this suite had already unlinked, and an ENOENT there is exit 2 — an
+// abort that prints no mark, so the sweep's expected set silently lost `.`.
+// REJECTED: letting assert-no-bound-port-literals.mjs tolerate a vanished file. That guard draws
+// the line between "could not look" (exit 2) and "looked and found" (exit 1) on purpose, and
+// teaching it to skip an unreadable entry is the #85 defect class — a tree that scanned less than
+// it claims, reported green. The mutant is the thing that does not belong in the repository.
 function mutate(edits: Array<[string, string]>): string {
   let code = readFileSync(GUARD, 'utf8');
   for (const [find, replace] of edits) {
     expect(code, `mutation anchor missing: ${find.slice(0, 60)}`).toContain(find);
     code = code.replace(find, replace);
   }
-  const path = join(root, 'scripts', `.mutant-${Math.random().toString(36).slice(2)}.mjs`);
-  mutants.push(path);
+  // A sandbox shaped like the repository root, by symlink, so the mutant's own `root` — which it
+  // computes as `<its directory>/..` and which every relative scan argument and every reported
+  // path is resolved against — still answers the way the real guard's does. `node_modules` carries
+  // `import ts from 'typescript'` and is what the empty-root ablation must find itself walking;
+  // `tests` and `src` are the two relative roots the ablations below name. Nothing is copied and
+  // nothing is written inside the repository.
+  const dir = mkdtempSync(join(tmpdir(), 'executor-guard-mutant-'));
+  temps.push(dir);
+  for (const mirror of ['node_modules', 'tests', 'src']) {
+    symlinkSync(join(root, mirror), join(dir, mirror));
+  }
+  mkdirSync(join(dir, 'scripts'));
+  const path = join(dir, 'scripts', 'mutant.mjs');
   writeFileSync(path, code);
   return path;
 }
@@ -519,6 +536,17 @@ export const f = (server: { listen: (p: number) => void }, port: number) =>
     // ONE ABLATION PER RULE, as for the detection rules below: remove the rule from a copy of the
     // guard and the fixture that pins it must change its verdict. A rule no fixture distinguishes
     // fails here, now.
+    // #106 finding 1, as a position rather than a race: a mutant under scripts/ was read by the
+    // sibling guard's sweep over `.` and unlinked by this suite's afterEach mid-read, which is
+    // exit 2, which prints no mark, which lost `.` from the expected set in
+    // tests/plugin/bound-port-literals-guard.test.ts:125. Nothing inside the repository, nothing
+    // for any sweep to race. Red if a mutant goes back under scripts/.
+    it('writes every mutant outside the repository, where no sweep over . can race it', () => {
+      const path = mutate([]);
+      expect(relative(root, path), path).toMatch(/^\.\./);
+      expect(existsSync(path)).toBe(true);
+    });
+
     it('ablated: a mark that is not stat-ed accepts a directory and a symlink again', () => {
       const ablated = mutate([[' && lstatSync(ENTRY_PATH).isFile()', '']]);
       for (const what of ['a directory', 'a symlink out of the tree'] as const) {

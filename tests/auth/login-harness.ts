@@ -5,7 +5,7 @@
 import { expect, beforeEach, afterEach, vi } from 'vitest';
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createServer as createHttpServer, type Server } from 'node:http';
@@ -228,8 +228,42 @@ function claimPort(port: number): boolean {
 // skipping without a claim: a bind error that is not EADDRINUSE is a property of the HOST, not of
 // the port, so every candidate would fail the same way and the band would be walked to the end
 // before saying anything.
-const PROBE_ADDRESSES = ['0.0.0.0', '127.0.0.1', '::1'] as const;
+// `::` IS THE FOURTH ADDRESS, and it was missing. Found by the control run for #106 finding 3:
+// `createServer().listen(port)` with no host binds `::` on macOS, and the probe could not see that
+// holder at all — 0.0.0.0, 127.0.0.1, ::1 and every routable address below are each a DIFFERENT
+// address, and macOS's SO_REUSEADDR lets a specific or differently-scoped wildcard bind succeed
+// beside one. Measured: freePort() returned 29559 as free while a concurrent run held `::` on it,
+// and the very next `createServer().listen(29559)` in the test threw
+// `listen EADDRINUSE: address already in use :::29559`. The two wildcards are the two shapes a
+// production or test bind with no host actually takes, so both are probed.
+const PROBE_ADDRESSES = ['0.0.0.0', '::', '127.0.0.1', '::1'] as const;
 const PROBE_TIMEOUT_MS = 2_000;
+
+// THE ROW THE TABLE ABOVE WAS MISSING (#106 finding 2): holder on a ROUTABLE address of this host.
+// On macOS all three addresses above stay bindable beside it — the same SO_REUSEADDR that makes the
+// wildcard production bind succeed next to a specific socket also lets the 0.0.0.0 PROBE succeed
+// next to one — so portHeldOn answered '' FREE and freePort() handed the port out. Measured with a
+// foreign listener on 100.107.185.44:51348: status=0, no address named. What then reddens is
+// tests/auth/oauth-flow.dual-bind.test.ts:79, which asserts a non-loopback address of this host
+// refuses the connection and read 'connected' instead — 1 of 3 full runs.
+//
+// There is no way to ask for a bind without SO_REUSEADDR from node, so the specific addresses are
+// probed one by one, discovered rather than listed. Link-local is left out (an IPv6 scopeid other
+// than 0): it needs a scope to bind and is not an address a stranger is reachable on anyway.
+//
+// NON-STRICT, and that is the whole difference from the three above: a bind error other than
+// EADDRINUSE on a discovered address is SKIPPED, not thrown. A deprecated or temporary IPv6
+// privacy address answers EADDRNOTAVAIL, and an address this host cannot bind is not one a
+// stranger can be listening on either. The strict contract — "I could not look" is never read as
+// an answer — stays exactly where it was measured to matter: on the addresses the CALLER names,
+// which is what tests/auth/foreign-listener-port.test.ts:92 pins with 192.0.2.1.
+function routableAddresses(): string[] {
+  const found = Object.values(networkInterfaces())
+    .flat()
+    .filter((i) => i !== undefined && !i.internal && !(i.family === 'IPv6' && i.scopeid !== 0))
+    .map((i) => i!.address);
+  return [...new Set(found)];
+}
 
 // How many candidates may be PROBED in one pass of freePort() before it moves on. Not how many may
 // be examined: a port another run has claimed costs a link() and no probe at all, and the claims
@@ -246,10 +280,17 @@ const PROBE_TIMEOUT_MS = 2_000;
 export const MAX_PROBES_PER_ACQUISITION = 64;
 
 export function portHeldOn(port: number, addresses: readonly string[] = PROBE_ADDRESSES): string {
+  // [host, strict] — strict hosts throw on a bind error that is not EADDRINUSE, discovered ones
+  // are skipped. See routableAddresses() above for why the two classes differ.
+  const hosts = [
+    ...addresses.map((h) => [h, true] as const),
+    ...routableAddresses().map((h) => [h, false] as const),
+  ];
   const probe =
     `const n=require('node:net'),{writeSync}=require('node:fs'),{once}=require('node:events');` +
-    `(async()=>{for(const h of ${JSON.stringify(addresses)}){const s=n.createServer();s.listen(${port},h);` +
-    `try{await once(s,'listening')}catch(e){writeSync(1,e.code+' '+h);process.exit(e.code==='EADDRINUSE'?1:2)}` +
+    `(async()=>{for(const [h,strict] of ${JSON.stringify(hosts)}){const s=n.createServer();s.listen(${port},h);` +
+    `try{await once(s,'listening')}catch(e){if(e.code==='EADDRINUSE'||strict){` +
+    `writeSync(1,e.code+' '+h);process.exit(e.code==='EADDRINUSE'?1:2)}continue}` +
     `s.close();await once(s,'close')}process.exit(0)})()`;
   const run = spawnSync(process.execPath, ['-e', probe], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8' });
   if (run.status === 0) return '';
