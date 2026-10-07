@@ -1,6 +1,17 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, linkSync, readFileSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  linkSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  truncateSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { createServer, type RequestListener, type Server } from 'node:http';
@@ -164,17 +175,30 @@ describe('the sweep that reclaims the band', () => {
    * and the staging file a concurrent `claimPort()` creates is precisely the next allocation: a
    * flake built into the branch whose job is to remove flakes. A second link keeps the number
    * allocated, so nothing created after this call can be given it.
+   *
+   * OUTSIDE CLAIM_DIR, in a directory of this file's own. Inside it the pin is just another entry
+   * for `sweepDeadClaims()` to judge: it carries the claim's own dead-or-empty pid and does not
+   * start with STAGING_PREFIX, so the very sweep under test removed it, the inode was freed
+   * anyway, and the guarantee in this comment was false. Same tmpdir, so `linkSync` stays on one
+   * filesystem.
+   *
+   * It returns the inode or throws. `null` would mean the planted claim was gone before the
+   * sweep — the case the assertion exists for cannot have happened — and `expect(x).not.toBe(null)`
+   * would then be true of any file at all, degrading the check to nothing without saying so.
    */
-  function pinInode(claim: string): number | null {
+  function pinInode(claim: string): number {
     const ino = inodeOf(claim);
-    if (ino === null) return null;
-    const pin = `${claim}.inode-pin-${randomUUID()}`;
+    if (ino === null) throw new Error(`nothing to pin: ${claim} was already gone before the sweep`);
+    const pin = join(pinDir(), randomUUID());
     linkSync(claim, pin);
     planted.push(pin);
     return ino;
   }
 
-  function expectReclaimed(claim: string, plantedOwner: string, inodeBefore: number | null): void {
+  let pins: string | null = null;
+  const pinDir = (): string => (pins ??= mkdtempSync(join(tmpdir(), 'claim-inode-pins-')));
+
+  function expectReclaimed(claim: string, plantedOwner: string, inodeBefore: number): void {
     const owner = claimOwner(claim);
     if (owner === null) return;
     expect(owner).toMatch(/^\d+$/);
@@ -193,6 +217,8 @@ describe('the sweep that reclaims the band', () => {
 
   afterEach(() => {
     for (const path of planted.splice(0)) rmSync(path, { force: true });
+    if (pins) rmSync(pins, { recursive: true, force: true });
+    pins = null;
   });
 
   // The defect itself. A staging file mid-write is EMPTY and LIVE at the same time, and the sweep
@@ -231,6 +257,23 @@ describe('the sweep that reclaims the band', () => {
     const before = pinInode(claim);
     sweepDeadClaims();
     expectReclaimed(claim, '', before);
+  });
+
+  // The pin has to survive the sweep it is pinning ACROSS, or it pins nothing. Its first spelling
+  // put the link inside CLAIM_DIR, where it is simply another entry: it carried the claim's own
+  // dead-or-empty pid, did not start with STAGING_PREFIX, and `sweepDeadClaims()` removed it in the
+  // same call — the inode was freed anyway and the guarantee was false while reading as true.
+  it('holds the pinned inode across the sweep, which is the only thing that makes the check real', () => {
+    const port = freePort();
+    const claim = portClaimPath(port);
+    truncateSync(claim, 0);
+    const before = pinInode(claim);
+    const pin = planted[planted.length - 1];
+
+    sweepDeadClaims();
+
+    expect(existsSync(pin), 'the pin was swept with the claim').toBe(true);
+    expect(statSync(pin).ino).toBe(before);
   });
 
   it('reclaims a claim whose owner has exited, and keeps one whose owner is alive', () => {
