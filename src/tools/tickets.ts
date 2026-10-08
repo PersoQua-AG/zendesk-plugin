@@ -103,7 +103,23 @@ export interface NewTicketInput {
   followupSourceId?: number;
 }
 
-export function buildComment(text: string, useMarkdown: boolean, isPublic: boolean): Record<string, unknown> {
+// #64: visibility is opt-in. An omitted `public` means an INTERNAL note, because publishing an
+// internal remark to the customer cannot be undone while an internal note can be reposted.
+// Four comment-writing surfaces, four defaults, and NONE of them is this parameter for MCP traffic:
+// every registered surface publishes its own default in the schema, so `public` arrives already
+// resolved. addComment (src/tools/ticket-comments.ts) and createTicket below are this function's
+// only two callers, and their register-layer defaults fire first; zendesk_create_tickets_bulk
+// bypasses this function entirely (it forwards raw Zendesk records to create_many, so
+// bulkCreateTicketSchema in src/register/tickets.ts is its one funnel).
+// This parameter default is therefore the backstop for callers that do NOT come through MCP, and
+// the reason the type keeps `public` optional. Removing either layer is a silent regression, so
+// both are pinned.
+// The fourth surface, zendesk_apply_macro_to_ticket (applyMacroToTicket in
+// src/tools/business-rules/macros.ts), resolves no default at all: scoped out of #64 because the
+// macro's author chooses the visibility in Zendesk and the model cannot set the flag — tracked
+// in #116. Symbols, not line numbers: a line number in a comment is unchecked and drifts (the
+// same reason tm-9-failcheck lost its own).
+export function buildComment(text: string, useMarkdown: boolean, isPublic = false): Record<string, unknown> {
   return useMarkdown
     ? { html_body: markdownToHtml(text), public: isPublic }
     : { body: text, public: isPublic };
@@ -116,7 +132,7 @@ export async function createTicket(
 ): Promise<{ summary: string; cacheHandle: string }> {
   const ticket: Record<string, unknown> = {
     subject: params.subject,
-    comment: buildComment(params.comment, params.markdown, params.public ?? true),
+    comment: buildComment(params.comment, params.markdown, params.public),
   };
   if (params.requesterId !== undefined) ticket.requester_id = params.requesterId;
   if (params.priority) ticket.priority = params.priority;
