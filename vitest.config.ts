@@ -49,10 +49,10 @@ export default defineConfig({
       reporter: ['text', 'lcov'],
       thresholds: {
         // Set from the measured state, not from a wish: measured on this branch on 2026-10-08 the
-        // suite stands at 98.84% statements / 93.49% branches / 98.37% functions / 98.84% lines (it
+        // suite stands at 98.84% statements / 93.50% branches / 98.37% functions / 98.84% lines (it
         // was 97.98/88.50/97.10/97.98 when these floors were written). The floors are absolute
         // minima, not a ratchet: they catch a collapse, not a regression — today the headroom above
-        // them is 6.49 points on branches, 2.37 on functions and 1.84 on statements and lines, and
+        // them is 6.50 points on branches, 2.37 on functions and 1.84 on statements and lines, and
         // any drop inside that band ships green. They stay far above the 80% project minimum, which
         // as a floor here would license a slow decay down to it.
         statements: 97,
