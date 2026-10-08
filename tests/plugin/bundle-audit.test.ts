@@ -1073,6 +1073,22 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     // `1.0.0-rc.1` and `1.0.0+build.5`, and plain `1.0.0` is makeTree()'s default and so already
     // the subject of 'a clean bundle passes'. The case exists because a validation that bricks a
     // real release would be worse than the traversal it prevents.
+    // A LENGTH IS ALSO A FILE-NAME PROPERTY. 242 characters pass the charset gate and produce a
+    // 262-byte checksum name, over the 255-byte limit for one path component — with `root`
+    // perfectly readable. Before this gate the run reported a "stale artifact" at a path that
+    // cannot exist and never named the version.
+    it('refuses a version too long to form a file name, and says that is what is wrong', () => {
+      const v = 'a'.repeat(242);
+      const tree = makeTree({ manifestVersion: v, packageVersion: v, entries: clean(v) });
+      const run = runAudit(tree);
+      expect(run.status).toBe(2);
+      expect(run.stderr).toContain('the declared version is 242 characters, which makes the release name 262 bytes');
+      expect(run.stderr).not.toContain('could not be cleared');
+      expect(run.stderr).not.toContain('ENAMETOOLONG');
+      expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
+      expect(existsSync(tree.bundle)).toBe(true);
+    });
+
     it('still releases a full semver with prerelease and build metadata', () => {
       const v = '1.0.0-rc.1+exp.sha.5114f85';
       const tree = makeTree({ manifestVersion: v, packageVersion: v, entries: clean(v) });

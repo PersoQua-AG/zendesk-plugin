@@ -471,15 +471,29 @@ const declaredVersion = manifest?.version ?? pkg?.version ?? null;
 // The charset does the escaping work on its own: no `/`, no `\`, so nothing that passes can leave
 // `root`. A separate `..` clause was belt over braces and only rejected strings like `1..2`, which
 // are not versions anyway.
-const version = typeof declaredVersion === 'string' && /^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(declaredVersion) ? declaredVersion : null;
+const charsetOk = typeof declaredVersion === 'string' && /^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(declaredVersion);
+// AND SHORT ENOUGH TO BE ONE. A single path component is capped at 255 bytes (APFS, HFS+, ext4),
+// and the longest name derived from the version is the checksum's. Over that, every fs call on the
+// slot throws ENAMETOOLONG — with `root` perfectly readable. Measured with a 242-character
+// version: `nameState` answered 'unknown', the run reported a "stale artifact" that was not there
+// and could never be gone, and the real fault was never named. It is named here, where the version
+// is judged, because that is what it is about.
+const NAME_LIMIT = 255;
+const slotNameBytes = (v) => Buffer.byteLength(`${basename(ownBundlePath, '.mcpb')}-${v}.mcpb.sha256`);
+const version = charsetOk && slotNameBytes(declaredVersion) <= NAME_LIMIT ? declaredVersion : null;
 if (version === null) {
   const why =
     declaredVersion === null || declaredVersion === undefined
       ? 'neither manifest.json nor package.json declares a version'
       : typeof declaredVersion !== 'string'
         ? `the declared version ${JSON.stringify(declaredVersion)} is ${typeof declaredVersion}, not a string`
-        : `the declared version ${JSON.stringify(declaredVersion)} is not a usable file-name component` +
-          ' (letters, digits, dot, plus and hyphen only)';
+        : charsetOk
+          ? // Not quoted back: it is at least 236 characters, and its length is the whole finding.
+            `the declared version is ${declaredVersion.length} characters, which makes the release` +
+            ` name ${slotNameBytes(declaredVersion)} bytes — over the ${NAME_LIMIT}-byte limit for one` +
+            ' path component'
+          : `the declared version ${JSON.stringify(declaredVersion)} is not a usable file-name component` +
+            ' (letters, digits, dot, plus and hyphen only)';
   treeFaults.push(`${why} — the release version cannot be established`);
 }
 
@@ -544,19 +558,17 @@ process.on('exit', (code) => {
 function clearStaleArtifact() {
   if (!artifactPath || !ownBundle) return;
   for (const stale of [artifactPath, checksumPath]) {
-    // `state` is only ever asked "was it there", because that is the only question whose answer
-    // changes a message. A separate 'unknown' arm was written here and taken back out: it is
-    // unreachable without `root` itself being unreadable, in which case the rmSync below fails too
-    // and reports "could not be cleared", which is true. A branch no fixture can reach is a branch
-    // no fixture can pin — the same reasoning that removed the name re-check in the quarantine.
-    const state = nameState(stale);
+    // Only ever asked "was it there", because that is the only question whose answer changes a
+    // message. 'unknown' has no arm: the one route to it with a readable `root` was a path
+    // component over 255 bytes, and the version gate above refuses that by its real name now.
+    const wasThere = nameState(stale);
     try {
       // `force: true` suppresses ENOENT and nothing else: a slot that is a DIRECTORY throws
       // ERR_FS_EISDIR whether it is empty or not (measured — an earlier comment here said
       // "non-empty", which is wrong), and an unwritable parent throws EACCES. Unguarded, that
       // throw ended the run as a stack trace.
       rmSync(stale, { force: true });
-      if (state === 'taken') cleared.push(basename(stale));
+      if (wasThere === 'taken') cleared.push(basename(stale));
     } catch (error) {
       treeFaults.push(
         `the stale artifact ${basename(stale)} could not be cleared: ${error.code ?? error.message}` +
