@@ -18,7 +18,7 @@
 // Zero deps — plain Node, including the ZIP reader (a .mcpb is a ZIP). It is excluded from the
 // bundle by .mcpbignore's `scripts/` line.
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -338,41 +338,6 @@ const pkg = readJson(join(root, 'package.json'), 'package.json', problems);
 const manifest = readJson(join(root, 'manifest.json'), 'manifest.json', problems);
 const version = manifest?.version ?? pkg?.version ?? null;
 
-// "Is there a name here", for the quarantine below. `existsSync` follows the link, so a dangling
-// artifact link reads as absent while still standing in the directory under its publishable name.
-// A path that cannot be stat'ed at all counts as taken, so the quarantine is attempted rather than
-// skipped on an error.
-const nameIsTaken = (p) => {
-  try {
-    // `lstat` FOR EXISTENCE. A dangling symlink is a name somebody can upload, and `existsSync`
-    // follows the link and says it is not there.
-    if (lstatSync(p, { throwIfNoEntry: false }) === undefined) return false;
-    // `stat` FOR SHAPE, which does follow. A BUNDLE IS A REGULAR FILE, or a dangling alias to one
-    // — `stat` answers `undefined` there rather than throwing, so the alias still counts. Anything
-    // else under the publishable name is not something anybody uploads, and renaming it announced
-    // somebody else's thing as CONTAMINATED: measured for a directory, for a symlink to one, and
-    // for a bound AF_UNIX socket, whose refusal quoted `Unknown system error -102`.
-    //
-    // A WHITELIST, not a list of shapes to exclude, because the exclusion list was wrong twice —
-    // first it had only the direct directory, then only directories at all. "Is it a file" has one
-    // answer and does not grow.
-    //
-    // ONE STAT CANNOT ANSWER BOTH QUESTIONS. A followed stat alone throws nothing but reports
-    // nothing either for a dangling link, which the existence check above is what distinguishes;
-    // an lstat alone cannot see through an alias. Guarding on `bundle` used to make the direct
-    // directory safe BY ACCIDENT — `readFileSync` throws EISDIR and the buffer stayed null — and
-    // moving the guard to the name made the loss reachable. An accidental protection replaced by a
-    // deliberate one.
-    const target = statSync(p, { throwIfNoEntry: false });
-    return target === undefined || target.isFile();
-  } catch {
-    // Not ENOENT — `throwIfNoEntry: false` already answers that. EACCES and the like mean the name
-    // may well be there, so it counts as taken and the quarantine is attempted; its own catch
-    // reports what happened rather than this skipping it in silence.
-    return true;
-  }
-};
-
 // A stale artifact from an earlier, passing run must not survive a failing one — otherwise "no
 // artifact is published" holds only for the operator who never released this bundle before.
 const artifactPath = version ? join(dirname(bundlePath), `${basename(bundlePath, '.mcpb')}-${version}.mcpb`) : null;
@@ -419,11 +384,28 @@ let bundle = null;
 let entries = [];
 let readable = false;
 try {
+  // TWO TRIES, and the split is the owner decision of 2026-10-08: COULD NOT LOOK is housekeeping,
+  // WAS LOOKED AT AND IS NOT A BUNDLE is contamination. A missing read permission says nothing
+  // about the content, so it may not rename somebody's file and call it CONTAMINATED.
   bundle = readFileSync(bundlePath);
-  entries = readArchive(bundle);
-  readable = true;
 } catch (error) {
-  problems.push(`${basename(bundlePath)} could not be read as a bundle: ${error.message}`);
+  housekeepingFailed = true;
+  housekeepingProblems += 1;
+  // The PATH IN FULL, not its basename: this line is the whole report for this run, and the reader
+  // has to know which of several trees the audit was refused in.
+  problems.push(
+    `could not read ${bundlePath}: ${error.message}` +
+      ' — the audit could not look inside it, so it says nothing about the content.' +
+      ' The file is left where it is; make it readable and audit again',
+  );
+}
+if (bundle) {
+  try {
+    entries = readArchive(bundle);
+    readable = true;
+  } catch (error) {
+    problems.push(`${basename(bundlePath)} could not be read as a bundle: ${error.message}`);
+  }
 }
 
 // An empty archive passes every path rule there is. That is a vacuous pass, not a clean bundle.
@@ -518,15 +500,14 @@ if (problems.length > 0) {
   // secret inside it — the one somebody would upload. It is renamed rather than deleted so the
   // evidence survives for whoever has to find out how it got in.
   //
-  // THE CONDITION IS "THERE IS A NAME HERE", not "we managed to read it". `bundle` is the BUFFER:
-  // it is null for every read that threw — EACCES, EISDIR, a mid-pack truncation — and on exactly
-  // those runs the file is still sitting under its publishable name. Guarding on it skipped the
-  // quarantine on the cases that need it most, which is the #90 defect one level down. `lstat`
-  // rather than `existsSync`, because `existsSync` follows the link and a dangling symlink under
-  // the publishable name read as absent; a path this cannot stat at all counts as TAKEN, so the
-  // quarantine is attempted and its own catch reports what happened.
+  // THE CONDITION IS "WE READ IT AND IT IS UNFIT" — owner decision of 2026-10-08. `bundle` is the
+  // BUFFER: it is null for every read that threw, and a path the audit could not look inside is
+  // REPORTED, not quarantined, because a missing read permission is not contamination. The buffer
+  // is also the whole shape question answered at once, which a stat pair answered wrongly twice:
+  // `readFileSync` throws EISDIR for a directory, ENOENT through a dangling alias and ENXIO or
+  // EOPNOTSUPP for a socket, so nothing but a regular file the audit actually read gets renamed.
   let quarantined = null;
-  if (bundleIsUnfit && nameIsTaken(bundlePath)) {
+  if (bundleIsUnfit && bundle !== null) {
     quarantined = `${bundlePath}.REJECTED`;
     try {
       // `recursive` so an unpacked earlier quarantine in the slot cannot keep the rename from running.

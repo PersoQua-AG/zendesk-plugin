@@ -9,12 +9,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as createUnixServer } from 'node:net';
 import { crc32, deflateRawSync } from 'node:zlib';
@@ -229,8 +230,7 @@ function audit(entries: ZipEntry[]): Run {
   return runAudit(makeTree({ entries }));
 }
 
-/** Whether a NAME exists, which a dangling symlink does and `existsSync` says it does not. The
- * script's own nameIsTaken() adds a directory rule on top of this; do not read them as the same. */
+/** Whether a NAME exists, which a dangling symlink does and `existsSync` says it does not. */
 function nameExists(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 }
@@ -418,75 +418,95 @@ describe('a stale artifact that cannot be cleared', () => {
 });
 
 // =============================================================================================
-// Scenario: the quarantine itself is skipped or mis-reported (#90, one level down)
+// Scenario: the audit could not look inside the path under the publishable name
+// (#90, one level down — resolved by the owner decision of 2026-10-08)
 //
-// The quarantine was guarded on `bundle`, the BUFFER — so every run whose read threw left the file
-// lying under its publishable name, unquarantined and unmentioned. And when the rename failed, the
-// run still exited 1, "a bundle to fix", when what it meant was "a tree to fix, by hand".
+// REPORTED, NOT QUARANTINED. A missing read permission says nothing about the content, so it may
+// not rename the file and announce it CONTAMINATED. The quarantine is guarded on `bundle`, the
+// BUFFER: a path the audit read and found unfit is moved, a path it could not read is named in
+// full and left standing. The code is 2, the housekeeping code, because what has to be fixed is
+// the tree and not the bundle — the same side of the line as an artifact slot that cannot be
+// cleared, which is where "could not look" belongs.
+//
+// Before the decision each of these runs renamed the path to `.REJECTED` and printed
+// `zendesk.mcpb is CONTAMINATED` at exit 1. Ablate the split (one try around readFileSync and
+// readArchive again, the problem on the contamination side) and every case here goes red on its
+// own assertion.
 // =============================================================================================
-describe('a bundle the audit could not read', () => {
-  // Unreadable AND still present: a DANGLING symlink. `existsSync` follows the link, so it read as
-  // absent for both the guard and a naive assertion; lstat is what sees the name.
-  it('quarantines it anyway — a name it could not read is still a name somebody can upload', () => {
+describe('a path the audit could not read', () => {
+  /** The whole decision, in one place, so the four shapes cannot drift apart. */
+  function expectReportedNotQuarantined(run: Run, tree: Tree): void {
+    // THE SIDE EFFECT FIRST, and deliberately: it is the decision. Exit 1 and exit 2 are both
+    // non-zero and neither can say whether somebody's file is still where they left it.
+    expect(nameExists(tree.bundle), 'the path was taken out of its name').toBe(true);
+    expect(nameExists(`${tree.bundle}.REJECTED`), 'a path the audit could not read was quarantined').toBe(false);
+    expect(run.stderr, 'a path the audit could not read was called contaminated').not.toContain('CONTAMINATED');
+    expect(run.status, 'a tree to fix is exit 2, not the bundle verdict 1').toBe(2);
+    expect(run.stderr, 'the verdict was put on the bundle').toContain('this tree cannot publish');
+    // Loudly AND BY NAME, in full: this line is the entire report for such a run. `realpathSync`
+    // on the DIRECTORY, not on the bundle — a dangling alias has no real path of its own, and the
+    // script resolves its root through fileURLToPath, which hands back /private/var on macOS.
+    const named = join(realpathSync(tree.dir), basename(tree.bundle));
+    expect(run.stderr, 'the report does not name the path it could not read').toContain(`could not read ${named}`);
+    expect(run.stderr).toContain('could not look inside it');
+  }
+
+  // THE DECIDED CASE, verbatim: "a missing read permission is not contamination". A mode bit, so
+  // root is told rather than passing for the wrong reason.
+  it.skipIf(process.getuid?.() === 0)('reports a file it could not read for permissions, and leaves it standing', () => {
+    const tree = makeTree();
+    chmodSync(tree.bundle, 0o000);
+    try {
+      expectReportedNotQuarantined(runAudit(tree), tree);
+    } finally {
+      // Whichever name the mode-000 file ended up under, so the temp tree stays removable and an
+      // ablated run goes red on its assertion instead of on this line.
+      for (const p of [tree.bundle, `${tree.bundle}.REJECTED`]) if (nameExists(p)) chmodSync(p, 0o644);
+    }
+  });
+
+  // A DANGLING symlink: ENOENT rather than EACCES, and the same answer. `existsSync` follows the
+  // link and says the name is not there, so the assertion is on `lstat`.
+  it('reports a dangling alias under the publishable name without moving it', () => {
     const tree = makeTree();
     rmSync(tree.bundle);
     symlinkSync(join(tree.dir, 'nothing-here.mcpb'), tree.bundle);
-    const run = runAudit(tree);
 
-    // `toBe(1)`, not `not.toBe(0)`: this commit's subject IS the 1-vs-2 split, and its sibling
-    // below pins the 2 side exactly.
-    expect(run.status).toBe(1);
-    expect(nameExists(tree.bundle), 'the publishable name is still there').toBe(false);
-    expect(nameExists(`${tree.bundle}.REJECTED`), 'nothing was quarantined').toBe(true);
-    expect(run.stderr).toContain('CONTAMINATED');
-    expectNoSecretEchoed(run);
+    expectReportedNotQuarantined(runAudit(tree), tree);
   });
 
-  // A DIRECTORY IS NOT QUARANTINED. Guarding on `bundle` made that true by accident — readFileSync
-  // of a directory throws EISDIR, so the buffer stayed null and the quarantine was skipped — and
-  // moving the guard to the NAME made the loss reachable: measured,
-  // `audit-bundle.mjs ./important-project` renamed the whole tree to `.REJECTED`.
-  it('refuses a directory under the publishable name without moving it', () => {
+  // A DIRECTORY, which is the shape that made the pre-decision code dangerous: measured,
+  // `audit-bundle.mjs ./important-project` renamed a whole tree to `.REJECTED`. `readFileSync`
+  // answers EISDIR, so the buffer stays null and the one rule covers it with no shape list.
+  it('reports a directory under the publishable name without moving it', () => {
     const tree = makeTree();
     rmSync(tree.bundle);
     mkdirSync(tree.bundle);
-    writeFileSync(join(tree.bundle, 'main.ts'), 'somebody\'s actual work');
+    writeFileSync(join(tree.bundle, 'main.ts'), "somebody's actual work");
     const run = runAudit(tree);
 
-    // `toBe(1)`, not `not.toBe(0)`: 2 would mean housekeeping failed, which is the opposite claim.
-    expect(run.status).toBe(1);
+    expectReportedNotQuarantined(run, tree);
     expect(existsSync(join(tree.bundle, 'main.ts')), 'the directory was moved').toBe(true);
-    expect(nameExists(`${tree.bundle}.REJECTED`), 'a directory was quarantined').toBe(false);
-    expect(run.stderr).not.toContain('CONTAMINATED');
     expectNoSecretEchoed(run);
   });
 
-  // AND THROUGH AN ALIAS TO ONE. `lstat` does not follow, so a symlink whose target is a directory
-  // reported a symlink and was never asked about a directory: measured, the link was renamed to
-  // `.REJECTED` and somebody's tree announced as CONTAMINATED. The damage is bounded to the alias,
-  // but it is the one unintended move the buffer-guard prevented.
-  it('refuses a symlink pointing at a directory without moving the alias', () => {
+  // AND THROUGH AN ALIAS TO ONE, where `lstat` reported a symlink and was never asked about a
+  // directory: measured, the link was renamed and somebody's tree announced as CONTAMINATED.
+  it('reports a symlink pointing at a directory without moving the alias', () => {
     const tree = makeTree();
     const victim = join(tree.dir, 'somebody-elses-tree');
     mkdirSync(victim);
     writeFileSync(join(victim, 'main.ts'), "somebody's actual work");
     rmSync(tree.bundle);
     symlinkSync(victim, tree.bundle);
-    const run = runAudit(tree);
 
-    expect(run.status).toBe(1);
-    expect(nameExists(tree.bundle), 'the alias was renamed').toBe(true);
+    expectReportedNotQuarantined(runAudit(tree), tree);
     expect(existsSync(join(victim, 'main.ts')), 'the target was touched').toBe(true);
-    expect(nameExists(`${tree.bundle}.REJECTED`)).toBe(false);
-    expect(run.stderr).not.toContain('CONTAMINATED');
   });
 
-  // AND A SOCKET, which the first two spellings of the shape rule both let through: it excluded
-  // the direct directory, then directories at all. Measured, a bound AF_UNIX socket under the
-  // publishable name was renamed to `.REJECTED` and announced CONTAMINATED, the refusal quoting
-  // `Unknown system error -102`. The rule is a whitelist now — a bundle is a regular file, or a
-  // dangling alias to one — because "is it a file" has one answer and does not grow.
-  it('refuses a socket under the publishable name without moving it', async () => {
+  // AND A SOCKET. `readFileSync` refuses it too, so it needs no rule of its own; the errno differs
+  // per platform, which is why the shared helper asserts the outcome and not the message.
+  it('reports a socket under the publishable name without moving it', async () => {
     const tree = makeTree();
     rmSync(tree.bundle);
     const server = createUnixServer();
@@ -495,32 +515,24 @@ describe('a bundle the audit could not read', () => {
       server.listen(tree.bundle, () => bound());
     });
     try {
-      const run = runAudit(tree);
-      expect(run.status).not.toBe(0);
-      expect(nameExists(tree.bundle), 'the socket was moved').toBe(true);
-      expect(nameExists(`${tree.bundle}.REJECTED`)).toBe(false);
-      expect(run.stderr).not.toContain('CONTAMINATED');
+      expectReportedNotQuarantined(runAudit(tree), tree);
     } finally {
       await new Promise<void>((done) => server.close(() => done()));
       rmSync(tree.bundle, { force: true });
     }
   });
 
-  // THE EACCES SHAPE IS THE HEADLINE JUSTIFICATION for guarding on the name at all — `bundle` is
-  // null for every read that threw, and that is exactly when the file is still lying there — and it
-  // was pinned by nothing. A mode bit, so root is told rather than passing for the wrong reason.
-  it.skipIf(process.getuid?.() === 0)('quarantines a file it could not read for permissions', () => {
-    const tree = makeTree();
-    chmodSync(tree.bundle, 0o000);
-    try {
-      const run = runAudit(tree);
-      expect(run.status).toBe(1);
-      expect(nameExists(tree.bundle), 'the publishable name is still there').toBe(false);
-      expect(nameExists(`${tree.bundle}.REJECTED`), 'nothing was quarantined').toBe(true);
-      expect(run.stderr).toContain('CONTAMINATED');
-    } finally {
-      if (existsSync(`${tree.bundle}.REJECTED`)) chmodSync(`${tree.bundle}.REJECTED`, 0o644);
-    }
+  // THE OTHER SIDE OF THE LINE, and #90's own reproduction: a bundle the audit DID read and found
+  // not to be an archive is still quarantined at exit 1. The decision moved "could not look", not
+  // "looked and refused".
+  it('still quarantines a bundle it read and could not parse', () => {
+    const tree = makeTree({ raw: Buffer.from('not a zip') });
+    const run = runAudit(tree);
+
+    expect(run.status).toBe(1);
+    expect(nameExists(tree.bundle), 'the publishable name is still there').toBe(false);
+    expect(nameExists(`${tree.bundle}.REJECTED`), 'nothing was quarantined').toBe(true);
+    expect(run.stderr).toContain('CONTAMINATED');
   });
 });
 
@@ -631,7 +643,11 @@ describe('an archive that cannot be judged is refused', () => {
   it('refuses a missing bundle, as a message and not a stack trace', () => {
     const run = runAudit(makeTree(), ['no-such-bundle.mcpb']);
     expect(run.status).not.toBe(0);
-    expect(run.stderr).toContain('could not be read as a bundle');
+    // A path that is not there is a path the audit could not read: reported by name at exit 2,
+    // the same side of the line as every other "could not look" (owner decision, 2026-10-08).
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('could not read ');
+    expect(run.stderr).toContain('no-such-bundle.mcpb');
     expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
   });
 
