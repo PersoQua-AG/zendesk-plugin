@@ -173,6 +173,8 @@ function makeTree(opts: {
   zipOpts?: { declaredCount?: number };
   manifestVersion?: string;
   packageVersion?: string;
+  /** The name the bundle is written under. The release slot is the TREE's and does not follow it. */
+  bundleName?: string;
   // Each pair is asserted to be present before it is applied, so a mutation whose anchor has
   // drifted fails loudly instead of running the unmutated script and passing.
   mutate?: Array<[string, string]>;
@@ -198,7 +200,7 @@ function makeTree(opts: {
     join(dir, 'package.json'),
     JSON.stringify({ name: 'zendesk-plugin', version: opts.packageVersion ?? '1.0.0' }),
   );
-  const bundle = join(dir, 'zendesk.mcpb');
+  const bundle = join(dir, opts.bundleName ?? 'zendesk.mcpb');
   writeFileSync(bundle, opts.raw ?? zip(opts.entries ?? clean(), opts.zipOpts));
   return {
     dir,
@@ -1191,6 +1193,44 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(run.stderr).not.toContain('Already removed before this run finished');
   });
 
+  // THE SLOT IS THE TREE'S, NOT THE ARGUMENT'S. With the stem taken from `basename(bundlePath)`
+  // this tree's own release pair survived a failing run fully uploadable, `cleared` was empty, and
+  // the survival notice looked at `build-1.0.0.mcpb` — a path nobody had ever written.
+  it("clears this tree's release pair when the bundle it audits is under another name", () => {
+    const tree = makeTree({ bundleName: 'build.mcpb', entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    writeFileSync(tree.artifact, 'the release this tree published');
+    writeFileSync(tree.checksum, 'and its checksum');
+    const run = runAudit(tree, ['build.mcpb']);
+    expect(run.status).toBe(1);
+    expect(existsSync(tree.artifact), 'a failing run leaves nothing shippable — #90').toBe(false);
+    expect(existsSync(tree.checksum)).toBe(false);
+    expect(run.stderr).toContain('Already removed before this run finished, and NOT coming back');
+    expect(run.stderr).toContain(basename(tree.artifact));
+    expect(run.stderr).not.toContain('build-1.0.0');
+  });
+
+  // And the pass, which was the worse half: the tree wrote a release name it does not declare.
+  it('writes the release name this tree declares, never one built from the argument', () => {
+    const tree = makeTree({ bundleName: 'build.mcpb' });
+    const run = runAudit(tree, ['build.mcpb']);
+    expect(run.status, run.stderr).toBe(0);
+    expect(existsSync(tree.artifact)).toBe(true);
+    expect(existsSync(join(tree.dir, 'build-1.0.0.mcpb'))).toBe(false);
+  });
+
+  // The same stem, one message further on: the sentence that declines to write an artifact for a
+  // foreign bundle announced `other-1.0.0.mcpb`, a release name this tree does not declare.
+  it('names its own release slot when it declines to write one for a foreign bundle', () => {
+    const tree = makeTree();
+    const elsewhere = mkdtempSync(join(tmpdir(), 'audit-foreign-'));
+    temps.push(elsewhere);
+    copyFileSync(tree.bundle, join(elsewhere, 'other.mcpb'));
+    const run = runAudit(tree, ['./other.mcpb'], elsewhere);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain(`the slot ${basename(tree.artifact)} belongs to the release THIS tree declares`);
+    expect(run.stdout).not.toContain('other-1.0.0');
+  });
+
   // A foreign bundle gets the FULL report. The coverage disclosure is the part its caller most
   // needs — they cannot see this tree — and an early exit had been skipping it.
   it('gives a foreign bundle the coverage disclosure it cannot get anywhere else', () => {
@@ -2076,7 +2116,7 @@ describe('mutation coverage — every rule is pinned by a fixture that notices i
     temps.push(elsewhere);
     const mutate: Array<[string, string]> = [
       [
-        'const bundlePath = positional[0] === undefined ? join(root, \'zendesk.mcpb\') : resolve(positional[0]);',
+        'const bundlePath = positional[0] === undefined ? ownBundlePath : resolve(positional[0]);',
         "const bundlePath = resolve(root, positional[0] ?? 'zendesk.mcpb');",
       ],
     ];

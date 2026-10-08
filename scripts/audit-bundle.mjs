@@ -439,7 +439,10 @@ if (positional.length > 1) {
 // meant `<repo>/x.mcpb` — a file the caller never named, audited and, on a failure, quarantined.
 // An absolute argument is unaffected, and the default is still this repository's own bundle,
 // which is what package.json's `pack` script relies on.
-const bundlePath = positional[0] === undefined ? join(root, 'zendesk.mcpb') : resolve(positional[0]);
+// THIS TREE'S OWN BUNDLE NAME, written once. The release slot below is derived from it and never
+// from the argument.
+const ownBundlePath = join(root, 'zendesk.mcpb');
+const bundlePath = positional[0] === undefined ? ownBundlePath : resolve(positional[0]);
 const problems = [];
 // How many of `problems` are about the archive's VERSION rather than its CONTENT. "CONTAMINATED …
 // Fix the cause (usually .mcpbignore)" is true of a forbidden path, a credential or an entry that
@@ -488,7 +491,13 @@ if (version === null) {
 // release of whatever version this checkout happens to declare, `.sha256` included, in a directory
 // this script had never written to. Both the clearing below and the write on the success path now
 // happen in `root`. For `npm run pack` nothing changes: there the bundle IS in root.
-const artifactPath = version ? join(root, `${basename(bundlePath, '.mcpb')}-${version}.mcpb`) : null;
+// THE STEM IS THE TREE'S TOO, not the argument's. It was `basename(bundlePath, '.mcpb')` while the
+// directory and the number came from the tree, so auditing a bundle under any other name aimed the
+// whole mechanism at a slot that does not exist: measured with `build.mcpb` in this tree, a FAILING
+// run left `zendesk-1.0.0.mcpb` and its `.sha256` fully uploadable, `cleared` empty, and the
+// "STILL THERE and uploadable" notice looking at `build-1.0.0.mcpb`, which nobody had ever written.
+// A PASSING run was worse: it wrote `build-1.0.0.mcpb`, a release name this tree does not declare.
+const artifactPath = version ? join(root, `${basename(ownBundlePath, '.mcpb')}-${version}.mcpb`) : null;
 const checksumPath = artifactPath ? `${artifactPath}.sha256` : null;
 // The slot is this tree's, and WHEN it may be touched is stated where it is touched: the clearing
 // at the verdict below, the write at the success path.
