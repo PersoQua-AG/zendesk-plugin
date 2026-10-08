@@ -541,14 +541,21 @@ const samePlace = (a, b) => {
     return a === b;
   }
 };
+// A SYMLINK IN `root` UNDER THE PUBLISHABLE NAME IS THIS TREE'S BUNDLE, by owner decision: the
+// operator aimed this tree's own name at that file. It falls out of `dirname(bundlePath)` rather
+// than being spelled out, which is why it is written here — the decision had lost its home on the
+// artifact-write path. Pinned in tests/plugin/bundle-audit.test.ts.
 const ownBundle = samePlace(dirname(bundlePath), root);
 
-// WHATEVER THIS RUN REMOVED, IT SAYS SO. One list, filled as the clearing goes, reported once
-// after every verdict — not inside a `catch`, not inside one arm of one paragraph. Four review
-// rounds each found a cell where the operator's published artifact was deleted and the output did
-// not say it: first the sentence claimed the opposite, then the notice reached only the arm with no
-// bundle finding, then only deletions that happened BEFORE a fault. The arms were the defect.
-// A run that removes something names it, and there is no cell left to hide in.
+// WHATEVER THIS RUN REMOVED, IT SAYS SO. One list, filled as the clearing goes, reported once from
+// the exit handler above — not inside a `catch`, not inside one arm of one paragraph. FIVE review
+// rounds each found a cell where a file moved and the output did not say so: the sentence claimed
+// the opposite, then the notice reached only the arm with no bundle finding, then only deletions
+// that happened BEFORE a fault, then only the exits that called the reporting function, and last
+// the cell where the slot being reported on was not this tree's slot at all. The arms were four of
+// the five; the fifth was upstream of the message, in which slot the run was talking about.
+// The claim this makes, and it is a claim an ablation can check rather than a promise: every path
+// this script removes or leaves standing is named, with the reason, on every non-zero exit.
 const cleared = [];
 
 // WHY A SLOT THAT STILL STANDS STILL STANDS. One reason per slot, set by whoever left it standing,
@@ -914,11 +921,11 @@ if (ownBundle) {
     if (leftBehind.length > 0) {
       console.error(`  - could not clean up ${leftBehind.join(' and ')} — DELETE BY HAND, they verify nothing`);
     }
-      console.error(
-        `\n${leftBehind.length > 0 ? 'What is named above verifies nothing and has to go by hand.' : 'No artifact and no checksum were left behind.'}` +
-          ' The bundle is fine and is still under its own name. This is the tree: fix the path and' +
-          ' run the audit again.',
-      );
+    console.error(
+      `\n${leftBehind.length > 0 ? 'What is named above verifies nothing and has to go by hand.' : 'No artifact and no checksum were left behind.'}` +
+        ' The bundle is fine and is still under its own name. This is the tree: fix the path and' +
+        ' run the audit again.',
+    );
     process.exit(2);
   }
 }
