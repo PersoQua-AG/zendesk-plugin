@@ -105,11 +105,16 @@ export interface NewTicketInput {
 
 // #64: visibility is opt-in. An omitted `public` means an INTERNAL note, because publishing an
 // internal remark to the customer cannot be undone while an internal note can be reposted.
-// Resolved here for the two single-comment surfaces only: addComment (src/tools/ticket-comments.ts)
-// and createTicket below. Bulk create bypasses this function — it forwards raw Zendesk records to
-// create_many, so its default is a parse default in src/register/tickets.ts. The macro path
-// (src/tools/business-rules/macros.ts) PUTs the preview's comment verbatim and resolves no default
-// at all; whether a macro author's visibility belongs to #64 is an open owner question.
+// This function has exactly two callers, and they are the only surfaces whose default is resolved
+// here: addComment (src/tools/ticket-comments.ts) and createTicket below.
+// zendesk_create_tickets_bulk bypasses it — it forwards raw Zendesk records to create_many, so its
+// default is a PUBLISHED one in the registered schema (bulkCreateTicketSchema in
+// src/register/tickets.ts) rather than a runtime one. zendesk_apply_macro_to_ticket
+// (applyMacroToTicket in src/tools/business-rules/macros.ts) PUTs the macro preview's comment
+// verbatim and resolves NO default; that is scoped out of #64 because the macro's author chooses
+// the visibility in Zendesk and the model cannot set the flag at all — tracked in #116.
+// Four comment-writing surfaces, three defaults, two of them here. Symbols, not line numbers:
+// a line number in a comment is unchecked and drifts (the same reason tm-9-failcheck lost its own).
 export function buildComment(text: string, useMarkdown: boolean, isPublic = false): Record<string, unknown> {
   return useMarkdown
     ? { html_body: markdownToHtml(text), public: isPublic }
