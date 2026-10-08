@@ -34,7 +34,10 @@ const bulkCreateTicketSchema = ticketUpdateFieldsSchema
         .object({
         body: z.string().min(1).optional(),
         html_body: z.string().min(1).optional(),
-        public: z.boolean().optional(),
+        // #64: bulk create hands its records straight to create_many, where Zendesk's own
+        // default would publish the comment. The schema is the one funnel every record passes,
+        // so the internal-by-default decision is applied here as a parse default.
+        public: z.boolean().optional().default(false),
     })
         .strict(),
     requester_id: z.number().int().positive().optional(),
@@ -54,7 +57,7 @@ export function registerTicketTools(server, ctx) {
     });
     server.registerTool('zendesk_get_tickets_many', { description: 'Get multiple tickets by id (show_many, screened).', inputSchema: { ids: z.array(z.number().int().positive()).min(1) } }, async ({ ids }) => okWithHandle(await getTicketsMany(httpClient, cache, { ids }, securityLevel)));
     server.registerTool('zendesk_create_ticket', {
-        description: 'Create a ticket. The comment is converted Markdown→HTML unless markdown:false.',
+        description: 'Create a ticket. Its first comment is an INTERNAL note unless public:true is passed. The comment is converted Markdown→HTML unless markdown:false.',
         // A ZodObject rather than a raw shape, so `.strict()` reaches the top-level args too (#66).
         inputSchema: z
             .object({
@@ -68,7 +71,7 @@ export function registerTicketTools(server, ctx) {
             groupId: z.number().int().positive().optional(),
             assigneeId: z.number().int().positive().optional(),
             markdown: z.boolean().optional(),
-            public: z.boolean().optional(),
+            public: z.boolean().optional().describe('true = the first comment is visible to the customer. Omitted = internal note (agents only).'),
             // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
             followupSourceId: z.number().int().positive().optional(),
         })
@@ -87,8 +90,13 @@ export function registerTicketTools(server, ctx) {
         return toText(`${r.status.toUpperCase()}: ${r.summary}\n(cache: ${r.cacheHandle})`);
     });
     server.registerTool('zendesk_add_comment', {
-        description: 'Add a public or internal comment to a ticket (Markdown→HTML unless markdown:false).',
-        inputSchema: { ticketId: z.number().int().positive(), body: z.string().min(1), public: z.boolean().optional(), markdown: z.boolean().optional() },
+        description: 'Add a comment to a ticket. Visibility is opt-in: omitting public posts an INTERNAL note that only agents see — pass public:true for a reply the customer receives. Markdown→HTML unless markdown:false.',
+        inputSchema: {
+            ticketId: z.number().int().positive(),
+            body: z.string().min(1),
+            public: z.boolean().optional().describe('true = visible to the customer. Omitted = internal note (agents only).'),
+            markdown: z.boolean().optional(),
+        },
     }, async (args) => okWithHandle(await addComment(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault }, securityLevel)));
     server.registerTool('zendesk_list_comments', { description: 'List a ticket’s comments (cursor-paginated, screened).', inputSchema: { ticketId: z.number().int().positive(), maxRecords: z.number().int().positive().optional() } }, async (args) => okWithHandle(await listComments(httpClient, cache, args, securityLevel)));
     server.registerTool('zendesk_add_ticket_tags', { description: 'Add tags to a ticket. Appends by default; set replace:true to overwrite the full set.', inputSchema: { ticketId: z.number().int().positive(), tags: z.array(z.string()).min(1), replace: z.boolean().optional() } }, async (args) => okWithHandle(await addTicketTags(httpClient, cache, args, securityLevel)));

@@ -103,10 +103,14 @@ export interface NewTicketInput {
   followupSourceId?: number;
 }
 
-export function buildComment(text: string, useMarkdown: boolean, isPublic: boolean): Record<string, unknown> {
+// #64: visibility is opt-in. An omitted `public` means an INTERNAL note, because publishing an
+// internal remark to the customer cannot be undone while an internal note can be reposted. The
+// default lives here alone — every comment-writing path funnels through this function.
+export function buildComment(text: string, useMarkdown: boolean, isPublic?: boolean): Record<string, unknown> {
+  const pub = isPublic ?? false;
   return useMarkdown
-    ? { html_body: markdownToHtml(text), public: isPublic }
-    : { body: text, public: isPublic };
+    ? { html_body: markdownToHtml(text), public: pub }
+    : { body: text, public: pub };
 }
 
 export async function createTicket(
@@ -116,7 +120,7 @@ export async function createTicket(
 ): Promise<{ summary: string; cacheHandle: string }> {
   const ticket: Record<string, unknown> = {
     subject: params.subject,
-    comment: buildComment(params.comment, params.markdown, params.public ?? true),
+    comment: buildComment(params.comment, params.markdown, params.public),
   };
   if (params.requesterId !== undefined) ticket.requester_id = params.requesterId;
   if (params.priority) ticket.priority = params.priority;

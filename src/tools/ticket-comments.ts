@@ -17,8 +17,10 @@ export async function addComment(
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
   if (params.body.trim() === '') throw new Error('Comment body must not be empty.');
-  const isPublic = params.public ?? true;
-  const comment = buildComment(params.body, params.markdown, isPublic);
+  const comment = buildComment(params.body, params.markdown, params.public);
+  // The visibility default is buildComment's (#64); read the resolved flag back so this
+  // summary can never claim a visibility other than the one that was sent.
+  const isPublic = comment.public === true;
   const raw = await client.request<{ ticket: { id: number } }>(`/tickets/${params.ticketId}.json`, {
     method: 'PUT',
     body: JSON.stringify({ ticket: { comment } }),

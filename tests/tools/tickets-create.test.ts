@@ -25,7 +25,8 @@ describe('createTicket', () => {
     const body = JSON.parse(init.body);
     expect(body.ticket.subject).toBe('Printer down');
     expect(body.ticket.comment.html_body).toBe('<p>Please <strong>fix</strong> this</p>');
-    expect(body.ticket.comment.public).toBe(true);
+    // #64: an omitted `public` makes the first comment an internal note, not a customer reply.
+    expect(body.ticket.comment.public).toBe(false);
     expect(body.ticket.priority).toBe('high');
     expect(body.ticket.requester_id).toBe(555);
     expect(result.summary).toBe('Created ticket #99');
@@ -37,5 +38,19 @@ describe('createTicket', () => {
     const body = JSON.parse((client.request as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
     expect(body.ticket.comment.body).toBe('**raw**');
     expect(body.ticket.comment.html_body).toBeUndefined();
+  });
+
+  it('opens the first comment to the customer only on an explicit public:true', async () => {
+    const client = { request: vi.fn().mockResolvedValue({ ticket: { id: 2 } }) } as unknown as ZendeskHttpClient;
+    await createTicket(client, cacheStub(), { subject: 's', comment: 'hello', markdown: false, public: true });
+    const body = JSON.parse((client.request as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+    expect(body.ticket.comment.public).toBe(true);
+  });
+
+  it('keeps the first comment internal on an explicit public:false', async () => {
+    const client = { request: vi.fn().mockResolvedValue({ ticket: { id: 3 } }) } as unknown as ZendeskHttpClient;
+    await createTicket(client, cacheStub(), { subject: 's', comment: 'note', markdown: false, public: false });
+    const body = JSON.parse((client.request as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+    expect(body.ticket.comment.public).toBe(false);
   });
 });
