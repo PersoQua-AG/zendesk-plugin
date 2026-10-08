@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -7,10 +7,6 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-
-// The bundle's runtime dependency set is frozen: everything here is shipped inside the .mcpb, so a
-// new entry is a supply-chain decision, not a detail. The MCPB CLI must stay out of it (npx only).
-const FROZEN_DEPENDENCIES = ['@modelcontextprotocol/sdk', 'express', 'express-rate-limit', 'parse5', 'zod'];
 
 const temps: string[] = [];
 afterEach(() => {
@@ -37,12 +33,6 @@ describe('mcpb pack script', () => {
     expect(pkg.scripts.pack as string).toMatch(
       /^node scripts\/validate-manifests\.mjs && node scripts\/assert-prod-tree\.mjs &&/,
     );
-  });
-
-  it('adds no runtime dependency for packaging', () => {
-    expect(Object.keys(pkg.dependencies).sort()).toEqual([...FROZEN_DEPENDENCIES].sort());
-    expect(pkg.dependencies['@anthropic-ai/mcpb']).toBeUndefined();
-    expect(pkg.devDependencies['@anthropic-ai/mcpb']).toBeUndefined();
   });
 
   it('keeps the built bundle out of git', () => {
@@ -204,118 +194,4 @@ describe('production-tree gate', () => {
     expect(r.status).not.toBe(0);
     expect(r.stderr).toMatch(/package\.json is missing or unreadable/);
   });
-});
-
-describe('manifest release gate', () => {
-  it('passes for all three shipped manifests', () => {
-    const out = execFileSync('node', [join(root, 'scripts', 'validate-manifests.mjs')], { encoding: 'utf8' });
-    expect(out).toContain('manifest.json');
-  });
-
-  // Behaviour, not grep: hand the real script a broken manifest and require a non-zero exit.
-  // The fixture carries EVERY file the validator reads, because it also owns the version fan-out
-  // now (see its header) and a missing file there is an error rather than a skip. `overrides` lets
-  // a caller put one site out of step to prove the fan-out bites.
-  function runValidatorOn(
-    manifest: Record<string, unknown>,
-    overrides: Record<string, string | null> = {},
-  ): { status: number | null; stderr: string } {
-    const tree = tempRoot('manifest-gate-');
-    mkdirSync(join(tree, 'scripts'), { recursive: true });
-    mkdirSync(join(tree, '.claude-plugin'), { recursive: true });
-    mkdirSync(join(tree, 'src'), { recursive: true });
-    mkdirSync(join(tree, 'dist'), { recursive: true });
-    copyFileSync(join(root, 'scripts', 'validate-manifests.mjs'), join(tree, 'scripts', 'validate-manifests.mjs'));
-    // `null` for a site means "omit the declaration entirely" — a moved shape, not a disagreement.
-    const v = (site: string): string | undefined =>
-      site in overrides ? (overrides[site] ?? undefined) : ((manifest.version as string) ?? '0.1.0');
-    const server = (site: string): string =>
-      v(site) === undefined
-        ? 'const server = new McpServer({ name: "zendesk" });\n'
-        : `const server = new McpServer({ name: 'zendesk', version: '${v(site)}' });\n`;
-    const files: Record<string, string> = {
-      'manifest.json': JSON.stringify(manifest),
-      'package.json': JSON.stringify({ name: 'zendesk-plugin', version: v('package.json') }),
-      'package-lock.json': JSON.stringify({
-        name: 'zendesk-plugin',
-        version: v('package-lock.json'),
-        packages: { '': { version: v('package-lock.json (packages."")') } },
-      }),
-      '.claude-plugin/plugin.json': JSON.stringify({
-        name: 'zendesk',
-        version: v('.claude-plugin/plugin.json'),
-        mcpServers: { zendesk: {} },
-      }),
-      '.claude-plugin/marketplace.json': JSON.stringify({
-        name: 'zendesk',
-        owner: { name: 'PersoQua' },
-        metadata: { ...(v('.claude-plugin/marketplace.json') === undefined ? {} : { version: v('.claude-plugin/marketplace.json') }) },
-        plugins: [{ name: 'zendesk', source: './' }],
-      }),
-      'src/server.ts': server('src/server.ts'),
-      'dist/server.js': server('dist/server.js'),
-    };
-    for (const [rel, body] of Object.entries(files)) writeFileSync(join(tree, rel), body);
-    const r = spawnSync('node', [join(tree, 'scripts', 'validate-manifests.mjs')], { encoding: 'utf8' });
-    return { status: r.status, stderr: r.stderr };
-  }
-
-  const validManifest = (): Record<string, unknown> => ({
-    manifest_version: '0.3',
-    name: 'zendesk',
-    version: '0.1.0',
-    description: 'd',
-    author: { name: 'a' },
-    server: { type: 'node' },
-  });
-
-  it('accepts a manifest that carries every MCPB-required field', () => {
-    expect(runValidatorOn(validManifest()).status).toBe(0);
-  });
-
-  it.each(['manifest_version', 'name', 'version', 'description', 'author', 'server'])(
-    'rejects a manifest missing %s',
-    (field) => {
-      const manifest = validManifest();
-      delete manifest[field];
-      const r = runValidatorOn(manifest);
-      expect(r.status).not.toBe(0);
-      expect(r.stderr).toContain(field);
-    },
-  );
-
-  it('rejects a manifest whose required field is present but blank', () => {
-    const r = runValidatorOn({ ...validManifest(), description: '   ' });
-    expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain('description');
-  });
-
-  // The version fan-out. Seven hand-kept declarations, and the gate that would otherwise catch a
-  // disagreement (scripts/audit-bundle.mjs) can only see three of them.
-  it.each([
-    'package.json',
-    'package-lock.json',
-    'package-lock.json (packages."")',
-    '.claude-plugin/plugin.json',
-    '.claude-plugin/marketplace.json',
-    'src/server.ts',
-    'dist/server.js',
-  ])('rejects a tree where %s disagrees with manifest.json', (site) => {
-    const r = runValidatorOn(validManifest(), { [site]: '9.9.9' });
-    expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain(`${site.split(' ')[0]}`);
-    expect(r.stderr).toContain('9.9.9');
-  });
-
-  it.each(['.claude-plugin/marketplace.json', 'src/server.ts', 'dist/server.js'])(
-    'rejects %s when its version declaration is GONE, rather than reading undefined as agreement',
-    (site) => {
-      // marketplace.json keeps its version under `metadata`; assuming `plugins[0].version` is how
-      // the site was missed in the first place. An absent value must fail, not silently pass.
-      expect(runValidatorOn(validManifest()).status).toBe(0);
-      const moved = runValidatorOn(validManifest(), { [site]: null });
-      expect(moved.status).not.toBe(0);
-      expect(moved.stderr).toContain('declares no version where one is expected');
-    },
-  );
 });

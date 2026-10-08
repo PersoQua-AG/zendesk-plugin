@@ -55,4 +55,14 @@ describe('the Claude Code plugin manifest', () => {
     expect(plugin.mcpServers.zendesk.command).toBe('node');
     expect(plugin.mcpServers.zendesk.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/dist/plugin/server.js']);
   });
+
+  // Relocated from tests/plugin/mcpb-manifest.test.ts:173-177 when the MCPB path was retired (#103).
+  // The claim is about what SHIPS, and after the retirement this file is the only shipped manifest
+  // left to make it about: a hard-coded view, group, form, field or brand id would tie the published
+  // plugin to one Zendesk instance, and every customer registers their own. Asserted on the raw text
+  // so an id smuggled in under a key nothing here reads still fails.
+  it('ships no Zendesk instance data: no ids, no view/group/form/field pre-configuration', () => {
+    expect(raw).not.toMatch(/"\w*_id"\s*:\s*\d/);
+    expect(raw).not.toMatch(/\b(view_id|group_id|ticket_form_id|custom_field_id|brand_id)\b/);
+  });
 });
