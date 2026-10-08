@@ -47,12 +47,9 @@ describe('callback port validation', () => {
     expect(resolveAuthConfig(raw, keychain()).config.callbackPort).toBe(8976);
   });
 
-  // A manifest used to declare the same range as min/max to its host, which could refuse an
-  // out-of-range value in a settings dialog before the server ever ran. Both declarations are gone:
-  // .claude-plugin/plugin.json carries no user_config at all since #68 (the Claude Code host bridge
-  // does not support one), and manifest.json went with the retired MCPB path (#103). The server's
-  // own validation is the only layer left, which is what the cases above measure — the bounds are
-  // pinned by the rejection message and by the 1024/65535 acceptance cases, not by a manifest.
+  // No manifest declares this range to a host any more, so the server's own validation is the only
+  // layer left — which is what the cases above measure. The bounds are pinned by the rejection
+  // message and by the 1024/65535 acceptance cases.
 });
 
 // The port a start that could not resolve the REST serves its setup page on. It used to be the shipped

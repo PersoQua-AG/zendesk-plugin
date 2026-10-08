@@ -1,12 +1,6 @@
 // tests/plugin/manifest-release-gate.test.ts
-// The only behaviour test of scripts/validate-manifests.mjs — the gate that CI runs FIRST
-// (.github/workflows/ci.yml:100), before anything is installed or built. It lived in
-// tests/plugin/pack-script.test.ts because `npm run pack` chained the validator; the MCPB path is
-// retired (#103) and the validator is not, so the test moved here instead of dying with that file.
-//
-// With manifest.json gone the validator checks the SHAPE of the two Claude Code manifests, and it is
-// now the only gate on the version fan-out at all: scripts/audit-bundle.mjs, which used to see three
-// of those sites from inside the packed bundle, went with the MCPB path.
+// The only behaviour test of scripts/validate-manifests.mjs, the gate CI runs first. What that
+// script owns and why is in its own header; one owner for that question is enough.
 //
 // Behaviour, not grep: every case runs the real script against a throwaway tree.
 import { describe, it, expect, afterEach } from 'vitest';
@@ -22,12 +16,6 @@ const temps: string[] = [];
 afterEach(() => {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
 });
-
-function tempRoot(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  temps.push(dir);
-  return dir;
-}
 
 describe('manifest release gate', () => {
   it('passes for both shipped manifests', () => {
@@ -51,7 +39,8 @@ describe('manifest release gate', () => {
     status: number | null;
     stderr: string;
   } {
-    const tree = tempRoot('manifest-gate-');
+    const tree = mkdtempSync(join(tmpdir(), 'manifest-gate-'));
+    temps.push(tree);
     mkdirSync(join(tree, 'scripts'), { recursive: true });
     mkdirSync(join(tree, '.claude-plugin'), { recursive: true });
     mkdirSync(join(tree, 'src'), { recursive: true });
@@ -70,14 +59,12 @@ describe('manifest release gate', () => {
       version: v('.claude-plugin/plugin.json'),
       mcpServers: { zendesk: {} },
     };
+    const mktVersion = v('.claude-plugin/marketplace.json');
     const marketplace: Record<string, unknown> = {
       name: 'zendesk',
       owner: { name: 'PersoQua' },
-      metadata: {
-        ...(v('.claude-plugin/marketplace.json') === undefined
-          ? {}
-          : { version: v('.claude-plugin/marketplace.json') }),
-      },
+      // Under `metadata`, which is where the validator reads it and where it is easy to miss.
+      metadata: mktVersion === undefined ? {} : { version: mktVersion },
       plugins: [{ name: 'zendesk', source: './' }],
     };
     shape.plugin?.(plugin);
@@ -104,8 +91,21 @@ describe('manifest release gate', () => {
     expect(runValidatorOn().status).toBe(0);
   });
 
+  const REL = {
+    plugin: '.claude-plugin/plugin.json',
+    marketplace: '.claude-plugin/marketplace.json',
+  } as const;
+
   // The required-field matrix, driven off the two surviving CHECKS entries rather than off
   // manifest.json's MCPB fields.
+  //
+  // Asserted on the EXACT message, never on the bare field name. `toContain(field)` passed for
+  // `version` without the required-field rule saying anything: deleting it also trips the
+  // VERSION_SITES loop, whose "declares no version where one is expected" carries the substring
+  // `version` and satisfied the assertion by proxy — the case stayed green under a mutant that
+  // disabled the rule it claims to pin. `name` and `plugins` are latent carriers of the same kind
+  // (the `plugins[0] missing "name"/"source"` messages). A substring assertion is only as strong as
+  // the set of texts that can carry that substring.
   it.each([
     ['plugin', 'name'],
     ['plugin', 'version'],
@@ -114,18 +114,15 @@ describe('manifest release gate', () => {
     ['marketplace', 'owner'],
     ['marketplace', 'plugins'],
   ] as const)('rejects %s.json missing %s', (which, field) => {
-    const drop = (o: Record<string, unknown>) => {
-      delete o[field];
-    };
-    const r = runValidatorOn(which === 'plugin' ? { plugin: drop } : { marketplace: drop });
+    const r = runValidatorOn({ [which]: (o: Record<string, unknown>) => delete o[field] });
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain(field);
+    expect(r.stderr).toContain(`${REL[which]}: missing or empty required field "${field}"`);
   });
 
   it('rejects a manifest whose required field is present but blank', () => {
     const r = runValidatorOn({ plugin: (o) => (o.name = '   ') });
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain('name');
+    expect(r.stderr).toContain(`${REL.plugin}: missing or empty required field "name"`);
   });
 
   // The version fan-out: seven hand-kept declarations, package.json the reference and six sites
@@ -150,7 +147,6 @@ describe('manifest release gate', () => {
     (site) => {
       // marketplace.json keeps its version under `metadata`; assuming `plugins[0].version` is how
       // the site was missed in the first place. An absent value must fail, not silently pass.
-      expect(runValidatorOn().status).toBe(0);
       const moved = runValidatorOn({}, { [site]: null });
       expect(moved.status).not.toBe(0);
       expect(moved.stderr).toContain('declares no version where one is expected');

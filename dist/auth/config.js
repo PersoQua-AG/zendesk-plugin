@@ -6,10 +6,10 @@ const DATA_DIR_NAME = 'zendesk-plugin';
 // Exported because the first-run setup page states which scopes the plugin asks for, and an incomplete
 // start still has to carry them into the authorization the page continues into.
 export const DEFAULT_SCOPES = ['read', 'write'];
-// A Desktop Extension is unpacked into a versioned directory and its working directory is the
-// host's, not the extension's — so a relative default would put tokens.enc somewhere arbitrary and
-// lose it on update. Resolve an absolute per-user data dir instead. Platform/env are parameters so
-// the resolution is testable without mutating the process.
+// A plugin is installed into a versioned directory and the working directory belongs to the host,
+// not to the plugin — so a relative default would put tokens.enc somewhere arbitrary and lose it on
+// update. Resolve an absolute per-user data dir instead. Platform/env are parameters so the
+// resolution is testable without mutating the process.
 export function defaultDataDir(env = process.env, platform = process.platform) {
     if (platform === 'win32') {
         return join(env.APPDATA || join(homedir(), 'AppData', 'Roaming'), DATA_DIR_NAME);
@@ -34,10 +34,12 @@ const USER_CONFIG_FIELDS = {
     ZENDESK_WORKDAYS: 'workdays',
 };
 export const USER_CONFIG_FIELD_BY_ENV = USER_CONFIG_FIELDS;
-// The MCPB host substitutes ${...} only for variables it has a value for; an optional user_config
-// field the user left blank arrives as the LITERAL placeholder string
-// (@anthropic-ai/mcpb@2.1.2 dist/shared/config.js:16-27). Dropping such values makes them "absent",
-// so the shipped defaults apply instead of Number('${…}')===NaN or a literal directory name.
+// A host that substitutes ${...} does so only for variables it has a value for; a declared value
+// the user left blank then arrives as the LITERAL placeholder string. That was the MCPB host's
+// documented behaviour (@anthropic-ai/mcpb@2.1.2 dist/shared/config.js:16-27) and the reason this
+// exists; the retirement (#103) does not make the input safe to trust, so the handling stays —
+// dropping such values makes them "absent", so the shipped defaults apply instead of
+// Number('${…}')===NaN or a literal directory name.
 const PLACEHOLDER = /^\$\{[^}]*\}$/;
 // Exported because zendesk_diagnostics reports the substitution state of ${CLAUDE_PLUGIN_ROOT} and
 // ${CLAUDE_PLUGIN_DATA}, and that question has to be asked of the RAW env with this same rule.

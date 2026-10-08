@@ -1,13 +1,9 @@
 // tests/plugin/dependency-freeze.test.ts
-// The only guard in this repo against a runtime dependency that arrives unannounced. It lived in
-// tests/plugin/pack-script.test.ts while the `.mcpb` bundle was the shipping vehicle; the MCPB path
-// is retired (#103) and the assertion has no MCPB content, so it moves here rather than dying with
-// that file.
+// The only guard in this repo against a runtime dependency that arrives unannounced.
 //
-// The reason it still holds, by the new route: `npm run build` bundles the server with esbuild
-// (package.json:12, `--bundle`), so every entry below is COMPILED INTO dist/plugin/server.js and
-// shipped with the plugin. A new entry is therefore still a supply-chain decision rather than a
-// detail — the same decision, reached over a different path.
+// Why it bites: `npm run build` bundles the server with esbuild (`--bundle`), so every entry below
+// is compiled INTO dist/plugin/server.js and ships with the plugin. A new entry is a supply-chain
+// decision, not a detail.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -21,9 +17,10 @@ const FROZEN_DEPENDENCIES = ['@modelcontextprotocol/sdk', 'express', 'express-ra
 describe('the shipped runtime dependency set', () => {
   it('is frozen, and pulls in the MCPB CLI on neither side', () => {
     expect(Object.keys(pkg.dependencies).sort()).toEqual([...FROZEN_DEPENDENCIES].sort());
-    // Kept after the retirement on purpose: nothing here may pull the MCPB CLI back in, on either
-    // side of the manifest. There is no packaging step left that would need it.
-    expect(pkg.dependencies['@anthropic-ai/mcpb']).toBeUndefined();
+    // Only the devDependencies half is asserted separately. A `dependencies` entry for the CLI is
+    // already caught by the set equality above — it could never have gone red on its own — while
+    // devDependencies are not compared anywhere, so this is the one line with its own reach. Kept
+    // after the retirement on purpose: no packaging step is left that would need the CLI.
     expect(pkg.devDependencies['@anthropic-ai/mcpb']).toBeUndefined();
   });
 });

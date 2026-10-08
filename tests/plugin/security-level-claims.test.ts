@@ -71,8 +71,9 @@ describe('no shipped text promises a security level the plugin does not offer (#
     expect(section).toContain('remote-connector');
   });
 
-  // The field the decision forbids bringing back. claude-plugin-manifest.test.ts:39-40 pins the
-  // `env` half; this pins that the plugin manifest names the level nowhere at all.
+  // The field the decision forbids bringing back. The `env` half is pinned by the "declares no env
+  // at all" case in claude-plugin-manifest.test.ts; this pins that the plugin manifest names the
+  // level nowhere at all.
   it('the Claude Code plugin manifest still declares no security level', () => {
     expect(read('.claude-plugin/plugin.json')).not.toContain('security_level');
   });
