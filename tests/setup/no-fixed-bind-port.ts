@@ -4,9 +4,9 @@
 // matches a regex, so it sees only a decimal literal written at the call site. Every class it
 // misses — a const, a variable, 18e3, 0x4650, a computed port, an option bag, a bind under a call
 // name outside its list — arrives here as a NUMBER at the moment the socket is bound, which is the
-// only place the two spellings stop being different. `const PORT = 18977` used to be the living
-// template of that class (tests/auth/token-request-timeout.test.ts); a reader could not tell from
-// the green scan that it was unseen rather than absent.
+// only place the two spellings stop being different. The living template of that class is
+// tests/plugin/bind-time-port-guard.test.ts:18 + :41 — a const that reaches listen() and is refused
+// here, while check:ports stays green over the same tree: unseen by the scan, not absent.
 //
 // The scan is not redundant and is kept: it refuses a literal in a file no test ever executes, and
 // it names file and line at review time rather than at bind time. This one refuses the number

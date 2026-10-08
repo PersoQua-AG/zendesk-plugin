@@ -13,8 +13,8 @@ import { freePort } from '../auth/login-harness.js';
 import { allowForeignBind, takeRefusals } from '../setup/acquired-ports.js';
 
 // NOT a literal at the call site, by construction — that is the whole point. The source scan reads
-// `listen(PORT)` and sees no number; the guard under test reads 18977. This is the very const the
-// ticket names, tests/auth/token-request-timeout.test.ts:14, which the scan has always walked past.
+// `listen(PORT)` at :41 and sees no number: check:ports is green over this very tree. The bind-time
+// guard reads 18977 there and refuses it, which the case at :41 measures. That pair is the witness.
 const PORT = 18977;
 
 const opened: Server[] = [];
@@ -253,9 +253,9 @@ describe('a fixed bind port is refused when it is bound', () => {
   });
 
   // Scenario 3 of #74: the non-binding uses stay legal. The const above is read into a string here
-  // exactly as tests/auth/token-request-timeout.test.ts reads its own, and nothing is reported,
-  // because nothing binds. A guard that fired on the VALUE rather than on the bind would make that
-  // file red for a port it never takes.
+  // exactly as tests/auth/token-request-timeout.test.ts:15 reads its own — that file holds no
+  // `listen(` call at all, so its 18977 never binds and nothing is reported. A guard that fired on
+  // the VALUE rather than on the bind would make that file red for a port it never takes.
   it('says nothing about a port that is only put into a string', () => {
     expect(`http://localhost:${PORT}/callback`).toBe('http://localhost:18977/callback');
   });
