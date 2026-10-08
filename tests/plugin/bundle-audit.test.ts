@@ -1292,6 +1292,21 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(run.stderr).toContain(basename(tree.checksum));
   });
 
+  // THE SAME NOTICE, THE OTHER ARM. It lived inside the `problems.length > 0` paragraph, so a run
+  // whose ONLY fault is in the tree — a typo'd `--expect-version` is the ordinary way in — left a
+  // complete, uploadable pair from an earlier passing run intact and said nothing about it.
+  it('names a surviving artifact pair on a run whose only fault is in the tree', () => {
+    const tree = makeTree();
+    writeFileSync(tree.artifact, 'an earlier passing run wrote this');
+    writeFileSync(tree.checksum, 'and this');
+    const run = runAudit(tree, ['zendesk.mcpb', '--expect-version', '1.0.O']);
+    expect(run.status).toBe(2);
+    expect(run.stderr).toContain('version mismatch');
+    expect(existsSync(tree.artifact), 'the clearing is skipped on a tree fault, on purpose').toBe(true);
+    expect(run.stderr).toContain('from an earlier run is STILL THERE and uploadable');
+    expect(run.stderr).toContain(basename(tree.checksum));
+  });
+
   // The success path used to write unguarded, so an unwritable checkout, a full disk or a slot
   // that is a directory each ended a PASSING audit as a stack trace under exit 1 — the code that
   // means "this bundle did not pass".

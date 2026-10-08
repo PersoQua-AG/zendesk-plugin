@@ -547,12 +547,26 @@ const cleared = [];
 // before this was written: a 10 KB `console.error` from an `exit` handler survives both a redirect
 // to a file and a pipe, untruncated.
 process.on('exit', (code) => {
-  if (code === 0 || cleared.length === 0) return;
-  console.error(
-    `\nAlready removed before this run finished, and NOT coming back: ${cleared.join(' and ')}.` +
-      " That is an earlier passing run's output, cleared because this tree was about to replace it;" +
-      ' this run produced nothing to put in its place.',
-  );
+  if (code === 0) return;
+  if (cleared.length > 0) {
+    console.error(
+      `\nAlready removed before this run finished, and NOT coming back: ${cleared.join(' and ')}.` +
+        " That is an earlier passing run's output, cleared because this tree was about to replace it;" +
+        ' this run produced nothing to put in its place.',
+    );
+  }
+  // AND WHAT SURVIVED, from the same place and for the same reason. This notice used to sit inside
+  // the `problems.length > 0` paragraph, which is the arm shape again: a run with ONLY a tree fault
+  // (a typo'd `--expect-version` is the ordinary way in) leaves the pair intact, uploadable and
+  // unmentioned, while "No artifact and no checksum were produced by this run" is the only line an
+  // operator reads about artifacts. Measured.
+  if (artifactPath && nameState(artifactPath) === 'taken') {
+    console.error(
+      `\n${basename(artifactPath)} from an earlier run is STILL THERE and uploadable` +
+        `${nameState(checksumPath) === 'taken' ? `, with ${basename(checksumPath)} beside it` : ''}.` +
+        ' It was not cleared because this tree cannot publish; it is not this run\'s output.',
+    );
+  }
 });
 
 function clearStaleArtifact() {
@@ -726,10 +740,12 @@ if (bundle && entries.length > 0 && !bundledManifest) {
 // `--expect-version` deleted `zendesk-9.9.9.mcpb` and its `.sha256` and then printed "Nothing was
 // renamed and nothing was deleted".
 //
-// The cost, named: on a run with BOTH a tree fault and a bundle finding, a stale artifact from an
-// earlier passing run survives. That run publishes nothing of its own, exits non-zero and says the
-// tree cannot publish, so nothing is announced that is not true — and the alternative is destroying
-// a release over a fault that is not the bundle's.
+// The cost, named: on ANY run with a tree fault — with or without a bundle finding — a stale
+// artifact from an earlier passing run survives. The earlier wording here said "BOTH", which is
+// how the survival notice came to live in the bundle-finding arm and say nothing on a tree-fault-
+// only run. That run publishes nothing of its own, exits non-zero and says the tree cannot
+// publish, and the exit handler above names what survived — and the alternative is destroying a
+// release over a fault that is not the bundle's.
 //
 // `clearStaleArtifact()` can add a tree fault of its own, which is why `treeFaults` is read after
 // this line and not before it.
@@ -797,17 +813,6 @@ if (problems.length > 0) {
     }
   }
   console.error('\nNo artifact and no checksum were produced by this run.');
-  // AND WHAT IS STILL THERE FROM AN EARLIER ONE. The clearing is skipped on a tree fault, on
-  // purpose, so on a run with both a tree fault and a bundle finding a complete, uploadable
-  // artifact pair from an earlier passing run survives — and "no artifact was produced" is the
-  // only line an operator reads about artifacts. Named rather than left to the source comment.
-  if (artifactPath && nameState(artifactPath) === 'taken') {
-    console.error(
-      `  - ${basename(artifactPath)} from an earlier run is STILL THERE and uploadable` +
-        `${nameState(checksumPath) === 'taken' ? `, with ${basename(checksumPath)} beside it` : ''}.` +
-        ' It was not cleared because this tree cannot publish; it is not this run\'s output.',
-    );
-  }
   if (quarantined) {
     console.error(
       `${basename(bundlePath)} is ${problems.length > versionProblems ? 'CONTAMINATED' : 'NOT THE RELEASE THIS TREE DESCRIBES'}` +
