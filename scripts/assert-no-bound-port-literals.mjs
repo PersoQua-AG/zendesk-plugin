@@ -52,10 +52,8 @@ const SOURCE = /\.(ts|tsx|mts|cts|js|mjs|cjs)$/;
 // parts against this header — the selector, the grep and the tail — so none can drift here
 // without going red. It asserted two of the three until #79, which read as complete and was not.
 //
-// WHY A MARK AT ALL, now that the root is the whole test tree: the danger flipped direction. A too
-// WIDE root scans more and can hide nothing; the NARROW misedit is what is left, and narrow is
-// silent without a mark — `tests/plugin` or `tests/tools` would read exactly like a clean full
-// scan. The sibling guard records the same reasoning for #76, reached from the other end.
+// Why a mark at all, and why the extraction to scripts/lib/scan-root.mjs is refused (#112):
+// ops/projects/zendesk-plugin/decisions/2026-10-08-guard-mark-rationale-and-refused-extraction.md
 //
 // The one cost, named rather than discovered later: this hangs on a name and a spelling. Renaming
 // freePort(), rewriting it as `export const freePort = () =>`, or moving login-harness.ts out all

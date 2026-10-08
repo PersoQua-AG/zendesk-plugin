@@ -65,14 +65,11 @@
 // (`git ls-files '*.ts' | xargs -n1 dirname | sort -u | wc -l`). That command is run by
 // tests/plugin/executor-safety-guard.test.ts, so the claim cannot rot on paper.
 //
-// Why a mark at all, when the walk is RECURSIVE and a too-WIDE root still inspects the guarded
-// file? Because the misedit that HIDES something is the narrow one, and narrow is silent:
-// `src/auth` and `tests/util` both exited 0 before this mark existed. A count cannot refuse, and
-// a floor under it would be a number that rots on the next merge. As in the sibling guard the
-// mark gates SUCCESS, not the scan — an unmarked tree is still walked whole and every finding
-// still named, it just never exits 0. The one cost: this hangs on a filename. Move or rename
-// src/server.ts and the guard refuses its own tree, loudly, in the same commit that breaks
-// `npm run build`, which names that exact path.
+// Why a mark at all, and why the extraction to scripts/lib/scan-root.mjs is refused (#112):
+// ops/projects/zendesk-plugin/decisions/2026-10-08-guard-mark-rationale-and-refused-extraction.md
+//
+// The one cost: this hangs on a filename. Move or rename src/server.ts and the guard refuses its
+// own tree, loudly, in the same commit that breaks `npm run build`, which names that exact path.
 import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
