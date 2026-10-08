@@ -110,12 +110,14 @@ try {
 } catch (err) {
   // A message, not a stack trace: ablated, node prints a node:fs source excerpt and a trace.
   // Asserted by shape rather than by a frame count (#91), in both guards' tests.
-  // KNOWN GAP, here and at the `Cannot read` line below: on a thrown `null` or `undefined`,
-  // `err.code ?? err.message` raises `TypeError: Cannot read properties of null` — the stack
-  // trace these two lines exist to prevent. The sibling guard writes `err?.code ?? err?.message
-  // ?? err` and does not. Deferred, not accepted, and tracked as #110: the fix changes a code
-  // line and an error string, which the documentation ticket it was found under could not carry.
-  console.error(`Cannot scan ${target}: ${err.code ?? err.message}.`);
+  // EVERY READ OF `err` IS CHAINED (#110). A thrown `null` or `undefined` is not an Error, so
+  // `err.code` raised `TypeError: Cannot read properties of null` here — the stack trace these
+  // lines exist to prevent. The third fallback prints the thrown value itself, because `?.`
+  // alone answers `undefined`; the sibling guard reached the same shape first. Measured while
+  // fixing it: the `Cannot read` path threw one line EARLIER than its message, at the `EISDIR`
+  // comparison, so that read is chained too. tests/plugin/port-guard-error-paths.test.ts drives
+  // both paths with fs patched to throw null.
+  console.error(`Cannot scan ${target}: ${err?.code ?? err?.message ?? err}.`);
   process.exit(1);
 }
 
@@ -130,12 +132,12 @@ for (const file of files) {
     // directory whose name ends in a source extension, so the widened filter matches it and the
     // gate exited 2 before printing a line. Skipping costs nothing: readdirSync already walked
     // into it, so its contents are in `entries` and are scanned on their own.
-    if (err.code === 'EISDIR') continue;
+    if (err?.code === 'EISDIR') continue;
     // Exit 2, not 1, for everything else — a mode-000 file, a dangling symlink. 1 means "a fixed
     // port was found", so "could not look" must not be spelled like "looked and found".
-    // tests/auth/login-harness.ts draws the same line in its probe child. The thrown-null gap
-    // noted at the `Cannot scan` line above applies to this line as well.
-    console.error(`Cannot read ${show(path)}: ${err.code ?? err.message}.`);
+    // tests/auth/login-harness.ts draws the same line in its probe child. Chained like the
+    // `Cannot scan` line above, and so is the `EISDIR` comparison it sits below (#110).
+    console.error(`Cannot read ${show(path)}: ${err?.code ?? err?.message ?? err}.`);
     process.exit(2);
   }
 }
