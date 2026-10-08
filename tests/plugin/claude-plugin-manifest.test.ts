@@ -41,8 +41,8 @@ describe('the Claude Code plugin manifest', () => {
     expect(plugin.mcpServers.zendesk.env).toBeUndefined();
     // Named on the raw text too, so a reappearance anywhere — command, args, a second server — fails
     // here rather than only where it is read. The host sets this one itself (Claude Code injects it;
-    // Desktop reserves the name), so declaring it was never a passthrough, only a rejection. Same
-    // rationale as the MCPB side, tests/plugin/mcpb-manifest.test.ts.
+    // Desktop reserves the name), so declaring it was never a passthrough, only a rejection — the
+    // retired MCPB manifest was held to the same rule for the same reason.
     expect(raw).not.toContain('CLAUDE_PLUGIN_DATA');
     // And the data-dir override stays a test and operator seam: a manifest that passed it would
     // silently restore the per-host token directories this file exists to prevent.
