@@ -2,7 +2,11 @@
 // The only behaviour test of scripts/validate-manifests.mjs — the gate that CI runs FIRST
 // (.github/workflows/ci.yml:100), before anything is installed or built. It lived in
 // tests/plugin/pack-script.test.ts because `npm run pack` chained the validator; the MCPB path is
-// retired (#103) and the validator is not, so the test moves here instead of dying with that file.
+// retired (#103) and the validator is not, so the test moved here instead of dying with that file.
+//
+// With manifest.json gone the validator checks the SHAPE of the two Claude Code manifests, and it is
+// now the only gate on the version fan-out at all: scripts/audit-bundle.mjs, which used to see three
+// of those sites from inside the packed bundle, went with the MCPB path.
 //
 // Behaviour, not grep: every case runs the real script against a throwaway tree.
 import { describe, it, expect, afterEach } from 'vitest';
@@ -26,19 +30,27 @@ function tempRoot(prefix: string): string {
 }
 
 describe('manifest release gate', () => {
-  it('passes for all three shipped manifests', () => {
+  it('passes for both shipped manifests', () => {
     const out = execFileSync('node', [join(root, 'scripts', 'validate-manifests.mjs')], { encoding: 'utf8' });
-    expect(out).toContain('manifest.json');
+    expect(out).toContain('plugin.json');
+    expect(out).toContain('marketplace.json');
   });
 
-  // Behaviour, not grep: hand the real script a broken manifest and require a non-zero exit.
-  // The fixture carries EVERY file the validator reads, because it also owns the version fan-out
-  // now (see its header) and a missing file there is an error rather than a skip. `overrides` lets
-  // a caller put one site out of step to prove the fan-out bites.
-  function runValidatorOn(
-    manifest: Record<string, unknown>,
-    overrides: Record<string, string | null> = {},
-  ): { status: number | null; stderr: string } {
+  // The fixture carries EVERY file the validator reads, because it owns the version fan-out and a
+  // missing file there is an error rather than a skip. `shape` lets a caller break one manifest's
+  // shape (delete or blank a required field); `overrides` lets a caller put one version site out of
+  // step to prove the fan-out bites.
+  type Shape = {
+    plugin?: (o: Record<string, unknown>) => void;
+    marketplace?: (o: Record<string, unknown>) => void;
+  };
+
+  const VERSION = '0.1.0';
+
+  function runValidatorOn(shape: Shape = {}, overrides: Record<string, string | null> = {}): {
+    status: number | null;
+    stderr: string;
+  } {
     const tree = tempRoot('manifest-gate-');
     mkdirSync(join(tree, 'scripts'), { recursive: true });
     mkdirSync(join(tree, '.claude-plugin'), { recursive: true });
@@ -47,30 +59,39 @@ describe('manifest release gate', () => {
     copyFileSync(join(root, 'scripts', 'validate-manifests.mjs'), join(tree, 'scripts', 'validate-manifests.mjs'));
     // `null` for a site means "omit the declaration entirely" — a moved shape, not a disagreement.
     const v = (site: string): string | undefined =>
-      site in overrides ? (overrides[site] ?? undefined) : ((manifest.version as string) ?? '0.1.0');
+      site in overrides ? (overrides[site] ?? undefined) : VERSION;
     const server = (site: string): string =>
       v(site) === undefined
         ? 'const server = new McpServer({ name: "zendesk" });\n'
         : `const server = new McpServer({ name: 'zendesk', version: '${v(site)}' });\n`;
+
+    const plugin: Record<string, unknown> = {
+      name: 'zendesk',
+      version: v('.claude-plugin/plugin.json'),
+      mcpServers: { zendesk: {} },
+    };
+    const marketplace: Record<string, unknown> = {
+      name: 'zendesk',
+      owner: { name: 'PersoQua' },
+      metadata: {
+        ...(v('.claude-plugin/marketplace.json') === undefined
+          ? {}
+          : { version: v('.claude-plugin/marketplace.json') }),
+      },
+      plugins: [{ name: 'zendesk', source: './' }],
+    };
+    shape.plugin?.(plugin);
+    shape.marketplace?.(marketplace);
+
     const files: Record<string, string> = {
-      'manifest.json': JSON.stringify(manifest),
       'package.json': JSON.stringify({ name: 'zendesk-plugin', version: v('package.json') }),
       'package-lock.json': JSON.stringify({
         name: 'zendesk-plugin',
         version: v('package-lock.json'),
         packages: { '': { version: v('package-lock.json (packages."")') } },
       }),
-      '.claude-plugin/plugin.json': JSON.stringify({
-        name: 'zendesk',
-        version: v('.claude-plugin/plugin.json'),
-        mcpServers: { zendesk: {} },
-      }),
-      '.claude-plugin/marketplace.json': JSON.stringify({
-        name: 'zendesk',
-        owner: { name: 'PersoQua' },
-        metadata: { ...(v('.claude-plugin/marketplace.json') === undefined ? {} : { version: v('.claude-plugin/marketplace.json') }) },
-        plugins: [{ name: 'zendesk', source: './' }],
-      }),
+      '.claude-plugin/plugin.json': JSON.stringify(plugin),
+      '.claude-plugin/marketplace.json': JSON.stringify(marketplace),
       'src/server.ts': server('src/server.ts'),
       'dist/server.js': server('dist/server.js'),
     };
@@ -79,38 +100,36 @@ describe('manifest release gate', () => {
     return { status: r.status, stderr: r.stderr };
   }
 
-  const validManifest = (): Record<string, unknown> => ({
-    manifest_version: '0.3',
-    name: 'zendesk',
-    version: '0.1.0',
-    description: 'd',
-    author: { name: 'a' },
-    server: { type: 'node' },
+  it('accepts a tree whose manifests carry every required field and agree on the version', () => {
+    expect(runValidatorOn().status).toBe(0);
   });
 
-  it('accepts a manifest that carries every MCPB-required field', () => {
-    expect(runValidatorOn(validManifest()).status).toBe(0);
+  // The required-field matrix, driven off the two surviving CHECKS entries rather than off
+  // manifest.json's MCPB fields.
+  it.each([
+    ['plugin', 'name'],
+    ['plugin', 'version'],
+    ['plugin', 'mcpServers'],
+    ['marketplace', 'name'],
+    ['marketplace', 'owner'],
+    ['marketplace', 'plugins'],
+  ] as const)('rejects %s.json missing %s', (which, field) => {
+    const drop = (o: Record<string, unknown>) => {
+      delete o[field];
+    };
+    const r = runValidatorOn(which === 'plugin' ? { plugin: drop } : { marketplace: drop });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain(field);
   });
-
-  it.each(['manifest_version', 'name', 'version', 'description', 'author', 'server'])(
-    'rejects a manifest missing %s',
-    (field) => {
-      const manifest = validManifest();
-      delete manifest[field];
-      const r = runValidatorOn(manifest);
-      expect(r.status).not.toBe(0);
-      expect(r.stderr).toContain(field);
-    },
-  );
 
   it('rejects a manifest whose required field is present but blank', () => {
-    const r = runValidatorOn({ ...validManifest(), description: '   ' });
+    const r = runValidatorOn({ plugin: (o) => (o.name = '   ') });
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain('description');
+    expect(r.stderr).toContain('name');
   });
 
-  // The version fan-out. Seven hand-kept declarations, and the gate that would otherwise catch a
-  // disagreement (scripts/audit-bundle.mjs) can only see three of them.
+  // The version fan-out: seven hand-kept declarations, package.json the reference and six sites
+  // measured against it. Putting any ONE of them out of step must fail the gate.
   it.each([
     'package.json',
     'package-lock.json',
@@ -119,8 +138,8 @@ describe('manifest release gate', () => {
     '.claude-plugin/marketplace.json',
     'src/server.ts',
     'dist/server.js',
-  ])('rejects a tree where %s disagrees with manifest.json', (site) => {
-    const r = runValidatorOn(validManifest(), { [site]: '9.9.9' });
+  ])('rejects a tree where %s disagrees with the others', (site) => {
+    const r = runValidatorOn({}, { [site]: '9.9.9' });
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain(`${site.split(' ')[0]}`);
     expect(r.stderr).toContain('9.9.9');
@@ -131,8 +150,8 @@ describe('manifest release gate', () => {
     (site) => {
       // marketplace.json keeps its version under `metadata`; assuming `plugins[0].version` is how
       // the site was missed in the first place. An absent value must fail, not silently pass.
-      expect(runValidatorOn(validManifest()).status).toBe(0);
-      const moved = runValidatorOn(validManifest(), { [site]: null });
+      expect(runValidatorOn().status).toBe(0);
+      const moved = runValidatorOn({}, { [site]: null });
       expect(moved.status).not.toBe(0);
       expect(moved.stderr).toContain('declares no version where one is expected');
     },

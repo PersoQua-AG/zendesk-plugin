@@ -1,6 +1,7 @@
 // tests/plugin/claude-plugin-manifest.test.ts
-// The Claude Code side of the manifest pair. It used to be asserted as a MIRROR of manifest.json in
-// mcpb-manifest.test.ts; #68 ended that, because the two hosts do not read the same thing:
+// The shipped plugin manifest, and since the MCPB path was retired (#103) the only one. It used to
+// be asserted as a MIRROR of the MCPB manifest; #68 ended that, because the two hosts did not read
+// the same thing:
 //
 //   [PluginMcpHostConfig] Plugin "…" server "zendesk": config references plugin user configuration
 //   (zendesk_subdomain, oauth_client_id, …) — user_config is not supported on the desktop host
@@ -50,8 +51,8 @@ describe('the Claude Code plugin manifest', () => {
 
   it('still launches the bundled plugin server from the plugin root', () => {
     // ${CLAUDE_PLUGIN_ROOT} stays: it is substituted by the host, not by user configuration. The
-    // entry point is the esbuild BUNDLE, which is a different file from the MCPB manifest's tsc
-    // output (manifest.json → dist/server.js) on purpose.
+    // entry point is the esbuild BUNDLE (dist/plugin/server.js), deliberately a different file from
+    // the plain tsc output in dist/ that the retired MCPB extension launched.
     expect(plugin.mcpServers.zendesk.command).toBe('node');
     expect(plugin.mcpServers.zendesk.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/dist/plugin/server.js']);
   });
