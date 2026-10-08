@@ -27,7 +27,10 @@ import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 // its FIRST literal, because the call site is what a reader has to fix and tightening the match
 // trades a loud wrong number for silence. A literal in a comment or a string counts, so the
 // guards' own test files write their samples split. A .d.ts is NOT excluded — a fixed port in a
-// doc comment is a literal someone will copy. The rest needs a parser or a runtime check (#74).
+// doc comment is a literal someone will copy. The rest needs a parser or a runtime check, and #74
+// built the second one: tests/setup/no-fixed-bind-port.ts takes the NUMBER at the bind, whatever
+// spelling it arrived in, but only on a path a test actually runs. Neither half subsumes the
+// other, and that file carries the comparison.
 const BIND_CALL = /\b(waitForAuthorizationCode|startCallbackListener|listenOn|listen|rebind|config|deps)\(\s*(\d[\d_]*)\b/g;
 
 // EVERY SPELLING A TEST SOURCE CARRIES (#82 follow-up). The filter was `.ts`, so
@@ -110,8 +113,8 @@ try {
   // KNOWN GAP, here and at the `Cannot read` line below: on a thrown `null` or `undefined`,
   // `err.code ?? err.message` raises `TypeError: Cannot read properties of null` — the stack
   // trace these two lines exist to prevent. The sibling guard writes `err?.code ?? err?.message
-  // ?? err` and does not. Deferred, not accepted: the fix changes a code line and an error
-  // string, which #79 is comments-only.
+  // ?? err` and does not. Deferred, not accepted, and tracked as #110: the fix changes a code
+  // line and an error string, which the documentation ticket it was found under could not carry.
   console.error(`Cannot scan ${target}: ${err.code ?? err.message}.`);
   process.exit(1);
 }

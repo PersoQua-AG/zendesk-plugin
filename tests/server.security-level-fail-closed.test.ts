@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer, SECURITY_LEVELS } from '../src/server.js';
 import { screenContent, type SecurityLevel } from '../src/security/screen.js';
-import { summariseScreened } from '../src/tools/screening.js';
+import { summariseScreened, type Screener } from '../src/tools/screening.js';
 import { startRemote, zendeskMock, type RemoteHarness } from './server-remote/harness.js';
 import { keychain } from './auth/keychain.js';
 import { json, once } from './skills/probe.js';
@@ -172,9 +172,12 @@ describe('security level — the blast radius of resolving to strict', () => {
 
   it('costs a warning banner and never a withheld record — flagged content is still returned in full', () => {
     const records = [{ id: 1, subject: 'the <assistant> field is empty' }];
-    const describe_ = (r: { id: number; subject: string }, screen: (t: string, l: string) => { value: string; flagged: boolean }) => {
-      const { value, flagged } = screen(r.subject, `rec-${r.id}`);
-      return { safe: { ...r, subject: value }, line: value, flagged };
+    const describe_ = (r: { id: number; subject: string }, screen: Screener) => {
+      // `wrapped`, not `value`: the local annotation here used to invent a `value` field, so the
+      // destructure produced undefined and every screened subject was undefined at runtime. The
+      // assertions below never looked at the subject, so it stayed green. That is #57's point.
+      const { wrapped, flagged } = screen(r.subject, `rec-${r.id}`);
+      return { safe: { ...r, subject: wrapped }, line: wrapped, flagged };
     };
     const strict = summariseScreened(records, describe_, 'strict');
     const standard = summariseScreened(records, describe_, 'standard');
@@ -183,8 +186,17 @@ describe('security level — the blast radius of resolving to strict', () => {
     expect(standard.flagged).toBe(false);
     expect(strict.warning).toContain('prompt-injection patterns detected');
     // The only difference between the two answers. No record is dropped, no field is redacted.
+    //
+    // NOT `toEqual(standard.records)`: both levels fence the value in a `<zendesk-content-...>`
+    // envelope whose tag carries a FRESH NONCE on every call, so two screens of the same text are
+    // never deep-equal at any level. That assertion stood here and passed only because the broken
+    // destructure above made both sides `{ subject: undefined }`. What it meant to claim is that
+    // the content survives in full on both paths, so that is what is asserted.
     expect(strict.records).toHaveLength(standard.records.length);
-    expect(strict.records).toEqual(standard.records);
+    for (const [label, summary] of [['strict', strict], ['standard', standard]] as const) {
+      expect(summary.records[0].subject, label).toContain(records[0].subject);
+      expect(summary.records[0].id, label).toBe(records[0].id);
+    }
     expect(strict.raw).toEqual(records);
   });
 });

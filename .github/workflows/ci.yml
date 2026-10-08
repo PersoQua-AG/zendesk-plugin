@@ -3,6 +3,11 @@ name: CI
 on:
   push:
   pull_request:
+    # `edited` is NOT a default (the defaults are opened, synchronize, reopened), and without it a
+    # description that gains an attribution trailer AFTER the green run is never re-checked — the
+    # attribution job below reads the PR body. Naming the list costs a full CI run per description
+    # edit; a trailer that can be added post-green costs the rule.
+    types: [opened, synchronize, reopened, edited]
 
 # A second push to the same ref cancels the older in-flight run — the gate always
 # reflects the newest commit rather than wasting a runner on a stale one.
@@ -11,6 +16,72 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The owner's no-Claude-attribution rule, enforced instead of remembered (#86). It is its own job,
+  # not a step in build-test, so the verdict is legible on the PR as a named check and does not
+  # queue behind npm ci — and so a red attribution does not read as a red build.
+  #
+  # A LOCAL HOOK IS NOT THE ANSWER HERE. It is the faster feedback, but `--no-verify` skips it and
+  # the rule already failed once in a session that had every reason to know it. CI is the one that
+  # cannot be skipped, so CI is where it lives. A hook may be added later; it would not replace this.
+  attribution-guard:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the range below reaches back to the base commit, which a shallow clone lacks.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Pinned like build-test's, so the two jobs do not drift onto different runtimes. The script
+      # itself is zero-dependency and imports node builtins only.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # BOTH EVENTS, because only one of them ever runs against the target branch. On a
+      # pull_request the range is base..head, which is exactly the commits the merge would bring.
+      #
+      # ON A PUSH THE RANGE IS NOT `before..after`, DELIBERATELY. `concurrency` above cancels the
+      # older in-flight run, so pushing A,B and then C cancels the run that would have read X..B
+      # and leaves run two reading B..C: A and B are then never inspected on `push` at all, and
+      # for a branch that never gets a PR that is permanent. The merge base against the default
+      # branch is independent of which runs were cancelled — it always covers every commit the
+      # branch carries. It OVER-checks (a branch cut from development re-reads development's own
+      # commits since main) and that is the safe direction; measured on dd6e564,
+      # `--range origin/main..origin/development` → 15 commits, clean, exit 0. If a trailer ever
+      # lands on an integration branch this goes red until it is rewritten, which is the rule
+      # working rather than the job misfiring.
+      #
+      # The script takes the range and has no default; see its header for why.
+      - name: Resolve the commit range
+        id: range
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AFTER: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            range="$BASE_SHA..$HEAD_SHA"
+          else
+            git fetch --no-tags origin "$DEFAULT_BRANCH"
+            base="$(git merge-base FETCH_HEAD "$AFTER")"
+            # ON THE DEFAULT BRANCH ITSELF the merge base IS the pushed commit, so `base..AFTER` is
+            # empty — and the script now refuses an empty range rather than reporting green over
+            # nothing. The pushed tip is what this event is about, so that is what is checked.
+            if [ "$base" = "$AFTER" ]; then base="$AFTER^"; fi
+            range="$base..$AFTER"
+          fi
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+          echo "Checking $range"
+      - run: node scripts/assert-no-attribution.mjs --range '${{ steps.range.outputs.range }}'
+      # The pull request DESCRIPTION, through the same patterns. It is passed on stdin rather than
+      # interpolated into the shell, so a body containing backticks or $( ) is text, not code.
+      - name: Check the pull request description
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$PR_BODY" | node scripts/assert-no-attribution.mjs --stdin 'the pull request description'
+
   build-test:
     runs-on: ubuntu-latest
     steps:
@@ -37,6 +108,12 @@ jobs:
       # package.json; why that is so, why src/ stays out and what the scan misses is in the
       # script header.
       - run: npm run check:ports
+      # Type-checks every file under tests/, which `npm run build` never sees — the root tsconfig
+      # includes src/ alone (#57). Before the build, beside the other two guards, because a type
+      # error in a test is a defect in the gate itself and should fail before the slow steps. While
+      # tests/tsconfig.json carried a curated `include`, this check was local-only AND partial: a
+      # type error in a folder nobody had added was invisible to both commands.
+      - run: npm run typecheck:tests
       - run: npm run build
       # Dist-drift guard: the just-run build must leave committed dist/ byte-identical.
       # A source change without a matching dist rebuild would otherwise ship stale install

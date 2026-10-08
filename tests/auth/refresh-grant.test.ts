@@ -16,6 +16,7 @@ import { CONNECTOR } from '../../src/remote/connector-contract.js';
 import { log } from '../../src/remote/logger.js';
 import type { OAuthConfig } from '../../src/auth/oauth-flow.js';
 import { settlesWithin } from './login-harness.js';
+import { rejection } from './rejection.js';
 
 // Captures the instance a call throws, so an assertion can be made about its TYPE and fields.
 // expect(...).toThrow() only matches a message or a class, which is not enough for the chain flags.
@@ -379,7 +380,7 @@ describe('AC5 — encrypted at rest, never logged, pruned on expiry', () => {
     const first = await firstLogin(b);
     await b.provider.exchangeRefreshToken(client, first.refresh_token!);
     pastGraceWindow(join(b.dir, 'refresh'));
-    const err = (await b.provider.exchangeRefreshToken(client, first.refresh_token!).catch((e: unknown) => e)) as Error;
+    const err = await rejection('exchangeRefreshToken past the grace window', b.provider.exchangeRefreshToken(client, first.refresh_token!));
     expect(err.message).not.toContain(first.refresh_token!);
     expect(err.message).not.toContain(first.access_token);
     // Latin1-safe: the message rides in an OAuth error body and, on the bearer path, in a header.

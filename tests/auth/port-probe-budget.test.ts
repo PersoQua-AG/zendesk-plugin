@@ -8,6 +8,7 @@ import { describe, it, expect, afterAll, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:net';
+import { allowForeignBind } from '../setup/acquired-ports.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -55,6 +56,8 @@ async function strangerOn(port: number): Promise<void> {
   // it — measured: without this the case reddens roughly one run in three on a machine running the
   // suite concurrently, which is the very flakiness #48 is about.
   s.on('error', () => {});
+  // Declared to the bind-time guard (#74): a stranger is the fixture here, not a mistake.
+  allowForeignBind(port, 'a stranger planted in front of the probe budget');
   s.listen(port);
   try {
     await once(s, 'listening');

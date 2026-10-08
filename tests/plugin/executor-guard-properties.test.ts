@@ -297,15 +297,13 @@ describe('assert-executor-safety: the scan root the caller spells', () => {
   );
 });
 
-// KNOWN OPEN DEFECT, filed as issue #85 — do NOT unskip here, and do NOT rewrite these bodies. `if (!source) continue;` at script line
-// ~190 drops a file the compiler could not read or could not parse, and the run then exits 0 over a
-// tree it never looked at. Both shapes are measured on be2f3f1:
-//   - a source file written with mode 0o000 → "0 executors, 0 inspected", empty stderr, exit 0
-//   - one stray backtick (`const s = ` + "`oops") above a wedge → the same green
-// The body below is the assertion that should hold once the issue is fixed; it is skipped rather
-// than committed red, because a red test on this branch blocks the merge and this defect predates
-// #76. Unskip in the commit that fixes #85.
-describe.skip('assert-executor-safety: files the compiler could not read (#85, KNOWN OPEN DEFECT)', () => {
+// ISSUE #85, FIXED AND UNSKIPPED HERE. These two bodies were committed skipped as the assertion
+// that should hold once the defect was closed, and they are unchanged: `if (!source) continue;`
+// dropped a file the compiler could not read or could not parse and the run then exited 0 over a
+// tree it never looked at. Both shapes were measured on be2f3f1 at "0 executors, 0 inspected",
+// empty stderr, exit 0. The refusal now lives in scripts/assert-executor-safety.mjs before the
+// walk; the ablations that pin it are in tests/plugin/executor-safety-guard.test.ts.
+describe('assert-executor-safety: files the compiler could not read (#85)', () => {
   it('refuses a tree holding a source file it could not read', async () => {
     const dir = join(tempdir('exec-open-'), 'src');
     mkdirSync(dir, { recursive: true });

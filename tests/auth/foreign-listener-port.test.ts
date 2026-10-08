@@ -11,6 +11,7 @@ import { createServer, type Server } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { freePort, portClaimPath, portHeldOn } from './login-harness.js';
+import { allowForeignBind } from '../setup/acquired-ports.js';
 
 // The body of a named function in the harness source, for the two cases whose rule is not
 // observable from inside one process.
@@ -22,6 +23,9 @@ function harnessFunction(name: string): string {
 }
 
 async function bind(port: number, host?: string): Promise<Server> {
+  // Declared to the bind-time guard (#74): this file exists to put up a listener freePort() did NOT
+  // hand out — `freePort() + 1` is its subject, not an accident — so the refusal has to be told.
+  allowForeignBind(port, 'the foreign listener #48 is about, deliberately outside the allocator');
   const server = host === undefined ? createServer().listen(port) : createServer().listen(port, host);
   await once(server, 'listening');
   return server;

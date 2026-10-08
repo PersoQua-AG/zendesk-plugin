@@ -7,7 +7,10 @@ export default defineConfig({
     // A suite that can reach the internet does not fail, it lies: three of the two-step login cases
     // run without an `exchange` stub, and on a regression they would POST to the real
     // acme.zendesk.com instead of turning red. The guard rejects every non-loopback fetch.
-    setupFiles: ['tests/setup/no-network.ts'],
+    // no-fixed-bind-port is the runtime half of #23: the source scan in
+    // scripts/assert-no-bound-port-literals.mjs cannot see a port that reaches listen() through a
+    // const or an expression, and this refuses it at the bind instead of at the spelling.
+    setupFiles: ['tests/setup/no-network.ts', 'tests/setup/no-fixed-bind-port.ts'],
     // #51. A failing run used to leave its evidence in scroll-back only: a QA round lost the names
     // of two failing tests to a terminal buffer and had to write the occurrence off as "load",
     // unevidenced. The default reporter still prints; this one additionally leaves the file and the
@@ -45,10 +48,13 @@ export default defineConfig({
       exclude: ['dist/**', 'tests/**', 'scripts/**', '*.config.ts', 'src/**/*.d.ts'],
       reporter: ['text', 'lcov'],
       thresholds: {
-        // Set from the measured state, not from a wish: the suite stands at 97.98% statements /
-        // 88.50% branches / 97.10% functions / 97.98% lines. These floors sit just below that, so a
-        // regression fails the build while ordinary churn does not — and they stay far above the
-        // 80% project minimum, which as a floor here would license a slow decay down to it.
+        // Set from the measured state, not from a wish: measured on this branch on 2026-10-08 the
+        // suite stands at 98.84% statements / 93.49% branches / 98.37% functions / 98.84% lines (it
+        // was 97.98/88.50/97.10/97.98 when these floors were written). The floors are absolute
+        // minima, not a ratchet: they catch a collapse, not a regression — today the headroom above
+        // them is 6.49 points on branches, 2.37 on functions and 1.84 on statements and lines, and
+        // any drop inside that band ships green. They stay far above the 80% project minimum, which
+        // as a floor here would license a slow decay down to it.
         statements: 97,
         branches: 87,
         functions: 96,
