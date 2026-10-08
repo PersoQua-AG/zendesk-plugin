@@ -17,7 +17,7 @@ async function drain<T>(gen: AsyncGenerator<T[], void, void>): Promise<T[]> {
 describe('paginateIncrementalCursor', () => {
   it('sends start_time first, then cursor, until end_of_stream', async () => {
     const fetchPage = vi
-      .fn<[{ startTime?: number; cursor?: string }], Promise<IncrementalCursorPage<number>>>()
+      .fn<(params: { startTime?: number; cursor?: string }) => Promise<IncrementalCursorPage<number>>>()
       .mockResolvedValueOnce({ records: [1, 2], after_cursor: 'c1', end_of_stream: false })
       .mockResolvedValueOnce({ records: [3], after_cursor: 'c2', end_of_stream: true });
     const all = await drain(paginateIncrementalCursor(fetchPage, 1000));
@@ -36,7 +36,7 @@ describe('paginateIncrementalTime', () => {
   it('follows end_time until count < 1000', async () => {
     const full = Array.from({ length: 1000 }, (_, i) => i);
     const fetchPage = vi
-      .fn<[number], Promise<IncrementalTimePage<number>>>()
+      .fn<(startTime: number) => Promise<IncrementalTimePage<number>>>()
       .mockResolvedValueOnce({ records: full, end_time: 2000, next_page: 'p2', count: 1000 })
       .mockResolvedValueOnce({ records: [1, 2], end_time: 3000, next_page: null, count: 2 });
     const all = await drain(paginateIncrementalTime(fetchPage, 1000));

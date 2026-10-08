@@ -6,15 +6,16 @@ import { listTickets, getTicket, getTicketsMany, createTicket, updateTicket } fr
 import { addComment, listComments } from '../tools/ticket-comments.js';
 import { addTicketTags } from '../tools/ticket-tags.js';
 import { createTicketsBulk, updateTicketsBulk } from '../tools/ticket-bulk.js';
+import { TICKET_STATUSES } from '../tools/ticket-status.js';
 import { getTicketAudits } from '../tools/ticket-audits.js';
 import { listTicketFields, listTicketForms } from '../tools/ticket-metadata.js';
 import { uploadAttachment, MAX_UPLOAD_BASE64_CHARS } from '../tools/uploads.js';
 import type { ToolContext } from './context.js';
 
-// Single source of truth for ticket-field update validation, shared by single-update
-// and bulk-update so the two paths validate symmetrically.
+// Shared by single-update and bulk-update so the two paths validate symmetrically. `new` stays in
+// the enum although #61 always refuses it: the tool's sentence beats a zod type error.
 const ticketUpdateFieldsSchema = z.object({
-  status: z.enum(['new', 'open', 'pending', 'hold', 'solved', 'closed']).optional(),
+  status: z.enum(TICKET_STATUSES).optional(),
   priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
   assignee_id: z.number().int().positive().optional(),
   group_id: z.number().int().positive().optional(),
@@ -27,15 +28,28 @@ const ticketUpdateFieldsSchema = z.object({
 // fields (subject required, a comment), so bulk-create validation is symmetric with the
 // single-create/-update tools instead of forwarding arbitrary objects to create_many. The only
 // escape valve is a custom field's `value`, which is genuinely open-typed.
-const bulkCreateTicketSchema = ticketUpdateFieldsSchema.extend({
-  subject: z.string().min(1),
-  comment: z.object({
-    body: z.string().min(1).optional(),
-    html_body: z.string().min(1).optional(),
-    public: z.boolean().optional(),
-  }),
-  requester_id: z.number().int().positive().optional(),
-});
+// #66: `.strict()` is the mechanism, not the declaration below. Both create surfaces already
+// PUBLISH additionalProperties:false, while the zod parse stripped an undeclared key and the tool
+// reported success — so a mistyped key name silently created an unlinked follow-up. Strict makes
+// the runtime keep the contract the schema advertises, for every field and not just this one.
+const bulkCreateTicketSchema = ticketUpdateFieldsSchema
+  .extend({
+    subject: z.string().min(1),
+    comment: z
+      .object({
+        body: z.string().min(1).optional(),
+        html_body: z.string().min(1).optional(),
+        // #64: bulk create hands its records straight to create_many, where Zendesk's own
+        // default would publish the comment. The schema is the one funnel every record passes,
+        // so the internal-by-default decision is applied here as a parse default.
+        public: z.boolean().optional().default(false).describe('true = the first comment is visible to the customer. Omitted = internal note (agents only).'),
+      })
+      .strict(),
+    requester_id: z.number().int().positive().optional(),
+    // Zendesk's write-only follow-up link (Tickets JSON format).
+    via_followup_source_id: z.number().int().positive().optional(),
+  })
+  .strict();
 
 export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
   const { httpClient, cache, securityLevel, markdownDefault } = ctx;
@@ -67,19 +81,26 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     'zendesk_create_ticket',
     {
-      description: 'Create a ticket. The comment is converted Markdown→HTML unless markdown:false.',
-      inputSchema: {
-        subject: z.string().min(1),
-        comment: z.string().min(1),
-        requesterId: z.number().int().positive().optional(),
-        priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
-        status: z.enum(['new', 'open', 'pending', 'hold', 'solved']).optional(),
-        tags: z.array(z.string()).optional(),
-        groupId: z.number().int().positive().optional(),
-        assigneeId: z.number().int().positive().optional(),
-        markdown: z.boolean().optional(),
-        public: z.boolean().optional(),
-      },
+      description:
+        'Create a ticket. Its first comment is an INTERNAL note unless public:true is passed. The comment is converted Markdown→HTML unless markdown:false.',
+      // A ZodObject rather than a raw shape, so `.strict()` reaches the top-level args too (#66).
+      inputSchema: z
+        .object({
+          subject: z.string().min(1),
+          comment: z.string().min(1),
+          requesterId: z.number().int().positive().optional(),
+          priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
+          // A ticket is never created `closed`; the rest of the published set is derived, not retyped.
+          status: z.enum(TICKET_STATUSES).exclude(['closed']).optional(),
+          tags: z.array(z.string()).optional(),
+          groupId: z.number().int().positive().optional(),
+          assigneeId: z.number().int().positive().optional(),
+          markdown: z.boolean().optional(),
+          public: z.boolean().optional().default(false).describe('true = the first comment is visible to the customer. Omitted = internal note (agents only).'),
+          // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
+          followupSourceId: z.number().int().positive().optional(),
+        })
+        .strict(),
     },
     async (args) => okWithHandle(await createTicket(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault })),
   );
@@ -105,8 +126,14 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     'zendesk_add_comment',
     {
-      description: 'Add a public or internal comment to a ticket (Markdown→HTML unless markdown:false).',
-      inputSchema: { ticketId: z.number().int().positive(), body: z.string().min(1), public: z.boolean().optional(), markdown: z.boolean().optional() },
+      description:
+        'Add a comment to a ticket. Visibility is opt-in: omitting public posts an INTERNAL note that only agents see — pass public:true for a reply the customer receives. Markdown→HTML unless markdown:false.',
+      inputSchema: {
+        ticketId: z.number().int().positive(),
+        body: z.string().min(1),
+        public: z.boolean().optional().default(false).describe('true = visible to the customer. Omitted = internal note (agents only).'),
+        markdown: z.boolean().optional(),
+      },
     },
     async (args) => okWithHandle(await addComment(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault }, securityLevel)),
   );
@@ -125,7 +152,11 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
 
   server.registerTool(
     'zendesk_create_tickets_bulk',
-    { description: 'Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table).', inputSchema: { tickets: z.array(bulkCreateTicketSchema).min(1).max(100) } },
+    {
+      description:
+        'Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table). Each record’s first comment is an INTERNAL note unless comment.public:true is passed.',
+      inputSchema: { tickets: z.array(bulkCreateTicketSchema).min(1).max(100) },
+    },
     async ({ tickets }) => {
       const r = await createTicketsBulk(httpClient, cache, { tickets }, {}, securityLevel);
       return toText(`${r.summary} failures=${JSON.stringify(r.failures)}\n(cache: ${r.cacheHandle})`);

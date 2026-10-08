@@ -1,7 +1,7 @@
 // src/tools/orgs.ts
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeDescribe, makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import { listCbp, DEFAULT_LIST_CAP, DEFAULT_MEMBERSHIP_CAP } from './cbp-list.js';
@@ -26,7 +26,7 @@ const describeOrg = makeDescribe<Org>('org', (o) => `#${o.id} ${o.name ?? '(no n
 
 export async function listOrgs(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -50,7 +50,7 @@ const SingleOrgSchema = z.object({ organization: OrgSchema });
 
 export async function getOrg(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { orgId: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -82,7 +82,7 @@ export interface OrgWriteFields {
 
 export async function upsertOrg(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { fields: OrgWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -102,7 +102,7 @@ export async function upsertOrg(
 
 export async function updateOrg(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { orgId: number; fields: OrgWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -127,7 +127,7 @@ const describeOrgMembership = makeDescribe<OrgMembership>(
 
 export async function listOrgMemberships(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
