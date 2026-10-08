@@ -110,11 +110,8 @@ try {
   // Asserted by shape rather than by a frame count (#91), in both guards' tests.
   // EVERY READ OF `err` IS CHAINED (#110). A thrown `null` or `undefined` is not an Error, so
   // `err.code` raised `TypeError: Cannot read properties of null` here — the stack trace these
-  // lines exist to prevent. The third fallback prints the thrown value itself, because `?.`
-  // alone answers `undefined`; the sibling guard reached the same shape first. Measured while
-  // fixing it: the `Cannot read` path threw one line EARLIER than its message, at the `EISDIR`
-  // comparison, so that read is chained too. tests/plugin/port-guard-error-paths.test.ts drives
-  // both paths with fs patched to throw null.
+  // lines exist to prevent. The third fallback prints the thrown value itself, because `?.` alone
+  // answers `undefined`. Driven by tests/plugin/port-guard-error-paths.test.ts.
   console.error(`Cannot scan ${target}: ${err?.code ?? err?.message ?? err}.`);
   process.exit(1);
 }

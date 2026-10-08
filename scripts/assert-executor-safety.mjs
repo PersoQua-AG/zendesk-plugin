@@ -113,9 +113,8 @@ const DECLARATION = /\.d\.(ts|mts|cts)$/;
 // excerpt and a trace), and a listable-but-unstattable root (EACCES), which reaches the lstat on
 // the mark far below rather than this walk. The last fallback is for a throw that is neither:
 // `??` on `.code` alone printed `(undefined)`. Asserted by shape rather than by a frame count
-// (#91), in both guards' tests. The sibling guard writes the same three-way fallback since #110;
-// until then it wrote `err.code ?? err.message` and raised a TypeError of its own on a thrown
-// null or undefined — the stack trace this paragraph exists to prevent.
+// (#91), in both guards' tests, and the sibling guard writes the same three-way fallback since
+// #110.
 // Repo-relative where that is shorter, absolute where it is not. `relative()` alone answered a
 // tree under /var/folders with six `../` segments, which is longer than the path it replaced and
 // harder to paste back into a command.
