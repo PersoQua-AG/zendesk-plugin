@@ -105,16 +105,20 @@ export interface NewTicketInput {
 
 // #64: visibility is opt-in. An omitted `public` means an INTERNAL note, because publishing an
 // internal remark to the customer cannot be undone while an internal note can be reposted.
-// This function has exactly two callers, and they are the only surfaces whose default is resolved
-// here: addComment (src/tools/ticket-comments.ts) and createTicket below.
-// zendesk_create_tickets_bulk bypasses it — it forwards raw Zendesk records to create_many, so its
-// default is a PUBLISHED one in the registered schema (bulkCreateTicketSchema in
-// src/register/tickets.ts) rather than a runtime one. zendesk_apply_macro_to_ticket
-// (applyMacroToTicket in src/tools/business-rules/macros.ts) PUTs the macro preview's comment
-// verbatim and resolves NO default; that is scoped out of #64 because the macro's author chooses
-// the visibility in Zendesk and the model cannot set the flag at all — tracked in #116.
-// Four comment-writing surfaces, three defaults, two of them here. Symbols, not line numbers:
-// a line number in a comment is unchecked and drifts (the same reason tm-9-failcheck lost its own).
+// Four comment-writing surfaces, four defaults, and NONE of them is this parameter for MCP traffic:
+// every registered surface publishes its own default in the schema, so `public` arrives already
+// resolved. addComment (src/tools/ticket-comments.ts) and createTicket below are this function's
+// only two callers, and their register-layer defaults fire first; zendesk_create_tickets_bulk
+// bypasses this function entirely (it forwards raw Zendesk records to create_many, so
+// bulkCreateTicketSchema in src/register/tickets.ts is its one funnel).
+// This parameter default is therefore the backstop for callers that do NOT come through MCP, and
+// the reason the type keeps `public` optional. Removing either layer is a silent regression, so
+// both are pinned.
+// The fourth surface, zendesk_apply_macro_to_ticket (applyMacroToTicket in
+// src/tools/business-rules/macros.ts), resolves no default at all: scoped out of #64 because the
+// macro's author chooses the visibility in Zendesk and the model cannot set the flag — tracked
+// in #116. Symbols, not line numbers: a line number in a comment is unchecked and drifts (the
+// same reason tm-9-failcheck lost its own).
 export function buildComment(text: string, useMarkdown: boolean, isPublic = false): Record<string, unknown> {
   return useMarkdown
     ? { html_body: markdownToHtml(text), public: isPublic }
