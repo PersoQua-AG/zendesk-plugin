@@ -387,6 +387,12 @@ try {
   // TWO TRIES, and the split is the owner decision of 2026-10-08: COULD NOT LOOK is housekeeping,
   // WAS LOOKED AT AND IS NOT A BUNDLE is contamination. A missing read permission says nothing
   // about the content, so it may not rename somebody's file and call it CONTAMINATED.
+  //
+  // ONE SHAPE DOES NOT REACH EITHER BRANCH: a FIFO under the publishable name blocks here and the
+  // run never ends — measured, no exit and SIGTERM after 8 s, on this revision and on the one
+  // before it alike. The stat pair this replaced ran BEHIND the read and never protected against
+  // it either, so it is neither a regression nor something this split can answer; it needs a
+  // decision of its own about reading the release gate's input with a bound.
   bundle = readFileSync(bundlePath);
 } catch (error) {
   housekeepingFailed = true;
@@ -399,7 +405,7 @@ try {
       ' The file is left where it is; make it readable and audit again',
   );
 }
-if (bundle) {
+if (bundle !== null) {
   try {
     entries = readArchive(bundle);
     readable = true;
@@ -487,8 +493,15 @@ if (bundle && entries.length > 0 && !bundledManifest) {
   }
 }
 
-// "This bundle is unfit" and "this tree cannot publish" are two facts; only the first may quarantine.
-const bundleIsUnfit = problems.length > housekeepingProblems;
+// A run that never got a buffer has NO VERDICT ON THE BUNDLE — owner decision of 2026-10-08. It is
+// its own fact, and it is the one `problems.length > housekeepingProblems` cannot express: that
+// comparison counts problems, it does not classify them, so a second non-housekeeping problem (an
+// `--expect-version` mismatch is enough) used to tip an unlooked-at tree into "the bundle did not
+// pass the audit" and, with the guard below ablated, into `.REJECTED`.
+const couldNotLook = bundle === null;
+// "This bundle is unfit" and "this tree cannot publish" are two facts; only the first may
+// quarantine, and only a run that looked may assert the first at all.
+const bundleIsUnfit = !couldNotLook && problems.length > housekeepingProblems;
 
 if (problems.length > 0) {
   console.error(
@@ -500,14 +513,18 @@ if (problems.length > 0) {
   // secret inside it — the one somebody would upload. It is renamed rather than deleted so the
   // evidence survives for whoever has to find out how it got in.
   //
-  // THE CONDITION IS "WE READ IT AND IT IS UNFIT" — owner decision of 2026-10-08. `bundle` is the
-  // BUFFER: it is null for every read that threw, and a path the audit could not look inside is
-  // REPORTED, not quarantined, because a missing read permission is not contamination. The buffer
-  // is also the whole shape question answered at once, which a stat pair answered wrongly twice:
+  // THE CONDITION IS "WE READ IT AND IT IS UNFIT" — owner decision of 2026-10-08, carried by
+  // `couldNotLook` in `bundleIsUnfit` above. A path the audit could not look inside is REPORTED,
+  // not quarantined, because a missing read permission is not contamination.
+  //
+  // The buffer also answers most of the shape question that a stat pair answered wrongly twice:
   // `readFileSync` throws EISDIR for a directory, ENOENT through a dangling alias and ENXIO or
-  // EOPNOTSUPP for a socket, so nothing but a regular file the audit actually read gets renamed.
+  // EOPNOTSUPP for a socket, so none of those is renamed. NOT ALL OF IT, measured: a symlink to a
+  // CHARACTER DEVICE reads as an empty buffer, so such an alias is looked at, refused as "smaller
+  // than an empty ZIP archive" and renamed. That is the decision's own letter — it WAS read — and
+  // the rename moves the link, never the device; what it is not is "only a regular file".
   let quarantined = null;
-  if (bundleIsUnfit && bundle !== null) {
+  if (bundleIsUnfit) {
     quarantined = `${bundlePath}.REJECTED`;
     try {
       // `recursive` so an unpacked earlier quarantine in the slot cannot keep the rename from running.
@@ -518,7 +535,13 @@ if (problems.length > 0) {
       // A quarantine this script could not perform is housekeeping it could not do, so it exits 2
       // and not 1: the caller is being told to fix the TREE, by hand, before anything is uploaded.
       housekeepingFailed = true;
-      console.error(`  - could not quarantine ${basename(bundlePath)}: ${error.message} — DELETE IT BY HAND`);
+      // "IF IT IS STILL THERE", because it may not be: a concurrent run can take the name away
+      // between the read and the rename, and `renameSync` then fails with ENOENT on a path nobody
+      // has to delete. The instruction is conditional rather than asserted.
+      console.error(
+        `  - could not quarantine ${basename(bundlePath)}: ${error.message}` +
+          ` — if ${basename(bundlePath)} is still there, DELETE IT BY HAND`,
+      );
     }
   }
   console.error('\nNo artifact and no checksum were produced.');

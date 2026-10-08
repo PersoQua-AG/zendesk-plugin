@@ -400,7 +400,9 @@ describe('a stale artifact that cannot be cleared', () => {
 
     expect(run.status).toBe(2);
     expect(nameExists(`${tree.bundle}.REJECTED`), 'a clean bundle was quarantined').toBe(false);
-    expect(existsSync(tree.bundle), 'a clean bundle lost its publishable name').toBe(true);
+    // `nameExists`, like the line above and like every presence check in this file: `existsSync`
+    // follows a link and answers a different question (#94's "one spelling").
+    expect(nameExists(tree.bundle), 'a clean bundle lost its publishable name').toBe(true);
     expect(readFileSync(tree.bundle).equals(before), 'the quarantined copy is the clean bundle').toBe(true);
     expect(run.stderr).not.toContain('CONTAMINATED');
   });
@@ -520,6 +522,26 @@ describe('a path the audit could not read', () => {
       await new Promise<void>((done) => server.close(() => done()));
       rmSync(tree.bundle, { force: true });
     }
+  });
+
+  // THE DECISION'S ONLY REAL DEFENCE, and it was held by nothing: every other case here is also
+  // left standing by the shape rule this replaced, so all of them survive the ablation of the term
+  // that carries the decision. `bundleIsUnfit` is a COUNT comparison, so one more non-housekeeping
+  // problem — `--expect-version` is the cheapest to reach — used to outvote the unreadable path.
+  //
+  // Measured with `!couldNotLook &&` deleted from `bundleIsUnfit`: the directory below is renamed
+  // to `.REJECTED` and announced CONTAMINATED at exit 2, two lines under its own report saying
+  // "The file is left where it is" — the `important-project` loss this PR cites as its motive.
+  it('does not quarantine it when a second problem outnumbers the unreadable path', () => {
+    const tree = makeTree();
+    rmSync(tree.bundle);
+    mkdirSync(tree.bundle);
+    writeFileSync(join(tree.bundle, 'main.ts'), "somebody's actual work");
+    const run = runAudit(tree, ['zendesk.mcpb', '--expect-version', '9.9.9']);
+
+    expect(run.stderr, 'the second problem went unreported').toContain('version mismatch');
+    expectReportedNotQuarantined(run, tree);
+    expect(existsSync(join(tree.bundle, 'main.ts')), 'the directory was moved').toBe(true);
   });
 
   // THE OTHER SIDE OF THE LINE, and #90's own reproduction: a bundle the audit DID read and found
@@ -642,7 +664,6 @@ describe('an archive that cannot be judged is refused', () => {
 
   it('refuses a missing bundle, as a message and not a stack trace', () => {
     const run = runAudit(makeTree(), ['no-such-bundle.mcpb']);
-    expect(run.status).not.toBe(0);
     // A path that is not there is a path the audit could not read: reported by name at exit 2,
     // the same side of the line as every other "could not look" (owner decision, 2026-10-08).
     expect(run.status).toBe(2);
