@@ -1288,8 +1288,10 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     const run = runAudit(tree);
     expect(run.status).toBe(1);
     expect(existsSync(tree.artifact)).toBe(true);
-    expect(run.stderr).toContain('from an earlier run is STILL THERE and uploadable');
-    expect(run.stderr).toContain(basename(tree.checksum));
+    expect(run.stderr).toContain(`${basename(tree.artifact)} is STILL THERE under this tree's release name`);
+    expect(run.stderr).toContain('it is a regular file somebody can upload under that name');
+    expect(run.stderr).toContain('The clearing was skipped because this tree cannot publish.');
+    expect(run.stderr).toContain(`${basename(tree.checksum)} is STILL THERE`);
   });
 
   // THE SAME NOTICE, THE OTHER ARM. It lived inside the `problems.length > 0` paragraph, so a run
@@ -1303,8 +1305,30 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(run.status).toBe(2);
     expect(run.stderr).toContain('version mismatch');
     expect(existsSync(tree.artifact), 'the clearing is skipped on a tree fault, on purpose').toBe(true);
-    expect(run.stderr).toContain('from an earlier run is STILL THERE and uploadable');
-    expect(run.stderr).toContain(basename(tree.checksum));
+    expect(run.stderr).toContain(`${basename(tree.artifact)} is STILL THERE under this tree's release name`);
+    expect(run.stderr).toContain('The clearing was skipped because this tree cannot publish.');
+    expect(run.stderr).toContain(`${basename(tree.checksum)} is STILL THERE`);
+  });
+
+  // BLOCKER 2 OF ROUND 5, three false claims in one paragraph: the run said the slot "was not
+  // cleared because this tree cannot publish" about a path the clearing had been REFUSED BY (the
+  // tree fault is the consequence of that refusal, not its cause), called a DIRECTORY "uploadable",
+  // and asserted "from an earlier run" over a path nobody in the script had written. All three are
+  // measured here on the artifact slot, which the three older clearing-fault cases never used.
+  it('does not invert the cause, or call a directory uploadable, when the clearing is what failed', () => {
+    const tree = makeTree({ entries: [...clean(), { name: 'tokens.enc', data: 'x' }] });
+    mkdirSync(tree.artifact);
+    writeFileSync(join(tree.artifact, 'in-the-way'), 'x');
+    writeFileSync(tree.checksum, 'the checksum of an earlier release');
+    const run = runAudit(tree);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('could not be cleared: ERR_FS_EISDIR');
+    expect(run.stderr).toContain('The clearing reached it and was refused: ERR_FS_EISDIR.');
+    expect(run.stderr).not.toContain('The clearing was skipped');
+    expect(run.stderr).toContain('it is NOT a regular file, so it cannot be uploaded');
+    expect(run.stderr).not.toContain('from an earlier run');
+    // The other half of the same pair really was cleared, and only that half is reported as gone.
+    expect(run.stderr).toContain(`NOT coming back: ${basename(tree.checksum)}`);
   });
 
   // The success path used to write unguarded, so an unwritable checkout, a full disk or a slot

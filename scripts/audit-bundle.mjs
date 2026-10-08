@@ -346,6 +346,18 @@ function nameState(path) {
   }
 }
 
+// A TAKEN NAME IS NOT NECESSARILY A FILE SOMEBODY CAN UPLOAD, which is the other half of the same
+// question. The survival notice below called a DIRECTORY in the artifact slot "STILL THERE and
+// uploadable" — measured. Negative on anything that is not a regular file, including a name this
+// script cannot lstat, because "uploadable" is a claim and an unanswerable question is not one.
+function isRegularFile(path) {
+  try {
+    return lstatSync(path, { throwIfNoEntry: false })?.isFile() === true;
+  } catch {
+    return false;
+  }
+}
+
 // How many .REJECTED slots the search may try. BOUNDED, and the bound is named rather than
 // discovered: round 4 of PR #102's review measured an unbounded free-name search emit 67 MB of
 // stderr and 90,235 lines in under 20 seconds, with the contaminated bundle never quarantined and
@@ -539,6 +551,14 @@ const ownBundle = samePlace(dirname(bundlePath), root);
 // A run that removes something names it, and there is no cell left to hide in.
 const cleared = [];
 
+// WHY A SLOT THAT STILL STANDS STILL STANDS. One reason per slot, set by whoever left it standing,
+// because the single sentence that used to cover all of them was wrong wherever the clearing had
+// actually run: "It was not cleared because this tree cannot publish" was printed over a path the
+// clearing had been REFUSED BY, which inverts the chain — the tree fault is the consequence of the
+// refused removal, not its cause. Measured over the two halves of one pair in one run, which
+// managed to say both that and "cleared because this tree was about to replace it".
+const standingReason = new Map();
+
 // REPORTED FROM ONE EXIT HANDLER, NOT BOLTED TO THE EXITS. This report used to be a function
 // called at three `process.exit` sites, which is three arms again: an uncaught throw between the
 // clearing and the verdict leaves with code 1 and a stack trace and said nothing about what the
@@ -560,12 +580,23 @@ process.on('exit', (code) => {
   // (a typo'd `--expect-version` is the ordinary way in) leaves the pair intact, uploadable and
   // unmentioned, while "No artifact and no checksum were produced by this run" is the only line an
   // operator reads about artifacts. Measured.
-  if (artifactPath && nameState(artifactPath) === 'taken') {
-    console.error(
-      `\n${basename(artifactPath)} from an earlier run is STILL THERE and uploadable` +
-        `${nameState(checksumPath) === 'taken' ? `, with ${basename(checksumPath)} beside it` : ''}.` +
-        ' It was not cleared because this tree cannot publish; it is not this run\'s output.',
-    );
+  //
+  // ONE SENTENCE PER SLOT, not one sentence about a pair described by the artifact's state alone:
+  // what is in a slot, whether that is uploadable, and why it is there are three facts that differ
+  // between the two halves, and a pair sentence had to pick one half's answer for both. Nothing
+  // here claims a slot came "from an earlier run" any more — that was asserted over paths nobody
+  // in this script had ever written.
+  for (const slot of [artifactPath, checksumPath]) {
+    if (!slot || nameState(slot) !== 'taken') continue;
+    const what = isRegularFile(slot)
+      ? 'it is a regular file somebody can upload under that name'
+      : 'it is NOT a regular file, so it cannot be uploaded and nothing can be published under that name until it is gone';
+    const why =
+      standingReason.get(slot) ??
+      (ownBundle
+        ? 'The clearing was skipped because this tree cannot publish.'
+        : "The clearing leaves this tree's release name alone when the bundle audited is not this tree's own.");
+    console.error(`\n${basename(slot)} is STILL THERE under this tree's release name, and ${what}. ${why} It is not this run's output.`);
   }
 });
 
@@ -584,6 +615,7 @@ function clearStaleArtifact() {
       rmSync(stale, { force: true });
       if (wasThere === 'taken') cleared.push(basename(stale));
     } catch (error) {
+      standingReason.set(stale, `The clearing reached it and was refused: ${error.code ?? error.message}.`);
       treeFaults.push(
         `the stale artifact ${basename(stale)} could not be cleared: ${error.code ?? error.message}` +
           ' — this tree cannot be released from until that path is gone',
