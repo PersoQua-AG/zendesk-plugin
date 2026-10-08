@@ -390,9 +390,10 @@ try {
   //
   // ONE SHAPE DOES NOT REACH EITHER BRANCH: a FIFO under the publishable name blocks here and the
   // run never ends — measured, no exit and SIGTERM after 8 s, on this revision and on the one
-  // before it alike. The stat pair this replaced ran BEHIND the read and never protected against
-  // it either, so it is neither a regression nor something this split can answer; it needs a
-  // decision of its own about reading the release gate's input with a bound.
+  // before it alike. Nothing ever protected against it: at the base `dc2fcc0` this read is the
+  // FIRST touch of the path, there is no stat before it, and the stat pair of the withdrawn
+  // intermediate revisions ran behind it. So it is neither a regression nor something this split
+  // can answer; it needs a decision of its own about reading the gate's input with a bound.
   bundle = readFileSync(bundlePath);
 } catch (error) {
   housekeepingFailed = true;
