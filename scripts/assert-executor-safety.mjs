@@ -1,11 +1,12 @@
 // scripts/assert-executor-safety.mjs
 // Structural guard for the defect class behind #9, not for its instance.
 //
-// THE RULE IS CHEAP. ITS EDGES AND THE CHOICE OF TREE ARE WHAT IS EXPENSIVE. The rule is one line
-// of code — `const inspect = nested || asyncExecutor` — and has not moved since #11. What the
-// rounds since have cost is everything AROUND it: where "synchronous path" stops (LIMITS), and
-// which directory the walk is pointed at (#76, #87). Read THE RULE once, then LIMITS and the
-// mark — that is where the surprises are.
+// THE RULE IS CHEAP. ITS EDGES, THE CHOICE OF TREE AND WHAT WAS ACTUALLY READ ARE WHAT IS
+// EXPENSIVE. The rule is one line of code — `const inspect = nested || asyncExecutor` — and has
+// not moved since #11. What the rounds since have cost is everything AROUND it: where "synchronous
+// path" stops (LIMITS), which directory the walk is pointed at (#76, #87), and whether every file
+// collected from that directory was read at all (#85). Read THE RULE once, then LIMITS, the mark
+// and the unread refusal — that is where the surprises are.
 //
 // What happened (#9): `server.listen(port)` sat on the synchronous path of an INNER executor in
 // src/auth/oauth-flow.ts. An out-of-range port makes node throw SYNCHRONOUSLY; the throw rejected
@@ -47,6 +48,12 @@
 //   - Inside a SETTLING CATCH BLOCK the settle expression is exempt as a whole, arguments
 //     included. That is the one exemption in the file; it is justified where it is applied.
 //
+// AND IT REFUSES A TREE IT COULD NOT FULLY READ (#85). Two kinds of unread, both refused by name
+// before the walk starts, both measured green-at-exit-0 before this: a collected file the compiler
+// could not OPEN, and a collected file that does not PARSE — where the AST stops at the breakage
+// and every executor below it is invisible. Semantic diagnostics are NOT part of that; the numbers
+// and the reason are at the check itself.
+//
 // THE CALLER NAMES THE TREE (#76). argv[2], no default. While the default was 'src' a run aimed
 // anywhere else still reported success, so "scanned the wrong tree" and "found nothing" produced
 // the same green.
@@ -66,7 +73,7 @@
 // still named, it just never exits 0. The one cost: this hangs on a filename. Move or rename
 // src/server.ts and the guard refuses its own tree, loudly, in the same commit that breaks
 // `npm run build`, which names that exact path.
-import { lstatSync, readdirSync } from 'node:fs';
+import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 import ts from 'typescript';
@@ -111,9 +118,20 @@ const DECLARATION = /\.d\.(ts|mts|cts)$/;
 // `??` on `.code` alone printed `(undefined)`. Asserted by shape rather than by a frame count
 // (#91), in both guards' tests. The three-way fallback is THIS guard's alone: the sibling writes
 // `err.code ?? err.message`, which on a thrown null or undefined raises a TypeError of its own —
-// the stack trace this paragraph exists to prevent. Not fixed here; comments-only commit.
-const unreadable = (err) => {
-  console.error(`Nothing to inspect: ${target} (${err?.code ?? err?.message ?? err}).`);
+// the stack trace this paragraph exists to prevent. Not fixed in the guard; see #91.
+// Repo-relative where that is shorter, absolute where it is not. `relative()` alone answered a
+// tree under /var/folders with six `../` segments, which is longer than the path it replaced and
+// harder to paste back into a command.
+const rel = (p) => {
+  const r = relative(root, p);
+  return !r || r.startsWith('..') ? p : r;
+};
+
+// `subject` names what refused, because the per-file caller below is not talking about the root.
+// Measured: without it, a file the walk could not stat was reported as `Nothing to inspect: <root>`,
+// which is the one thing #85 asks the guard not to do — name the tree instead of the file.
+const unreadable = (err, subject = target) => {
+  console.error(`Nothing to inspect: ${subject} (${err?.code ?? err?.message ?? err}).`);
   process.exit(1);
 };
 
@@ -137,6 +155,85 @@ const program = ts.createProgram(files, {
   noResolve: true,
 });
 const checker = program.getTypeChecker();
+
+// A FILE THE WALK NEVER SAW MAY NOT BE COUNTED CLEAN (#85). Two ways a collected file drops out of
+// the walk without a trace, both measured on dd6e564 over a marked tree holding one wedged
+// executor, both printing "0 executors, 0 inspected" and exiting 0:
+//
+//   1. `chmod 000 w.ts` — ts.createProgram cannot open it, getSourceFile returns undefined, and the
+//      old `if (!source) continue;` dropped it in silence.
+//   2. an unterminated template literal on line 1 of hidden.ts — the file parses into an AST that
+//      simply stops, and every executor below the breakage is gone from the walk. Reproduced with
+//      the same content in server.ts itself, i.e. in the marked file.
+//
+// So both are refused here, before the walk, and each names what was unread. SYNTACTIC diagnostics
+// only: the program runs with noLib/noResolve and no project tsconfig, so every semantic
+// diagnostic is expected noise. Measured over this repo's own src/ (77 files, dd6e564):
+// getSyntacticDiagnostics() → 0, getSemanticDiagnostics() → 933, of which TS2304 "cannot find
+// name" 413, TS2583 161, TS2339 173, TS2792 104 — all of them the absence of lib.d.ts and of
+// module resolution, on a tree `npm run build` compiles clean. Refusing on those would make the
+// guard unrunnable, so the semantic list is deliberately not consulted.
+//
+// ONLY REGULAR FILES ARE THIS CHECK'S BUSINESS. `readdirSync` lists directories too, so a DIRECTORY
+// named server.ts is collected and getSourceFile returns undefined for it — but that tree's defect
+// is its mark, not an unread file, and the mark check below already names it ("Not the guarded
+// tree"). Same for a dangling symlink. Answering those here instead would replace a precise verdict
+// with a vaguer one, and it broke the three cases #76/#77 pinned when this check was first written
+// without the lstat. That lstat is reached only by a file that already failed to load, so a healthy
+// tree pays nothing for it; when the lstat itself dies — `chmod 444` on the root lists names and
+// refuses to stat entries — that is the root-unreadable case #77 raised, handed to its own refusal.
+// Every collected entry leaves here in exactly one of three states — walked, refused by name, or
+// explicitly not a file, with the link RESOLVED before that last question is asked. There is no
+// fourth, and that is the whole point: the silent skip was it.
+const unread = [];
+const sources = [];
+for (const file of files) {
+  const source = program.getSourceFile(file);
+  if (source) {
+    sources.push([file, source]);
+    continue;
+  }
+  // `statSync`, which FOLLOWS the link, and not `lstatSync`, which reports it. A `.ts` symlink
+  // whose target the compiler cannot open is an unread source file — lstat said "symlink, not a
+  // file" and dropped it, so the hole #85 is about survived one indirection. Measured on a marked
+  // tree with `w.ts -> hidden/real.ts`, `chmod 000 real.ts`: lstat gave `0 executors, 0 inspected`
+  // and exit 0, the identical green; stat names the file and refuses.
+  let stats;
+  try {
+    stats = statSync(file);
+  } catch (err) {
+    // ENOENT (dangling) and ELOOP (self-referential) are the two throws that are not read
+    // failures: neither names a file the walk could have read, and refusing them would reverse the
+    // #76/#77 cases that settled "a dangling symlink is Not the guarded tree, not an unread file".
+    // They were asymmetric before — a dangling link was a silent skip, its self-referential twin
+    // refused the whole tree.
+    if (err?.code === 'ENOENT' || err?.code === 'ELOOP') continue;
+    unreadable(err, rel(file));
+    // Unreachable: `unreadable` ends in process.exit(1). It stands so that `stats` below is
+    // definitely assigned by this block's own shape rather than by a helper's promise to exit.
+    continue;
+  }
+  if (!stats.isFile()) continue;
+  unread.push(`${rel(file)}  (could not be read)`);
+}
+for (const d of program.getSyntacticDiagnostics()) {
+  const pos = d.file && d.start !== undefined ? d.file.getLineAndCharacterOfPosition(d.start) : null;
+  const at = pos ? `:${pos.line + 1}:${pos.character + 1}` : '';
+  const where = d.file ? rel(d.file.fileName) : '(no file)';
+  unread.push(`${where}${at}  ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`);
+}
+if (unread.length > 0) {
+  console.error(
+    `Refusing the tree: ${unread.length} file(s) under ${rel(target)} could` +
+      ' not be read or did not parse, so the walk never saw what is in them.',
+  );
+  for (const entry of unread) console.error(`  - ${entry}`);
+  console.error(
+    '\nA guard that denies by default must not credit a file it never read. Fix the permission or' +
+      '\nthe syntax error and run again; there is no way to pass with a file missing from the walk.',
+  );
+  process.exit(1);
+}
 
 // Function boundaries for the synchronous walk. Classes are NOT a boundary: a `static {}` block and
 // a property initializer run synchronously, so they belong to the path. Their methods do not.
@@ -207,12 +304,10 @@ const inventory = [];
 let inspectedCount = 0;
 const visited = new Set();
 
-for (const file of files) {
-  const source = program.getSourceFile(file);
-  if (!source) continue;
+for (const [file, source] of sources) {
   const where = (node) => {
     const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
-    return `${relative(root, file)}:${line + 1}:${character + 1}`;
+    return `${rel(file)}:${line + 1}:${character + 1}`;
   };
 
   // `ancestors` holds the enclosing executors on the synchronous path, outermost first.
@@ -320,7 +415,7 @@ for (const file of files) {
   findRoots(source);
 }
 
-const show = relative(root, target) || target;
+const show = rel(target);
 
 // THE MARK IS A FILE THIS WALK COLLECTED, not a path that merely exists. `existsSync` said yes to
 // three things that are not the module the build bundles: a DIRECTORY named server.ts; a
