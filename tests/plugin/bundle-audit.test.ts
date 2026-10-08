@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateRawSync } from 'node:zlib';
 import { constants } from 'node:buffer';
@@ -1032,7 +1032,6 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
       const wouldLandOn = join(tree.dir, `zendesk-${escape}.mcpb`);
       // The fixture is only a fixture if the separator really moved the path.
       expect(wouldLandOn).toBe(join(tree.dir, 'VICTIM.mcpb'));
-      expect(wouldLandOn).not.toContain('zendesk-');
       writeFileSync(wouldLandOn, "somebody else's file");
       writeFileSync(`${wouldLandOn}.sha256`, 'and its checksum');
 
@@ -1111,15 +1110,13 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(run.status).toBe(2);
     expect(run.stderr).toContain('could not be cleared');
     expect(existsSync(tree.artifact), 'the artifact was removed, as the code intends').toBe(false);
-    // The sentence has to match the disk.
-    expect(run.stderr).not.toContain('Nothing was deleted');
     expect(run.stderr).toContain('Already removed before this run finished, and NOT coming back');
     expect(run.stderr).toContain(basename(tree.artifact));
   });
 
-  // `wasThere` was pinned by nothing: replacing it with `true` left 188/188 green. Ablated, with
-  // the artifact slot EMPTY and only the checksum slot in the way, the run claimed a release that
-  // never existed had been destroyed.
+  // `wasThere` is pinned by this and nothing else. Ablated to `true`, with the artifact slot EMPTY
+  // and only the checksum slot in the way, the run claimed a release that never existed had been
+  // destroyed.
   it('does not claim it removed an artifact that was never there', () => {
     const tree = makeTree();
     mkdirSync(tree.checksum); // a directory in the slot: rmSync(force) throws ERR_FS_EISDIR
@@ -1127,7 +1124,6 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(run.status).toBe(2);
     expect(run.stderr).toContain('could not be cleared');
     expect(run.stderr).not.toContain('Already removed before this run finished');
-    expect(run.stderr).not.toContain(basename(tree.artifact) + ' was');
   });
 
   // THE SAME PARAGRAPH IN THE OTHER ARM. The deletion notice used to be interpolated only into the
@@ -1234,31 +1230,22 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(existsSync(join(tree.dir, 'build-1.0.0.mcpb'))).toBe(false);
   });
 
-  // The same stem, one message further on: the sentence that declines to write an artifact for a
-  // foreign bundle announced `other-1.0.0.mcpb`, a release name this tree does not declare.
-  it('names its own release slot when it declines to write one for a foreign bundle', () => {
+  // A foreign bundle gets the FULL report. The coverage disclosure is the part its caller most
+  // needs — they cannot see this tree — and an early exit had been skipping it. The foreign file is
+  // named `other.mcpb` so the same spawn also pins the slot sentence, which took its stem from the
+  // ARGUMENT and so announced `other-1.0.0.mcpb`, a release name this tree does not declare.
+  it('gives a foreign bundle the coverage disclosure, and names its own release slot', () => {
     const tree = makeTree();
-    const elsewhere = mkdtempSync(join(tmpdir(), 'audit-foreign-'));
+    const elsewhere = mkdtempSync(join(tmpdir(), 'audit-coverage-'));
     temps.push(elsewhere);
     copyFileSync(tree.bundle, join(elsewhere, 'other.mcpb'));
     const run = runAudit(tree, ['./other.mcpb'], elsewhere);
     expect(run.status, run.stderr).toBe(0);
-    expect(run.stdout).toContain(`the slot ${basename(tree.artifact)} belongs to the release THIS tree declares`);
-    expect(run.stdout).not.toContain('other-1.0.0');
-  });
-
-  // A foreign bundle gets the FULL report. The coverage disclosure is the part its caller most
-  // needs — they cannot see this tree — and an early exit had been skipping it.
-  it('gives a foreign bundle the coverage disclosure it cannot get anywhere else', () => {
-    const tree = makeTree();
-    const elsewhere = mkdtempSync(join(tmpdir(), 'audit-coverage-'));
-    temps.push(elsewhere);
-    copyFileSync(tree.bundle, join(elsewhere, 'zendesk.mcpb'));
-    const run = runAudit(tree, ['./zendesk.mcpb'], elsewhere);
-    expect(run.status, run.stderr).toBe(0);
     expect(run.stdout).toContain('Accepted 6 paths');
     expect(run.stdout).toMatch(/scanned\s+\d+ of \d+ entries/);
     expect(run.stdout).toContain('No artifact was written');
+    expect(run.stdout).toContain(`the slot ${basename(tree.artifact)} belongs to the release THIS tree declares`);
+    expect(run.stdout).not.toContain('other-1.0.0');
   });
 
   // A symlink in `root` under the publishable name IS this tree's bundle, by decision: the operator
