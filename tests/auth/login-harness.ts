@@ -12,6 +12,7 @@ import { createServer as createHttpServer, type Server } from 'node:http';
 import { connect, type Socket } from 'node:net';
 import { abortLoginFlow, type LoginDeps } from '../../src/tools/login.js';
 import type { OAuthConfig } from '../../src/auth/oauth-flow.js';
+import { recordAcquiredPort } from '../setup/acquired-ports.js';
 
 export const SECRET = 'secret-xyz';
 
@@ -291,7 +292,9 @@ export function freePort(): number {
       if (!claimPort(port)) continue;
       probed += 1;
       const refusedAt = portHeldOn(port);
-      if (refusedAt === '') return port;
+      // Recorded at the moment it is handed over, which is what makes the bind-time guard in
+      // tests/setup/no-fixed-bind-port.ts able to tell an acquired port from a written one (#74).
+      if (refusedAt === '') return recordAcquiredPort(port);
       heldPorts.push(`${port} (${refusedAt})`);
       // The claim is KEPT: it names this pid, so it holds the port against every concurrent run for
       // as long as this process lives, and the sweep takes it back once the pid is gone. Releasing
