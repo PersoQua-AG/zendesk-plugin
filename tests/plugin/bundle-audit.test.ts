@@ -1162,6 +1162,35 @@ describe('a tree that cannot publish is not a contaminated bundle', () => {
     expect(run.stderr).toContain(basename(tree.checksum));
   });
 
+  // THE FOURTH WAY OUT, and the reason this report is one `exit` handler rather than a call at
+  // each of three `process.exit` sites: a throw between the clearing and the verdict leaves with
+  // code 1 and a stack trace, downstream of all three.
+  it('names what the clearing removed even when the run leaves by a throw', () => {
+    const THROW: [string, string] = [
+      'if (treeFaults.length === 0) clearStaleArtifact();',
+      "if (treeFaults.length === 0) clearStaleArtifact();\nthrow new Error('between the clearing and the verdict');",
+    ];
+    const seed = (t: Tree) => {
+      writeFileSync(t.artifact, 'the release this tree published');
+      writeFileSync(t.checksum, 'and its checksum');
+    };
+    const plain = makeTree({ mutate: [THROW] });
+    seed(plain);
+    const baseline = runAudit(plain);
+    expect(baseline.status).toBe(1);
+    expect(baseline.stderr, 'the throw really did get out').toMatch(/^\s+at /m);
+    expect(baseline.stderr).toContain('Already removed before this run finished, and NOT coming back');
+    expect(baseline.stderr).toContain(basename(plain.artifact));
+
+    // Ablated: the handler is declared and never registered, so nothing is listening at exit.
+    const mutant = makeTree({ mutate: [THROW, ["process.on('exit', (code) => {", 'const unreported = ((code) => {']] });
+    seed(mutant);
+    const run = runAudit(mutant);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toMatch(/^\s+at /m);
+    expect(run.stderr).not.toContain('Already removed before this run finished');
+  });
+
   // A foreign bundle gets the FULL report. The coverage disclosure is the part its caller most
   // needs — they cannot see this tree — and an early exit had been skipping it.
   it('gives a foreign bundle the coverage disclosure it cannot get anywhere else', () => {

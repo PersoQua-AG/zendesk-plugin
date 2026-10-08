@@ -516,6 +516,22 @@ const ownBundle = samePlace(dirname(bundlePath), root);
 // A run that removes something names it, and there is no cell left to hide in.
 const cleared = [];
 
+// REPORTED FROM ONE EXIT HANDLER, NOT BOLTED TO THE EXITS. This report used to be a function
+// called at three `process.exit` sites, which is three arms again: an uncaught throw between the
+// clearing and the verdict leaves with code 1 and a stack trace and said nothing about what the
+// run had already deleted. One registration covers every non-zero exit, that one included. A pass
+// rewrites both files and says so in its own summary, so there the removal is not news. Measured
+// before this was written: a 10 KB `console.error` from an `exit` handler survives both a redirect
+// to a file and a pipe, untruncated.
+process.on('exit', (code) => {
+  if (code === 0 || cleared.length === 0) return;
+  console.error(
+    `\nAlready removed before this run finished, and NOT coming back: ${cleared.join(' and ')}.` +
+      " That is an earlier passing run's output, cleared because this tree was about to replace it;" +
+      ' this run produced nothing to put in its place.',
+  );
+});
+
 function clearStaleArtifact() {
   if (!artifactPath || !ownBundle) return;
   for (const stale of [artifactPath, checksumPath]) {
@@ -539,17 +555,6 @@ function clearStaleArtifact() {
       );
     }
   }
-}
-
-// Printed after the verdicts, in every outcome that is not a pass. A pass rewrites both files and
-// says so in its own summary, so there the removal is not news.
-function reportCleared() {
-  if (cleared.length === 0) return;
-  console.error(
-    `\nAlready removed before this run finished, and NOT coming back: ${cleared.join(' and ')}.` +
-      " That is an earlier passing run's output, cleared because this tree was about to replace it;" +
-      ' this run produced nothing to put in its place.',
-  );
 }
 
 // TWO version families since #68, by owner decision: manifest.json is the MCPB extension, which that
@@ -802,14 +807,8 @@ if (problems.length > 0) {
 // been judged and quarantined in that very run, which contradicts #105 AC 2 ("the exit code for a
 // contaminated bundle is unchanged") and contradicted the comment that stood here. Exit 2 is now
 // exactly the case it names: no bundle verdict was reached.
-if (problems.length > 0) {
-  reportCleared();
-  process.exit(1);
-}
-if (treeFaults.length > 0) {
-  reportCleared();
-  process.exit(2);
-}
+if (problems.length > 0) process.exit(1);
+if (treeFaults.length > 0) process.exit(2);
 
 const sha256 = createHash('sha256').update(bundle).digest('hex');
 
@@ -862,7 +861,6 @@ if (ownBundle) {
           ' The bundle is fine and is still under its own name. This is the tree: fix the path and' +
           ' run the audit again.',
       );
-    reportCleared();
     process.exit(2);
   }
 }
