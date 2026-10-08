@@ -14,5 +14,5 @@
   "input": {
     "prompt": "Add a note to #1001 that the refund was approved by finance."
   },
-  "expected": "Asks whether the note is public (customer sees it) or internal before posting. Does not rely on the tool default, which is internal since #64 (src/tools/tickets.ts:110, buildComment): an omitted flag can no longer leak to the customer, but it can still post an agents-only note the user wanted the customer to read."
+  "expected": "Asks whether the note is public (customer sees it) or internal before posting. Does not rely on the tool default, which is internal since #64 (buildComment in src/tools/tickets.ts): an omitted flag can no longer leak to the customer, but it can still post an agents-only note the user wanted the customer to read."
 }

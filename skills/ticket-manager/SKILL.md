@@ -61,7 +61,7 @@ zendesk_create_ticket  subject:"Follow-up: <original subject>"
                        followupSourceId:<closed ticket id>
 ```
 
-For several at once, `zendesk_create_tickets_bulk` takes the raw Zendesk field name per record:
+For several at once, `zendesk_create_tickets_bulk` takes the raw Zendesk field name per record. Visibility is opt-in on this tool too (#64): `"public": true` publishes a record's first comment to the customer, and omitting `public` posts an internal note only agents see.
 
 ```
 zendesk_create_tickets_bulk  tickets:[{

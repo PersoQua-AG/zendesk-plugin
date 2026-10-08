@@ -22887,9 +22887,8 @@ ${screened.lines.join("\n")}${screened.warning}`,
     flagged: screened.flagged
   };
 }
-function buildComment(text, useMarkdown, isPublic) {
-  const pub = isPublic ?? false;
-  return useMarkdown ? { html_body: markdownToHtml(text), public: pub } : { body: text, public: pub };
+function buildComment(text, useMarkdown, isPublic = false) {
+  return useMarkdown ? { html_body: markdownToHtml(text), public: isPublic } : { body: text, public: isPublic };
 }
 async function createTicket(client, cache, params) {
   const ticket = {
@@ -23155,7 +23154,7 @@ var bulkCreateTicketSchema = ticketUpdateFieldsSchema.extend({
     // #64: bulk create hands its records straight to create_many, where Zendesk's own
     // default would publish the comment. The schema is the one funnel every record passes,
     // so the internal-by-default decision is applied here as a parse default.
-    public: external_exports.boolean().optional().default(false)
+    public: external_exports.boolean().optional().default(false).describe("true = the first comment is visible to the customer. Omitted = internal note (agents only).")
   }).strict(),
   requester_id: external_exports.number().int().positive().optional(),
   // Zendesk's write-only follow-up link (Tickets JSON format).
@@ -23202,7 +23201,7 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
         groupId: external_exports.number().int().positive().optional(),
         assigneeId: external_exports.number().int().positive().optional(),
         markdown: external_exports.boolean().optional(),
-        public: external_exports.boolean().optional().describe("true = the first comment is visible to the customer. Omitted = internal note (agents only)."),
+        public: external_exports.boolean().optional().default(false).describe("true = the first comment is visible to the customer. Omitted = internal note (agents only)."),
         // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
         followupSourceId: external_exports.number().int().positive().optional()
       }).strict()
@@ -23233,7 +23232,7 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
       inputSchema: {
         ticketId: external_exports.number().int().positive(),
         body: external_exports.string().min(1),
-        public: external_exports.boolean().optional().describe("true = visible to the customer. Omitted = internal note (agents only)."),
+        public: external_exports.boolean().optional().default(false).describe("true = visible to the customer. Omitted = internal note (agents only)."),
         markdown: external_exports.boolean().optional()
       }
     },
@@ -23251,7 +23250,10 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
   );
   server.registerTool(
     "zendesk_create_tickets_bulk",
-    { description: "Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table).", inputSchema: { tickets: external_exports.array(bulkCreateTicketSchema).min(1).max(100) } },
+    {
+      description: "Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table). Each record\u2019s first comment is an INTERNAL note unless comment.public:true is passed.",
+      inputSchema: { tickets: external_exports.array(bulkCreateTicketSchema).min(1).max(100) }
+    },
     async ({ tickets }) => {
       const r = await createTicketsBulk(httpClient, cache, { tickets }, {}, securityLevel);
       return toText(`${r.summary} failures=${JSON.stringify(r.failures)}

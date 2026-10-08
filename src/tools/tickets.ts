@@ -104,13 +104,16 @@ export interface NewTicketInput {
 }
 
 // #64: visibility is opt-in. An omitted `public` means an INTERNAL note, because publishing an
-// internal remark to the customer cannot be undone while an internal note can be reposted. The
-// default lives here alone — every comment-writing path funnels through this function.
-export function buildComment(text: string, useMarkdown: boolean, isPublic?: boolean): Record<string, unknown> {
-  const pub = isPublic ?? false;
+// internal remark to the customer cannot be undone while an internal note can be reposted.
+// Resolved here for the two single-comment surfaces only: addComment (src/tools/ticket-comments.ts)
+// and createTicket below. Bulk create bypasses this function — it forwards raw Zendesk records to
+// create_many, so its default is a parse default in src/register/tickets.ts. The macro path
+// (src/tools/business-rules/macros.ts) PUTs the preview's comment verbatim and resolves no default
+// at all; whether a macro author's visibility belongs to #64 is an open owner question.
+export function buildComment(text: string, useMarkdown: boolean, isPublic = false): Record<string, unknown> {
   return useMarkdown
-    ? { html_body: markdownToHtml(text), public: pub }
-    : { body: text, public: pub };
+    ? { html_body: markdownToHtml(text), public: isPublic }
+    : { body: text, public: isPublic };
 }
 
 export async function createTicket(

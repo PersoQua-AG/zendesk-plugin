@@ -4,8 +4,7 @@ import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import { listCbp } from './cbp-list.js';
 import { buildComment } from './tickets.js';
 export async function addComment(client, cache, 
-// `markdown` is a resolved boolean (the register layer applies the markdown_conversion default);
-// the tool holds no hidden default of its own, matching the Guide write path.
+// `markdown` is a resolved boolean (the register layer applies the markdown_conversion default).
 params, securityLevel = 'standard') {
     if (params.body.trim() === '')
         throw new Error('Comment body must not be empty.');

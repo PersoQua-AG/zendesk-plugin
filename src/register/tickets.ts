@@ -42,7 +42,7 @@ const bulkCreateTicketSchema = ticketUpdateFieldsSchema
         // #64: bulk create hands its records straight to create_many, where Zendesk's own
         // default would publish the comment. The schema is the one funnel every record passes,
         // so the internal-by-default decision is applied here as a parse default.
-        public: z.boolean().optional().default(false),
+        public: z.boolean().optional().default(false).describe('true = the first comment is visible to the customer. Omitted = internal note (agents only).'),
       })
       .strict(),
     requester_id: z.number().int().positive().optional(),
@@ -96,7 +96,7 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
           groupId: z.number().int().positive().optional(),
           assigneeId: z.number().int().positive().optional(),
           markdown: z.boolean().optional(),
-          public: z.boolean().optional().describe('true = the first comment is visible to the customer. Omitted = internal note (agents only).'),
+          public: z.boolean().optional().default(false).describe('true = the first comment is visible to the customer. Omitted = internal note (agents only).'),
           // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
           followupSourceId: z.number().int().positive().optional(),
         })
@@ -131,7 +131,7 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
       inputSchema: {
         ticketId: z.number().int().positive(),
         body: z.string().min(1),
-        public: z.boolean().optional().describe('true = visible to the customer. Omitted = internal note (agents only).'),
+        public: z.boolean().optional().default(false).describe('true = visible to the customer. Omitted = internal note (agents only).'),
         markdown: z.boolean().optional(),
       },
     },
@@ -152,7 +152,11 @@ export function registerTicketTools(server: McpServer, ctx: ToolContext): void {
 
   server.registerTool(
     'zendesk_create_tickets_bulk',
-    { description: 'Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table).', inputSchema: { tickets: z.array(bulkCreateTicketSchema).min(1).max(100) } },
+    {
+      description:
+        'Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table). Each record’s first comment is an INTERNAL note unless comment.public:true is passed.',
+      inputSchema: { tickets: z.array(bulkCreateTicketSchema).min(1).max(100) },
+    },
     async ({ tickets }) => {
       const r = await createTicketsBulk(httpClient, cache, { tickets }, {}, securityLevel);
       return toText(`${r.summary} failures=${JSON.stringify(r.failures)}\n(cache: ${r.cacheHandle})`);

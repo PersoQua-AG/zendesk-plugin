@@ -38,23 +38,14 @@ function bulkTicketsSchema(): z.ZodTypeAny {
 const RECORD = { subject: 'Printer down', comment: { body: 'opening message' } };
 
 describe('zendesk_create_tickets_bulk visibility default', () => {
-  it('parses an omitted comment.public into an internal note', () => {
-    const parsed = bulkTicketsSchema().parse([RECORD]) as Array<{ comment: { public: boolean } }>;
-    expect(parsed[0].comment.public).toBe(false);
-  });
-
-  it('keeps an explicit public:true', () => {
-    const parsed = bulkTicketsSchema().parse([{ ...RECORD, comment: { ...RECORD.comment, public: true } }]) as Array<{
-      comment: { public: boolean };
-    }>;
-    expect(parsed[0].comment.public).toBe(true);
-  });
-
-  it('keeps an explicit public:false', () => {
-    const parsed = bulkTicketsSchema().parse([{ ...RECORD, comment: { ...RECORD.comment, public: false } }]) as Array<{
-      comment: { public: boolean };
-    }>;
-    expect(parsed[0].comment.public).toBe(false);
+  it.each([
+    ['omitted', undefined, false],
+    ['explicit true', true, true],
+    ['explicit false', false, false],
+  ] as const)('parses a %s comment.public into the internal-by-default result', (_label, passed, expected) => {
+    const comment = passed === undefined ? RECORD.comment : { ...RECORD.comment, public: passed };
+    const parsed = bulkTicketsSchema().parse([{ ...RECORD, comment }]) as Array<{ comment: { public: boolean } }>;
+    expect(parsed[0].comment.public).toBe(expected);
   });
 });
 
@@ -69,5 +60,12 @@ describe('the comment-writing tools state what omitting public means', () => {
     const description = def('zendesk_create_ticket').description ?? '';
     expect(description).toMatch(/internal/i);
     expect(description).toMatch(/public:true/);
+  });
+
+  // The surface whose behaviour changed most: Zendesk itself published before #64.
+  it('zendesk_create_tickets_bulk names the internal default', () => {
+    const description = def('zendesk_create_tickets_bulk').description ?? '';
+    expect(description).toMatch(/internal/i);
+    expect(description).toMatch(/comment\.public:true/);
   });
 });

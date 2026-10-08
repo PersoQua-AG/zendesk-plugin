@@ -11,8 +11,7 @@ import type { ReadResult } from './result.js';
 export async function addComment(
   client: ZendeskHttpClient,
   cache: CacheStore,
-  // `markdown` is a resolved boolean (the register layer applies the markdown_conversion default);
-  // the tool holds no hidden default of its own, matching the Guide write path.
+  // `markdown` is a resolved boolean (the register layer applies the markdown_conversion default).
   params: { ticketId: number; body: string; public?: boolean; markdown: boolean },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
