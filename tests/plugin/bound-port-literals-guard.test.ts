@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname, relative } from 'node:path';
+import { join, dirname, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -402,7 +402,25 @@ describe('the bound-port guard as a script', () => {
   function plantProbe(source: string): string {
     const dir = mkdtempSync(join(tmpdir(), 'port-guard-tree-'));
     temps.push(dir);
-    cpSync(join(root, 'tests'), join(dir, 'tests'), { recursive: true });
+    // THE COPY SKIPS WHAT OTHER SUITES PLANT, or it re-opens the window it was built to close.
+    // Copying the live tracked tree put this file on the other side of the same defect: while
+    // tests/plugin/typecheck-tests-wiring.test.ts holds `tests/tools/zz-typecheck-probe-<uuid>.ts`
+    // on disk for the length of an `npx tsc` run, a recursive copy of tests/ races it and throws
+    // ENOENT. Measured twice, 60 copies each: 13 of 60 failed against the real suite, and 32 of 60
+    // against a tight plant/remove loop on a copy of the tree. With this filter, 0 of 60 — so the
+    // filter is consulted BEFORE the lstat that was throwing, which is the part worth knowing.
+    //
+    // `zz-` is this suite's prefix for a file a test plants and removes (zz-typecheck-probe-*,
+    // zz-port-guard-probe.ts, zz-planted-fixed-port.ts) and `git ls-files tests` matches none of
+    // them, so NOTHING TRACKED IS SKIPPED — the copy gets closer to the tracked tree, not further
+    // from it. What answers #82 is the real structure and the real depth: tests/tools reached only
+    // by recursing, and freePort() in tests/auth/login-harness.ts so the tree is MARKED. No probe
+    // another suite plants carries any of that, so the assurance is untouched. This probe's own
+    // file is written on the next line, after the copy, so the filter never sees it.
+    cpSync(join(root, 'tests'), join(dir, 'tests'), {
+      recursive: true,
+      filter: (src) => !basename(src).startsWith('zz-'),
+    });
     writeFileSync(join(dir, 'tests', 'tools', 'zz-port-guard-probe.ts'), source);
     return join(dir, 'tests');
   }
