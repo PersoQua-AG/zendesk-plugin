@@ -4,12 +4,13 @@
 // fail. This is the fallback the CI task specifies: assert both plugin manifests parse as JSON
 // and carry their required fields. Zero deps — plain Node — so it runs before/without npm ci.
 //
-// It also owns the VERSION fan-out. The project declares its version in seven hand-kept places, and
-// the release gate (scripts/audit-bundle.mjs) asserts that manifest.json, package.json and the
-// bundled manifest agree — it cannot see the other four. Checking them here rather than in a test
-// puts one owner on the question and makes the eventual fix (derive the version from manifest.json
-// instead of keeping it a seventh time) a single-file change. This script is CI's FIRST step, so a
-// disagreement fails before anything is built.
+// It also owns the VERSION fan-out, and since the MCPB path was retired (#103) it owns it alone:
+// the second gate that used to see part of it (scripts/audit-bundle.mjs, taken from the packed
+// bundle) is gone with that path. The project declares its version in seven hand-kept places, all
+// checked below against package.json. Checking them here rather than in a test puts one owner on
+// the question and makes the eventual fix (derive the version from package.json instead of keeping
+// it seven times) a single-file change. This script is CI's FIRST step, so a disagreement fails
+// before anything is built.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -19,25 +20,21 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // [file, [required top-level keys]]. Values must be present and non-empty (non-empty string,
 // non-empty array, or a non-null object) — an empty/blank required field fails the gate.
 const CHECKS = [
-  // MCPB required top-level fields per @anthropic-ai/mcpb@2.1.2
-  // schemas/mcpb-manifest-latest.schema.json ("required"), plus manifest_version, which the schema
-  // pins to the const "0.3" and the packer refuses to guess.
-  ['manifest.json', ['manifest_version', 'name', 'version', 'description', 'author', 'server']],
+  // manifest.json used to lead this list with the MCPB-required fields. The MCPB path is retired
+  // (#103) and the file is gone, so the two Claude Code manifests are the whole shipped set.
   ['.claude-plugin/plugin.json', ['name', 'version', 'mcpServers']],
   ['.claude-plugin/marketplace.json', ['name', 'owner', 'plugins']],
 ];
 
 // [label, reader]. Every live declaration of the project version; the value each one yields must
-// equal package.json's. It used to be manifest.json's, and #68 split the two: the MCPB extension is
-// out of that issue's scope and keeps its own number, while the Claude Code plugin, the marketplace
-// entry and the MCP server version moved to the plugin's. manifest.json is therefore NOT in the list
-// below any more — it is a family of one, still checked for shape by CHECKS above.
+// equal package.json's. The reference used to be manifest.json's number, and #68 split the two —
+// with the MCPB path retired (#103) there is only the one family left, and package.json names it.
 //
-// dist/server.js is here and src/server.ts is too: .mcpbignore excludes
-// src/ from the bundle, so dist/ is the only copy the HOST ever reads — pinning the source alone
-// would stay green while a build-less commit shipped the old number. A grep of the tree for the
-// previous version found no further site; fixtures in tests/ and frozen plans in docs/ are not
-// declarations.
+// dist/server.js is here and src/server.ts is too, and the list keeps BOTH: dist/ is committed on
+// purpose so a marketplace install runs without a build step (README, "`dist/` is committed on
+// purpose"), so dist/ is the copy a host actually runs. Pinning the source alone would stay green
+// while a build-less commit shipped the old number. A grep of the tree for the previous version
+// found no further site; fixtures in tests/ and frozen plans in docs/ are not declarations.
 const VERSION_SITES = [
   ['package-lock.json', (t) => JSON.parse(t).version],
   ['package-lock.json (packages."")', (t) => JSON.parse(t).packages['']?.version],
@@ -116,5 +113,5 @@ if (errors.length > 0) {
   for (const e of errors) console.error(`  - ${e}`);
   process.exit(1);
 }
-console.log('Manifest validation passed: manifest.json + plugin.json + marketplace.json parse and carry required fields.');
+console.log('Manifest validation passed: plugin.json + marketplace.json parse and carry required fields.');
 console.log(`Version agreement: package.json and all ${VERSION_SITES.length} other declarations say ${reference}.`);

@@ -29821,11 +29821,13 @@ function resolveOrDegrade(env, security) {
     const dataDir = dataDirOf(env);
     return {
       ok: false,
-      // Points at the setup page, which is what exists now: the Claude Code plugin has no settings
-      // dialog any more (#68 removed its user_config, the host bridge does not support one), and on a
-      // platform without a Keychain the environment is the only way in (#69). The MCPB extension still
-      // HAS the dialog, so it is named last rather than first.
-      reason: `${reason}${problem ? ` ${problem}` : ""} Call the zendesk_login tool: on macOS it answers with a local setup page that collects the subdomain, client id and client secret. Otherwise pass them in the environment (ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET), or, in the Desktop Extension, fill the configuration dialog under Settings \u2192 Extensions \u2192 Zendesk.`,
+      // Points at the setup page and the environment, which is everything a shipped path offers:
+      // there is no settings dialog anywhere any more. #68 removed the plugin's user_config (the host
+      // bridge does not support one), and the MCPB extension, whose dialog used to be named here
+      // last, is retired (#103). On a platform without a Keychain the environment is the only way in
+      // (#69). Naming a dialog the product does not have would send a half-configured operator into a
+      // path that cannot be reached, so the clause is pinned shut in tests/server.unconfigured.test.ts.
+      reason: `${reason}${problem ? ` ${problem}` : ""} Call the zendesk_login tool: on macOS it answers with a local setup page that collects the subdomain, client id and client secret. Otherwise pass them in the environment (ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET).`,
       dataDir,
       tokensPath: join3(dataDir, "tokens.enc")
     };

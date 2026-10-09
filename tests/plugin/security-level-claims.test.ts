@@ -1,14 +1,12 @@
 // tests/plugin/security-level-claims.test.ts
 // #59 acceptance test 2, re-aimed by the owner decision of 2026-10-06: no shipped text may promise
 // a selectable screening level, because the shipped plugin offers none. `.claude-plugin/plugin.json`
-// declares no configuration since #68 (pinned shut in claude-plugin-manifest.test.ts:39-40), the
-// `.mcpb` dialog is the retired path, and src/server.ts returns 'standard' for an absent value — so
-// an operator who believes they chose `strict` or `off` silently gets `standard`.
+// declares no configuration since #68 (pinned shut in claude-plugin-manifest.test.ts), the `.mcpb`
+// dialog is gone with the retired MCPB path (#103), and src/server.ts returns 'standard' for an
+// absent value — so an operator who believes they chose `strict` or `off` silently gets `standard`.
 //
-// Its own file rather than an extension of mcpb-manifest.test.ts: that suite is scoped to one
-// artefact's shape ("what the MCPB manifest has to be right about stays here",
-// mcpb-manifest.test.ts:96-97). This claim spans manifest.json AND README.md and belongs to neither
-// file's shape, so putting it there would give that suite a second subject.
+// Its own file rather than part of a manifest suite: the claim is about SHIPPED TEXT, not about one
+// artefact's shape, and it now rests entirely on README.md.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -17,27 +15,20 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
 
-const manifestRaw = read('manifest.json');
 const readme = read('README.md');
 const lineWith = (haystack: string, needle: string) => haystack.split('\n').find((l) => l.includes(needle)) ?? '';
-// Backticks are README markup, not substance; the manifest description is plain dialog text.
+// Backticks are README markup, not substance.
 const plain = (s: string) => s.replace(/`/g, '');
 
-// The four shipped places the owner decision names, each located by a stable anchor rather than by
-// line number, with the exact wording that promised a choice and must not come back. Every `text()`
-// returns the RAW shipped excerpt, never a parsed value: the manifest's old promise is recognisable
-// only by the closing JSON quote that used to follow it, which parsing would throw away.
+// The shipped places the owner decision names, each located by a stable anchor rather than by line
+// number, with the exact wording that promised a choice and must not come back. Every `text()`
+// returns the RAW shipped excerpt, never a parsed value.
+//
+// Two of the four sites are gone with the MCPB path (#103), not weakened: the `manifest.json`
+// security_level description and the README's Desktop-Extension dialog table row were both part of
+// that path's surface. #59 AC2 is carried by the two that remain — the installed plugin's own
+// configuration table and the Security section.
 const CLAIM_SITES = [
-  {
-    where: 'manifest.json security_level description',
-    text: () => lineWith(manifestRaw, '"description": "strict | standard | off'),
-    withdrawn: 'screened for prompt injection."',
-  },
-  {
-    where: 'README.md Desktop-Extension dialog table row',
-    text: () => lineWith(readme, '| Injection-Screening Level |'),
-    withdrawn: '| Injection-Screening Level | no | `standard` |',
-  },
   {
     where: 'README.md plugin-configuration table row',
     text: () => lineWith(readme, '| `security_level` | `strict`'),
@@ -80,8 +71,9 @@ describe('no shipped text promises a security level the plugin does not offer (#
     expect(section).toContain('remote-connector');
   });
 
-  // The field the decision forbids bringing back. claude-plugin-manifest.test.ts:39-40 pins the
-  // `env` half; this pins that the plugin manifest names the level nowhere at all.
+  // The field the decision forbids bringing back. The `env` half is pinned by the "declares no env
+  // at all" case in claude-plugin-manifest.test.ts; this pins that the plugin manifest names the
+  // level nowhere at all.
   it('the Claude Code plugin manifest still declares no security level', () => {
     expect(read('.claude-plugin/plugin.json')).not.toContain('security_level');
   });

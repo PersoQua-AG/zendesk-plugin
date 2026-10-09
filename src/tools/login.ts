@@ -1,9 +1,9 @@
 // src/tools/login.ts
-// In-app OAuth login for the Desktop Extension. A Desktop user has no terminal, so the one-time
+// In-app OAuth login. Someone working in a chat has no terminal to hand, so the one-time
 // authorization-code exchange that `npm run authorize` performs must be reachable as a tool.
 //
-// It runs in TWO calls, for the reason the README states under "Why `zendesk_login` exists". What
-// follows from it here: the PKCE verifier and the CSRF `state` belong to the FLOW, not to the call
+// It runs in TWO calls, for the reason the README states under "Why `zendesk_login` takes two
+// calls". What follows from it here: the PKCE verifier and the CSRF `state` belong to the FLOW, not to the call
 // — re-rolling them on the second call would invalidate the URL the user just opened.
 //
 // No new OAuth logic: PKCE, URL building, the listener and the token exchange all come from

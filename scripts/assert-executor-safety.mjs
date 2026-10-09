@@ -65,14 +65,11 @@
 // (`git ls-files '*.ts' | xargs -n1 dirname | sort -u | wc -l`). That command is run by
 // tests/plugin/executor-safety-guard.test.ts, so the claim cannot rot on paper.
 //
-// Why a mark at all, when the walk is RECURSIVE and a too-WIDE root still inspects the guarded
-// file? Because the misedit that HIDES something is the narrow one, and narrow is silent:
-// `src/auth` and `tests/util` both exited 0 before this mark existed. A count cannot refuse, and
-// a floor under it would be a number that rots on the next merge. As in the sibling guard the
-// mark gates SUCCESS, not the scan — an unmarked tree is still walked whole and every finding
-// still named, it just never exits 0. The one cost: this hangs on a filename. Move or rename
-// src/server.ts and the guard refuses its own tree, loudly, in the same commit that breaks
-// `npm run build`, which names that exact path.
+// Why a mark at all, and why the extraction to scripts/lib/scan-root.mjs is refused (#112):
+// ops/projects/zendesk-plugin/decisions/2026-10-08-guard-mark-rationale-and-refused-extraction.md
+//
+// The one cost: this hangs on a filename. Move or rename src/server.ts and the guard refuses its
+// own tree, loudly, in the same commit that breaks `npm run build`, which names that exact path.
 import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve as resolvePath } from 'node:path';
@@ -116,9 +113,8 @@ const DECLARATION = /\.d\.(ts|mts|cts)$/;
 // excerpt and a trace), and a listable-but-unstattable root (EACCES), which reaches the lstat on
 // the mark far below rather than this walk. The last fallback is for a throw that is neither:
 // `??` on `.code` alone printed `(undefined)`. Asserted by shape rather than by a frame count
-// (#91), in both guards' tests. The three-way fallback is THIS guard's alone: the sibling writes
-// `err.code ?? err.message`, which on a thrown null or undefined raises a TypeError of its own —
-// the stack trace this paragraph exists to prevent. Not fixed in the guard; see #91.
+// (#91), in both guards' tests, and the sibling guard writes the same three-way fallback since
+// #110.
 // Repo-relative where that is shorter, absolute where it is not. `relative()` alone answered a
 // tree under /var/folders with six `../` segments, which is longer than the path it replaced and
 // harder to paste back into a command.
