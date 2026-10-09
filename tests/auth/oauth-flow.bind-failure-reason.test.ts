@@ -65,11 +65,16 @@ describe('the reason a failed callback bind states', () => {
     expect(port, 'this case is about ports the callback rule forbids').toBeLessThan(MIN_CALLBACK_PORT);
     throwsOnListen(new TypeError('a bind-time guard refused this call'));
     const err = await bindFailure(port);
-    expect(err.message).not.toMatch(/inside the allowed range|within the allowed range/);
-    expect(err.message).not.toContain('must be a whole number between');
-    // And no claim about the RULE either, which the second rewrite of this sentence still made.
-    expect(err.message).not.toMatch(/callback port rule|oauth_callback_port/);
-    expect(err.message).toContain(`could not start on port ${port}`);
+    // THE WHOLE MESSAGE, not a list of forbidden wordings. "Makes no claim about the range in
+    // either direction" is a claim about the SET of sentences this may be, so only the exact
+    // sentence holds it: measured, appending " The port itself is in the permitted range." — false
+    // for 0 and 1023, which is exactly this case's subject — kept all 1520 tests green, because
+    // three negatives covered three wordings and the class has more. Same shape as the RangeError
+    // case above, which has always been pinned this way.
+    expect(err.message).toBe(
+      `OAuth callback server could not start on port ${port}: listen() threw TypeError, which is` +
+        ` not node's own port validation — that throws RangeError and is reported separately.`,
+    );
   });
 
   it('attaches the original error as the cause instead of discarding it', async () => {
