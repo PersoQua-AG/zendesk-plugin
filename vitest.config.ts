@@ -11,6 +11,28 @@ export default defineConfig({
     // scripts/assert-no-bound-port-literals.mjs cannot see a port that reaches listen() through a
     // const or an expression, and this refuses it at the bind instead of at the spelling.
     setupFiles: ['tests/setup/no-network.ts', 'tests/setup/no-fixed-bind-port.ts'],
+    // #51. A failing run used to leave its evidence in scroll-back only: a QA round lost the names
+    // of two failing tests to a terminal buffer and had to write the occurrence off as "load",
+    // unevidenced. The default reporter still prints; this one additionally leaves the file and the
+    // full name of every test behind, so the next occurrence can be classified instead of guessed
+    // at. It is in the config rather than in a CI flag so that a local run, a QA worktree and CI
+    // all produce it without anybody having to remember a flag. Read the failures back with:
+    //   node -e "for (const f of require('./test-results/vitest-<pid>.json').testResults)
+    //     for (const t of f.assertionResults) if (t.status === 'failed') console.log(f.name, t.fullName)"
+    //
+    // The pid is in the NAME because two overlapping runs — a QA worktree beside a local watch, or
+    // two CI jobs on one checkout — otherwise overwrite each other's evidence, which is the one
+    // thing this file exists to preserve. It is the DIRECTORY that .gitignore excludes, so the name
+    // can vary freely.
+    //
+    // TWO THINGS THIS DOES NOT DO, said rather than left to be discovered. Nothing prunes the
+    // directory, and an INTERRUPTED run leaves a record shaped exactly like a complete one — so a
+    // short file is not evidence of a short run. And the record is a new on-disk sink for failure
+    // text, test sentinels included; .gitignore keeps it out of git — pinned by
+    // tests/plugin/vitest-run-record.test.ts — but `expectNoSecretEchoed` guards the two streams
+    // and not this file.
+    reporters: ['default', 'json'],
+    outputFile: { json: `test-results/vitest-${process.pid}.json` },
     // Runs once, after every file: the only place that can see what a SPAWNED child did to the machine.
     // A suite that creates a real Keychain item fails the run there — see the file for why it compares
     // before with after instead of demanding an empty keychain.
@@ -26,11 +48,12 @@ export default defineConfig({
       exclude: ['dist/**', 'tests/**', 'scripts/**', '*.config.ts', 'src/**/*.d.ts'],
       reporter: ['text', 'lcov'],
       thresholds: {
-        // Set from the measured state, not from a wish: measured on this branch on 2026-10-08 the
-        // suite stands at 98.84% statements / 93.49% branches / 98.37% functions / 98.84% lines (it
-        // was 97.98/88.50/97.10/97.98 when these floors were written). The floors are absolute
-        // minima, not a ratchet: they catch a collapse, not a regression — today the headroom above
-        // them is 6.49 points on branches, 2.37 on functions and 1.84 on statements and lines, and
+        // Set from the measured state, not from a wish: measured on this branch on 2026-10-09,
+        // after the merge of development, the suite stands at 98.85% statements / 93.48% branches /
+        // 98.37% functions / 98.85% lines — the same four figures development reports (it was
+        // 97.98/88.50/97.10/97.98 when these floors were written). The floors are absolute minima,
+        // not a ratchet: they catch a collapse, not a regression — today the headroom above them is
+        // 6.48 points on branches, 2.37 on functions and 1.85 on statements and lines, and
         // any drop inside that band ships green. They stay far above the 80% project minimum, which
         // as a floor here would license a slow decay down to it.
         statements: 97,

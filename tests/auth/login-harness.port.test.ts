@@ -1,6 +1,18 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  ftruncateSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { createServer, type RequestListener, type Server } from 'node:http';
@@ -122,6 +134,7 @@ describe('the port a test is given', () => {
 describe('the sweep that reclaims the band', () => {
   const claimDir = dirname(portClaimPath(PORT_BAND_FIRST));
   const planted: string[] = [];
+  const held: number[] = [];
 
   function plantStaging(contents: string, ageMs = 0): string {
     const path = join(claimDir, `.staging-${randomUUID()}`);
@@ -145,15 +158,48 @@ describe('the sweep that reclaims the band', () => {
     }
   }
 
-  function expectReclaimed(claim: string, plantedOwner: string): void {
+  /** The inode a claim is published under, or null if it is already gone. One stat(2), so there is
+   * no check-then-use window; every non-ENOENT error still throws. */
+  const inodeOf = (claim: string): number | null => statSync(claim, { throwIfNoEntry: false })?.ino ?? null;
+
+  /** Acquires a port, then writes the fixture body through an fd opened while the claim is ours. */
+  function plantAndPin(body: string): { claim: string; inode: number } {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const claim = portClaimPath(freePort());
+      let fd: number;
+      try {
+        fd = openSync(claim, 'r+');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        continue; // Swept before the open: a FRESH port, never a second write to the freed name.
+      }
+      held.push(fd);
+      ftruncateSync(fd, 0);
+      if (body !== '') writeSync(fd, body);
+      return { claim, inode: fstatSync(fd).ino };
+    }
+    throw new Error('could not plant a claim: ten ports in a row were raced away');
+  }
+
+  function expectReclaimed(claim: string, plantedOwner: string, inodeBefore: number): void {
     const owner = claimOwner(claim);
     if (owner === null) return;
     expect(owner).toMatch(/^\d+$/);
     expect([String(process.pid), plantedOwner]).not.toContain(owner);
     expect(pidIsLive(Number(owner))).toBe(true);
+    // REMOVAL, not a rewrite (#52). Everything above is also true of a sweep that OVERWRITES the
+    // claim in place with any live third pid, which is not reclamation at all: the dead owner's
+    // name was never freed. The inode tells the two apart: an in-place overwrite keeps it, while
+    // the only legitimate way this name can carry a foreign owner is a concurrent run's
+    // claimPort() publishing a DIFFERENT file by linkSync (login-harness.ts:172) after the
+    // removal. `inodeBefore` is read off an fd this test still holds, so the number cannot come
+    // back and "different" is safe to read off it alone. Measured: mutations O1 ('1') and O2 (process.ppid) survived every
+    // assertion above with 9 passed, and are red on this line.
+    expect(inodeOf(claim)).not.toBe(inodeBefore);
   }
 
   afterEach(() => {
+    for (const fd of held.splice(0)) closeSync(fd);
     for (const path of planted.splice(0)) rmSync(path, { force: true });
   });
 
@@ -187,28 +233,36 @@ describe('the sweep that reclaims the band', () => {
   // taken over by a live foreign process, or the band fills up with claims nothing holds. This is
   // the half the fix must NOT have loosened.
   it('reclaims a claim that names no owner', () => {
-    const port = freePort();
-    const claim = portClaimPath(port);
-    truncateSync(claim, 0);
+    const { claim, inode } = plantAndPin('');
     sweepDeadClaims();
-    expectReclaimed(claim, '');
+    expectReclaimed(claim, '', inode);
   });
 
   it('reclaims a claim whose owner has exited, and keeps one whose owner is alive', () => {
     const dead = spawnSync(process.execPath, ['-e', '0']);
     expect(dead.pid).toBeGreaterThan(0);
 
-    const abandonedPort = freePort();
-    const abandoned = portClaimPath(abandonedPort);
-    writeFileSync(abandoned, String(dead.pid));
     const ours = portClaimPath(freePort());
+    const { claim: abandoned, inode } = plantAndPin(String(dead.pid));
 
     sweepDeadClaims();
 
-    expectReclaimed(abandoned, String(dead.pid));
+    expectReclaimed(abandoned, String(dead.pid), inode);
     // Ours names a pid that is this very process, so nothing about it can read as dead.
     expect(readFileSync(ours, 'utf8')).toBe(String(process.pid));
   });
+
+  // The EPERM branch of pidIsLive (login-harness.ts:118), which decides every "keeps one whose
+  // owner is alive" above and was pinned by nothing: a catch returning plain `false` read a live
+  // process owned by ANOTHER USER as dead, and its claim was then reclaimed under it. pid 1 is the
+  // init process and belongs to root, so kill(1, 0) from an unprivileged process answers EPERM —
+  // the one liveness answer that arrives as a thrown error.
+  it.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
+    'reads a process it may not signal as alive, because EPERM means it is there',
+    () => {
+      expect(pidIsLive(1)).toBe(true);
+    },
+  );
 });
 
 describe('a listener on our port that is not ours', () => {

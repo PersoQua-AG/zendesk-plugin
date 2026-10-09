@@ -10,3 +10,7 @@ coverage/
 
 # Ablated copies of the executor guard, written and removed by its test (see tests/plugin/).
 scripts/.mutant-*.mjs
+
+# Machine-readable run record from every `npm test` (see vitest.config.ts, #51): it carries the
+# file and full name of every test, so a failing run is classifiable without scroll-back.
+test-results/
