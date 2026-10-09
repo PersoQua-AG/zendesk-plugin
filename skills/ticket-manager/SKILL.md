@@ -61,7 +61,7 @@ zendesk_create_ticket  subject:"Follow-up: <original subject>"
                        followupSourceId:<closed ticket id>
 ```
 
-For several at once, `zendesk_create_tickets_bulk` takes the raw Zendesk field name per record:
+For several at once, `zendesk_create_tickets_bulk` takes the raw Zendesk field name per record. Visibility is opt-in on this tool too (#64): `"public": true` publishes a record's first comment to the customer, and omitting `public` posts an internal note only agents see.
 
 ```
 zendesk_create_tickets_bulk  tickets:[{
@@ -78,8 +78,8 @@ Pass the source id whenever the follow-up belongs to an existing closed ticket: 
 
 **Reply contract:** this skill owns *posting* replies, not *wording* them. When the user wants a drafted customer reply, delegate the wording to the `support-agent` subagent (it drafts, it cannot write), show the user its draft, and only after they confirm do you post it with `zendesk_add_comment`. Short factual notes you may write directly.
 
-- Public reply to the customer: `zendesk_add_comment` (`ticketId`, `body`, `public:true`). Body is Markdown→HTML by default; pass `markdown:false` to send raw HTML.
-- Internal note (agents only): `zendesk_add_comment` with `public:false`. Always confirm which visibility the user wants before posting — a private note leaked publicly, or vice versa, is a real incident.
+- Public reply to the customer: `zendesk_add_comment` (`ticketId`, `body`, `public:true`). `public:true` is mandatory for a reply the customer sees — visibility is opt-in (#64). Body is Markdown→HTML by default; pass `markdown:false` to send raw HTML.
+- Internal note (agents only): `zendesk_add_comment` with `public:false`, which is also what an omitted `public` does, so a forgotten flag cannot leak to the customer. Always confirm which visibility the user wants before posting — a private note leaked publicly, or vice versa, is a real incident.
 - Attachments: upload with `zendesk_upload_attachment` (base64) to get a token, then reference it in the comment.
 
 ## Bulk re-tag / reassign (async job)

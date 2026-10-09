@@ -9,8 +9,7 @@ SharePoint).
 66 MCP tools (64 Zendesk tools + `zendesk_login` + `zendesk_diagnostics`) ·
 first-run setup on a local page ·
 5 skills · 5 slash commands ·
-a support subagent. Ships two ways: a Claude Code plugin and a Claude Desktop
-Extension (`.mcpb`).
+a support subagent. Ships as a Claude Code plugin.
 
 > Scope: full **read/write, no destructive operations** (no delete/merge/redact).
 > OAuth 2.0 (authorization-code + PKCE). TypeScript, Node ≥ 20.
@@ -22,88 +21,6 @@ _(Placeholder — add before publishing: 1. the `/zendesk:tickets` dashboard,
 terminal. Images cannot be generated in the build environment.)_
 
 ## Install
-
-Two supported paths. **Claude Desktop** users install the packed extension;
-**Claude Code** users install the plugin from the marketplace.
-
-### A. Claude Desktop Extension (`.mcpb`)
-
-No terminal required.
-
-1. Register the OAuth client in Zendesk (see [Setup step 1](#1-register-an-oauth-client-in-zendesk)).
-2. **Settings → Extensions → Advanced settings → Install extension…** and pick
-   `zendesk.mcpb`.
-3. Fill in the configuration dialog. Only three fields are required:
-
-   | Field | Required | Default |
-   |---|---|---|
-   | Zendesk Subdomain | **yes** | — |
-   | OAuth Client ID | **yes** | — |
-   | OAuth Client Secret | **yes** | — |
-   | OAuth Callback Port | no | `8976` |
-   | Injection-Screening Level | no | `standard` — fixed, see [Security](#security) |
-   | Markdown to HTML Conversion | no | on |
-   | Business-Hours Timezone | no | UTC |
-   | Business Work Hours | no | 09:00–17:00 |
-   | Business Workdays | no | Mon–Fri |
-
-   Each organization registers its **own confidential** OAuth client in its own
-   Zendesk; the plugin ships no subdomain, no client id and no secret, and a
-   public (secret-less) client is deliberately not the shipped path — it belongs
-   to exactly one instance. PKCE (S256) is on unconditionally either way.
-
-   The **redirect URI you register in Zendesk must match the callback port**:
-   `http://localhost:<OAuth Callback Port>/callback` — with the default port,
-   `http://localhost:8976/callback`.
-4. In a chat, run the **`zendesk_login`** tool **twice** — or simply ask for
-   something from Zendesk, because the first tool call without valid credentials
-   starts the authorization itself and answers with the URL:
-   - The **first call** returns a Zendesk authorization URL and starts listening
-     for the redirect. Open the URL, approve access — the browser tab confirms
-     the redirect landed. This call does not wait for you; the authorization
-     stays open for 5 minutes.
-   - The **second call** finishes the login: it exchanges the code and stores
-     the credentials encrypted. Called too early, it repeats the URL and says it
-     is still waiting; called after the 5 minutes, it says so and the next call
-     starts a fresh authorization.
-
-   It reports *already authorized* if usable credentials exist; pass
-   `force: true` to authorize again, or to restart an authorization in progress.
-5. Verify with **`zendesk_get_me`** ("Who am I in Zendesk?").
-
-If the extension is installed but not yet configured, it still starts and every
-tool answers with the configuration field that is still empty, rather than
-failing silently.
-
-Build the bundle yourself:
-
-```bash
-npm ci && npm run build             # dist/ is what the bundle runs
-npm ci --omit=dev --ignore-scripts  # bundle only the five runtime dependencies
-npm run pack                        # → zendesk.mcpb (via npx @anthropic-ai/mcpb)
-npm ci                              # restore the dev toolchain
-```
-
-The two `npm ci` runs around `pack` are what keeps the bundle small: `mcpb pack`
-ships whatever is in `node_modules`, and the test/build toolchain has no business
-inside a shipped extension. `npm run pack` refuses to run until the tree is a
-production tree, so forgetting the step fails loudly instead of shipping 17 MB.
-`.mcpbignore` drops the sources, tests, the Claude Code plugin layer and the
-local data directory (`tokens.enc` must never enter a bundle); the five runtime
-dependencies stay in on purpose, so the extension is self-contained. Packaging
-adds **no** dependency of its own — the MCPB CLI is fetched through `npx`.
-
-> **Why `zendesk_login` exists, and why it takes two calls.** The stdio tool
-> surface gains exactly one tool, because a Desktop Extension user has no
-> terminal to run `npm run authorize` in. It needs two calls because a tool
-> result reaches the user only when the call returns: a single call that waited
-> for the browser redirect would reveal the URL to open only once it was already
-> too late to open it. The first call therefore publishes the URL and keeps the
-> localhost listener bound in the background; the second collects the result.
-> The tool is offered only on the local path, never on the remote connector —
-> the flow is per process, and the listener is on localhost.
-
-### B. Claude Code plugin
 
 From Claude Code, add the marketplace and install the plugin:
 
@@ -127,6 +44,9 @@ directory), the client capabilities announced in
 `initialize`, and whether the callback port binds on each address family. It
 reports those as states, never as values, so its output is safe to paste into an
 issue.
+
+Installed but not yet configured, the plugin still starts, and every tool answers
+with the configuration field that is still empty rather than failing silently.
 
 To work on the plugin from source instead:
 
@@ -196,9 +116,9 @@ http://localhost:8976/callback
 **Client ID** and **Client Secret**.
 
 ### 2. Provide plugin configuration
-The Desktop Extension (`.mcpb`) asks for these in its configuration dialog. On the
-Claude Code plugin they are environment variables (`ZENDESK_SUBDOMAIN`,
-`ZENDESK_OAUTH_CLIENT_ID`, …) — see section B.
+These reach the server as environment variables (`ZENDESK_SUBDOMAIN`,
+`ZENDESK_OAUTH_CLIENT_ID`, …), or from the first-run setup page above — the
+plugin declares no configuration of its own (see [Install](#install)).
 
 | Key | Type | Required | Purpose |
 |---|---|---|---|
@@ -213,12 +133,32 @@ Claude Code plugin they are environment variables (`ZENDESK_SUBDOMAIN`,
 | `workdays` | JSON | no | ISO weekdays, e.g. `[1,2,3,4,5]` |
 
 ### 3. Authorize (one time)
-**Desktop Extension:** run the `zendesk_login` tool in a chat, open the URL it
-returns, then run `zendesk_login` once more to finish — that is the whole step
-(see section A, step 4).
+**In a chat:** run the **`zendesk_login`** tool **twice** — or simply ask for
+something from Zendesk, because the first tool call without valid credentials
+starts the authorization itself and answers with the URL:
 
-**Claude Code:** the one-time first-token flow runs a local browser callback via
-the CLI. From the plugin directory, with the same subdomain and client
+- The **first call** returns a Zendesk authorization URL and starts listening for
+  the redirect. Open the URL, approve access — the browser tab confirms the
+  redirect landed. This call does not wait for you; the authorization stays open
+  for 5 minutes.
+- The **second call** finishes the login: it exchanges the code and stores the
+  credentials encrypted. Called too early, it repeats the URL and says it is
+  still waiting; called after the 5 minutes, it says so and the next call starts
+  a fresh authorization.
+
+It reports *already authorized* if usable credentials exist; pass `force: true`
+to authorize again, or to restart an authorization in progress.
+
+> **Why `zendesk_login` takes two calls.** A tool result reaches the user only
+> when the call returns: a single call that waited for the browser redirect would
+> reveal the URL to open only once it was already too late to open it. The first
+> call therefore publishes the URL and keeps the localhost listener bound in the
+> background; the second collects the result. The tool is offered only on the
+> local path, never on the remote connector — the flow is per process, and the
+> listener is on localhost.
+
+**From a terminal instead:** the one-time first-token flow runs a local browser
+callback via the CLI. From the plugin directory, with the same subdomain and client
 credentials the server uses exported:
 
 ```bash
@@ -244,13 +184,11 @@ revoke access or rotate the client secret.
 > rotating the client secret leaves the store readable.
 
 > **Where credentials live.** `tokens.enc` (mode `0600`) and the response cache
-> go to one stable per-user directory, the same under Claude Code and the Desktop
-> Extension: `~/Library/Application Support/zendesk-plugin` on macOS,
-> `%APPDATA%\zendesk-plugin` on Windows, `$XDG_DATA_HOME/zendesk-plugin` (or
-> `~/.local/share/zendesk-plugin`) elsewhere. It sits outside the plugin and
-> extension directories, so an update does not discard the authorization, and it
-> does not move when a host changes how it launches the server (#68). The bundle
-> itself never contains credentials.
+> go to one stable per-user directory: `~/Library/Application Support/zendesk-plugin`
+> on macOS, `%APPDATA%\zendesk-plugin` on Windows, `$XDG_DATA_HOME/zendesk-plugin`
+> (or `~/.local/share/zendesk-plugin`) elsewhere. It sits outside the plugin
+> directory, so an update does not discard the authorization, and it does not move
+> when a host changes how it launches the server (#68).
 
 ### 4. Confirm
 Ask Claude: **"Who am I in Zendesk?"** → runs `zendesk_get_me` and confirms auth.
@@ -306,8 +244,7 @@ inventory.
   409-on-conflict → re-fetch + confirm); tags append by default; macro apply is
   preview → confirm → persist; every write is confirmed in conversation.
 - **Secrets.** The OAuth client secret reaches the server either as
-  `ZENDESK_OAUTH_CLIENT_SECRET` (the MCPB manifest marks that field
-  `sensitive: true`, which is a request to the host, not a guarantee from here)
+  `ZENDESK_OAUTH_CLIENT_SECRET`
   or from the **macOS Keychain**, where the first-run page puts it together with
   the subdomain and the client id — three items under the service
   `zendesk-plugin`, separate from the token-store key. It is never written to
@@ -336,8 +273,7 @@ classes), pass raw HTML directly rather than relying on Markdown conversion.
 npm install
 npm test          # vitest — full suite
 npm run build     # tsc
-npm run pack      # → zendesk.mcpb (Desktop Extension bundle)
-node scripts/validate-manifests.mjs   # manifest.json + plugin.json + marketplace.json
+node scripts/validate-manifests.mjs   # plugin.json + marketplace.json + the version fan-out
 claude plugin validate --strict .claude-plugin/plugin.json
 claude plugin validate --strict .claude-plugin/marketplace.json
 ```

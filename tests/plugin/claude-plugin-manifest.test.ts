@@ -1,6 +1,7 @@
 // tests/plugin/claude-plugin-manifest.test.ts
-// The Claude Code side of the manifest pair. It used to be asserted as a MIRROR of manifest.json in
-// mcpb-manifest.test.ts; #68 ended that, because the two hosts do not read the same thing:
+// The shipped plugin manifest, and since the MCPB path was retired (#103) the only one. It used to
+// be asserted as a MIRROR of the MCPB manifest; #68 ended that, because the two hosts did not read
+// the same thing:
 //
 //   [PluginMcpHostConfig] Plugin "…" server "zendesk": config references plugin user configuration
 //   (zendesk_subdomain, oauth_client_id, …) — user_config is not supported on the desktop host
@@ -40,8 +41,8 @@ describe('the Claude Code plugin manifest', () => {
     expect(plugin.mcpServers.zendesk.env).toBeUndefined();
     // Named on the raw text too, so a reappearance anywhere — command, args, a second server — fails
     // here rather than only where it is read. The host sets this one itself (Claude Code injects it;
-    // Desktop reserves the name), so declaring it was never a passthrough, only a rejection. Same
-    // rationale as the MCPB side, tests/plugin/mcpb-manifest.test.ts.
+    // Desktop reserves the name), so declaring it was never a passthrough, only a rejection — the
+    // retired MCPB manifest was held to the same rule for the same reason.
     expect(raw).not.toContain('CLAUDE_PLUGIN_DATA');
     // And the data-dir override stays a test and operator seam: a manifest that passed it would
     // silently restore the per-host token directories this file exists to prevent.
@@ -50,9 +51,23 @@ describe('the Claude Code plugin manifest', () => {
 
   it('still launches the bundled plugin server from the plugin root', () => {
     // ${CLAUDE_PLUGIN_ROOT} stays: it is substituted by the host, not by user configuration. The
-    // entry point is the esbuild BUNDLE, which is a different file from the MCPB manifest's tsc
-    // output (manifest.json → dist/server.js) on purpose.
+    // entry point is the esbuild BUNDLE (dist/plugin/server.js), deliberately a different file from
+    // the plain tsc output in dist/ that the retired MCPB extension launched.
     expect(plugin.mcpServers.zendesk.command).toBe('node');
     expect(plugin.mcpServers.zendesk.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/dist/plugin/server.js']);
+  });
+
+  // Relocated from the MCPB manifest suite when that path was retired (#103). The claim is about
+  // what SHIPS: a hard-coded view, group, form, field or brand id would tie the published plugin to
+  // one Zendesk instance, and every customer registers their own. Asserted on the raw text so an id
+  // smuggled in under a key nothing here reads still fails.
+  //
+  // This manifest is not the only shipped one — `.claude-plugin/marketplace.json` ships beside it,
+  // and the release gate calls them "both shipped manifests". That file carries no equivalent of
+  // this assertion. Named, not closed: extending it there would be a NEW assurance rather than a
+  // relocated one, and this piece of work only moves what already existed.
+  it('ships no Zendesk instance data: no ids, no view/group/form/field pre-configuration', () => {
+    expect(raw).not.toMatch(/"\w*_id"\s*:\s*\d/);
+    expect(raw).not.toMatch(/\b(view_id|group_id|ticket_form_id|custom_field_id|brand_id)\b/);
   });
 });

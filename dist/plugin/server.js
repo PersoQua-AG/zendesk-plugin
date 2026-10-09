@@ -22887,13 +22887,13 @@ ${screened.lines.join("\n")}${screened.warning}`,
     flagged: screened.flagged
   };
 }
-function buildComment(text, useMarkdown, isPublic) {
+function buildComment(text, useMarkdown, isPublic = false) {
   return useMarkdown ? { html_body: markdownToHtml(text), public: isPublic } : { body: text, public: isPublic };
 }
 async function createTicket(client, cache, params) {
   const ticket = {
     subject: params.subject,
-    comment: buildComment(params.comment, params.markdown, params.public ?? true)
+    comment: buildComment(params.comment, params.markdown, params.public)
   };
   if (params.requesterId !== void 0) ticket.requester_id = params.requesterId;
   if (params.priority) ticket.priority = params.priority;
@@ -22938,8 +22938,8 @@ async function updateTicket(client, cache, params, securityLevel = "standard") {
 // src/tools/ticket-comments.ts
 async function addComment(client, cache, params, securityLevel = "standard") {
   if (params.body.trim() === "") throw new Error("Comment body must not be empty.");
-  const isPublic = params.public ?? true;
-  const comment = buildComment(params.body, params.markdown, isPublic);
+  const comment = buildComment(params.body, params.markdown, params.public);
+  const isPublic = comment.public === true;
   const raw = await client.request(`/tickets/${params.ticketId}.json`, {
     method: "PUT",
     body: JSON.stringify({ ticket: { comment } })
@@ -23151,7 +23151,10 @@ var bulkCreateTicketSchema = ticketUpdateFieldsSchema.extend({
   comment: external_exports.object({
     body: external_exports.string().min(1).optional(),
     html_body: external_exports.string().min(1).optional(),
-    public: external_exports.boolean().optional()
+    // #64: bulk create hands its records straight to create_many, where Zendesk's own
+    // default would publish the comment. The schema is the one funnel every record passes,
+    // so the internal-by-default decision is applied here as a parse default.
+    public: external_exports.boolean().optional().default(false).describe("true = the first comment is visible to the customer. Omitted = internal note (agents only).")
   }).strict(),
   requester_id: external_exports.number().int().positive().optional(),
   // Zendesk's write-only follow-up link (Tickets JSON format).
@@ -23185,7 +23188,7 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
   server.registerTool(
     "zendesk_create_ticket",
     {
-      description: "Create a ticket. The comment is converted Markdown\u2192HTML unless markdown:false.",
+      description: "Create a ticket. Its first comment is an INTERNAL note unless public:true is passed. The comment is converted Markdown\u2192HTML unless markdown:false.",
       // A ZodObject rather than a raw shape, so `.strict()` reaches the top-level args too (#66).
       inputSchema: external_exports.object({
         subject: external_exports.string().min(1),
@@ -23198,7 +23201,7 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
         groupId: external_exports.number().int().positive().optional(),
         assigneeId: external_exports.number().int().positive().optional(),
         markdown: external_exports.boolean().optional(),
-        public: external_exports.boolean().optional(),
+        public: external_exports.boolean().optional().default(false).describe("true = the first comment is visible to the customer. Omitted = internal note (agents only)."),
         // The id of a CLOSED ticket this one follows up on; sent as via_followup_source_id (#66).
         followupSourceId: external_exports.number().int().positive().optional()
       }).strict()
@@ -23225,8 +23228,13 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
   server.registerTool(
     "zendesk_add_comment",
     {
-      description: "Add a public or internal comment to a ticket (Markdown\u2192HTML unless markdown:false).",
-      inputSchema: { ticketId: external_exports.number().int().positive(), body: external_exports.string().min(1), public: external_exports.boolean().optional(), markdown: external_exports.boolean().optional() }
+      description: "Add a comment to a ticket. Visibility is opt-in: omitting public posts an INTERNAL note that only agents see \u2014 pass public:true for a reply the customer receives. Markdown\u2192HTML unless markdown:false.",
+      inputSchema: {
+        ticketId: external_exports.number().int().positive(),
+        body: external_exports.string().min(1),
+        public: external_exports.boolean().optional().default(false).describe("true = visible to the customer. Omitted = internal note (agents only)."),
+        markdown: external_exports.boolean().optional()
+      }
     },
     async (args) => okWithHandle(await addComment(httpClient, cache, { ...args, markdown: args.markdown ?? markdownDefault }, securityLevel))
   );
@@ -23242,7 +23250,10 @@ updated_stamp: ${r.updatedStamp ?? "unknown"}
   );
   server.registerTool(
     "zendesk_create_tickets_bulk",
-    { description: "Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table).", inputSchema: { tickets: external_exports.array(bulkCreateTicketSchema).min(1).max(100) } },
+    {
+      description: "Create up to 100 tickets in one async job (auto-polled; returns a per-record failure table). Each record\u2019s first comment is an INTERNAL note unless comment.public:true is passed.",
+      inputSchema: { tickets: external_exports.array(bulkCreateTicketSchema).min(1).max(100) }
+    },
     async ({ tickets }) => {
       const r = await createTicketsBulk(httpClient, cache, { tickets }, {}, securityLevel);
       return toText(`${r.summary} failures=${JSON.stringify(r.failures)}
@@ -29792,11 +29803,13 @@ function resolveOrDegrade(env, security) {
     const dataDir = dataDirOf(env);
     return {
       ok: false,
-      // Points at the setup page, which is what exists now: the Claude Code plugin has no settings
-      // dialog any more (#68 removed its user_config, the host bridge does not support one), and on a
-      // platform without a Keychain the environment is the only way in (#69). The MCPB extension still
-      // HAS the dialog, so it is named last rather than first.
-      reason: `${reason}${problem ? ` ${problem}` : ""} Call the zendesk_login tool: on macOS it answers with a local setup page that collects the subdomain, client id and client secret. Otherwise pass them in the environment (ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET), or, in the Desktop Extension, fill the configuration dialog under Settings \u2192 Extensions \u2192 Zendesk.`,
+      // Points at the setup page and the environment, which is everything a shipped path offers:
+      // there is no settings dialog anywhere any more. #68 removed the plugin's user_config (the host
+      // bridge does not support one), and the MCPB extension, whose dialog used to be named here
+      // last, is retired (#103). On a platform without a Keychain the environment is the only way in
+      // (#69). Naming a dialog the product does not have would send a half-configured operator into a
+      // path that cannot be reached, so the clause is pinned shut in tests/server.unconfigured.test.ts.
+      reason: `${reason}${problem ? ` ${problem}` : ""} Call the zendesk_login tool: on macOS it answers with a local setup page that collects the subdomain, client id and client secret. Otherwise pass them in the environment (ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET).`,
       dataDir,
       tokensPath: join3(dataDir, "tokens.enc")
     };
