@@ -52,7 +52,7 @@ export let tokensPath: string;
 // 41 describes — a named EADDRINUSE, loud.
 export const PORT_BAND_FIRST = 20_000;
 export const PORT_BAND_LAST = 29_999;
-const PORT_BAND_SIZE = PORT_BAND_LAST - PORT_BAND_FIRST + 1;
+export const PORT_BAND_SIZE = PORT_BAND_LAST - PORT_BAND_FIRST + 1;
 
 const CLAIM_DIR = join(tmpdir(), 'zendesk-plugin-test-ports');
 
@@ -164,7 +164,14 @@ sweepDeadClaims();
 // what makes that
 // impossible rather than improbable: the OS refuses the second create instead of the RNG not
 // repeating.
-function claimPort(port: number): boolean {
+// Exported for any helper that puts a port aside for itself. There is exactly one other, the
+// foreign-listener walk in tests/auth/foreign-listener-port.test.ts, and it used to take the name
+// with its own `writeFileSync(portClaimPath(n), pid, { flag: 'wx' })` — the create-then-write form
+// this function exists to avoid. Measured: an empty file under CLAIM_DIR IS reclaimed by
+// sweepDeadClaims() (pinned by "reclaims a claim that names no owner"), and that sweep runs in all
+// 207 test files at module load, so the window is open against the whole suite rather than against
+// one sibling. Nobody claims a band port by hand.
+export function claimPort(port: number): boolean {
   // Cheap enough to repeat (measured: 3.4 µs on a directory that exists) and it is the whole
   // recovery from macOS pruning its per-user temp dir under a running suite — which it did in this
   // session, after which every freePort() threw ENOENT with no way back.
@@ -302,7 +309,13 @@ const PROBE_TIMEOUT_MS = 2_000;
 // stranger can be listening on either. The strict contract — "I could not look" is never read as
 // an answer — stays exactly where it was measured to matter: on the addresses the CALLER names,
 // which is what tests/auth/foreign-listener-port.test.ts:92 pins with 192.0.2.1.
-export function routableAddresses(): string[] {
+// NOT exported, deliberately. The one consumer is nine lines below in this file, and the one file
+// that might import it — tests/auth/port-probe-routable.test.ts — may not: discovering the
+// addresses a second time, independently, is that file's whole control argument (sharing this
+// function made it blind, measured: `routableAddresses() -> []` left it reporting
+// `Tests 1 skipped (1)`, green while asserting nothing). An export here is an invitation to make
+// exactly that mistake.
+function routableAddresses(): string[] {
   const found = Object.values(networkInterfaces())
     .flat()
     // `internal` is NOT filtered out, deliberately. It was, and that left the same hole one step

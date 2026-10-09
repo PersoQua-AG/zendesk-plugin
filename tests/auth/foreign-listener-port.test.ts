@@ -6,11 +6,19 @@
 // goes there, and the case is reached on every run rather than waited for.
 import { describe, it, expect, afterEach } from 'vitest';
 import { once } from 'node:events';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PORT_BAND_FIRST, PORT_BAND_LAST, freePort, portClaimPath, portHeldOn } from './login-harness.js';
+import {
+  PORT_BAND_FIRST,
+  PORT_BAND_LAST,
+  PORT_BAND_SIZE,
+  claimPort,
+  freePort,
+  portClaimPath,
+  portHeldOn,
+} from './login-harness.js';
 import { allowForeignBind } from '../setup/acquired-ports.js';
 
 // The body of a named function in the harness source, for the two cases whose rule is not
@@ -66,7 +74,17 @@ describe('freePort() and a foreign listener in the band', () => {
   // THE ATTEMPT LOG STAYS. It is what turned "20 attempts" from a count into a measurement, and
   // the next failure here has to arrive with its ports and its reasons attached.
   async function foreignListenerOnNextCandidate(host?: string): Promise<number> {
+    // BOUNDED, because the walk is. Capping the attempts at 20 used to bound this list too; the
+    // bound is the band now, so an exhausted band would otherwise put ~10 000 entries and ~200 KB
+    // into one assertion message. The first attempts are the ones that carry the pattern — the
+    // step-by-two signature of #106 finding 3 was legible in the first four — and the total is what
+    // says how far the walk got, so both are kept and nothing in between is.
     const refused: string[] = [];
+    let refusedCount = 0;
+    const refuse = (reason: string): void => {
+      refusedCount += 1;
+      if (refused.length < 20) refused.push(reason);
+    };
     const anchor = freePort();
     // IT WRAPS, like the cursor it follows. `for (next = anchor + 1; next <= PORT_BAND_LAST)` ran
     // zero times when freePort() returned the last port of the band, and the case then failed
@@ -74,20 +92,35 @@ describe('freePort() and a foreign listener in the band', () => {
     // itself wraps (`PORT_BAND_FIRST + nextCandidate % PORT_BAND_SIZE`), and the 20-attempt loop
     // this replaced inherited that wrap; a band edge is roughly 1 pid residue in 10 000, which is
     // exactly the kind of rate that reaches somebody else and not you.
-    const bandSize = PORT_BAND_LAST - PORT_BAND_FIRST + 1;
-    for (let step = 1; step <= bandSize; step += 1) {
-      const next = PORT_BAND_FIRST + ((anchor - PORT_BAND_FIRST + step) % bandSize);
+    for (let step = 1; step <= PORT_BAND_SIZE; step += 1) {
+      const next = PORT_BAND_FIRST + ((anchor - PORT_BAND_FIRST + step) % PORT_BAND_SIZE);
+      // THE ALLOCATOR'S OWN PROTOCOL, never a claim written by hand. This was
+      // `writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' })` — create the name
+      // first, write the owner second — which is precisely the form claimPort() replaced and whose
+      // reason is written above it: a claim that can be read empty is one a concurrent
+      // sweepDeadClaims() calls ownerless and removes, and then the port goes out twice. That sweep
+      // runs at module load in every test file, so the window faced the whole suite; and because
+      // the walk is now bounded by the band rather than by 20 attempts, this helper opened it up to
+      // PORT_BAND_SIZE times per case instead of at most 20. claimPort() publishes the owner and
+      // takes the name in one link(), so there is no readable-but-empty moment to lose.
+      let claimed: boolean;
       try {
-        writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' });
+        claimed = claimPort(next);
       } catch (err) {
-        refused.push(`${next} claim ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
+        // claimPort() throws for everything that is not "the name is taken", with the path in the
+        // message; it is not an ErrnoException by then, so the message is what there is to log.
+        refuse(`${next} claim ${(err as Error).message}`);
+        continue;
+      }
+      if (!claimed) {
+        refuse(`${next} claim EEXIST`);
         continue;
       }
       try {
         opened.push(await bind(next, host));
       } catch (err) {
         rmSync(portClaimPath(next), { force: true });
-        refused.push(`${next} bind ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
+        refuse(`${next} bind ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
         continue;
       }
       rmSync(portClaimPath(next), { force: true });
@@ -95,7 +128,8 @@ describe('freePort() and a foreign listener in the band', () => {
     }
     return expect.fail(
       `no band port left to put a stranger on in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}, walking ` +
-        `from ${anchor + 1} (host ${host ?? 'wildcard'}): ${refused.join(', ')}`,
+        `from ${anchor + 1} (host ${host ?? 'wildcard'}): ${refusedCount} refused, first ` +
+        `${refused.length}: ${refused.join(', ')}`,
     );
   }
 
@@ -156,5 +190,24 @@ describe('freePort() and a foreign listener in the band', () => {
     const body = harnessFunction('freePort').replace(/^\s*\/\/.*$/gm, '');
     expect(body.indexOf('if (!claimPort(port)) continue;')).toBeGreaterThanOrEqual(0);
     expect(body.indexOf('if (!claimPort(port)) continue;')).toBeLessThan(body.indexOf('portHeldOn(port)'));
+  });
+
+  // THE CLAIM PROTOCOL IS THE ALLOCATOR'S, NOT THIS FILE'S. The walk above used to take a band port
+  // with `writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' })`, and a claim that
+  // exists before its owner is written is one sweepDeadClaims() reclaims as ownerless — pinned, as a
+  // behaviour, by "reclaims a claim that names no owner" and "keeps a claim whose owner is alive" in
+  // tests/auth/login-harness.port.test.ts. Source, because the window between create and write is
+  // not observable from inside one process; what IS checkable here is that no such window is opened.
+  //
+  // THE NEGATIVE IS ON THE CLASS, NOT ON A WORDING. Asserting `not.toContain('writeFileSync(portClaimPath')`
+  // would pass again for appendFileSync, openSync, writeSync or any alias. So every call this file
+  // hands a claim path to is collected and the whole set is compared: releasing with rmSync is the
+  // only thing a claim path may be passed to here, and taking one goes through claimPort().
+  it('takes its claims through the allocator and only ever releases them itself', () => {
+    const source = readFileSync(fileURLToPath(import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    expect(source).toContain('claimed = claimPort(next);');
+    const callers = [...source.matchAll(/(\w+)\(\s*portClaimPath\(/g)].map((m) => m[1]);
+    expect(callers.length, 'no claim path is used at all — the walk cannot be doing its job').toBeGreaterThan(0);
+    expect([...new Set(callers)].sort()).toEqual(['rmSync']);
   });
 });
