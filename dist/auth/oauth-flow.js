@@ -254,7 +254,7 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
             for (const binding of bindings)
                 binding.server.listen(port, binding.address);
         }
-        catch {
+        catch (err) {
             // Cleanup and wording only, NOT liveness. Honest about its own reach: if the INNER executor
             // threw, `server` and `close` were never assigned, so listen() throws a TypeError here,
             // close() throws a second one, and both are swallowed because bindFailed() has already
@@ -262,7 +262,49 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
             // below provably does not run there. It carries on the path it was written for: a real
             // listener that refuses to bind.
             close();
-            throw new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`);
+            // ONE REASON PER CAUSE (#104). This used to answer EVERY synchronous throw with the port
+            // rule, and for anything but a RangeError that sentence is FALSE: the port is in range.
+            // Measured in PR #101 — a bind-time guard threw here and the caller was told
+            // `port 8976 (… must be a whole number between 1024 and 65535)`, so the reader went to check
+            // a number that was never the problem while the only description of the real cause was
+            // dropped on the floor.
+            //
+            // What does NOT change is why the replacement exists at all: node's own wording carries
+            // absolute paths and its stack carries frames, and neither may reach the MCP boundary
+            // (src/tools/login.ts reads err.message). So nothing from `err` is interpolated except its
+            // CLASS NAME, which is an identifier rather than text — and only when it looks like one, so
+            // a thrown object with a doctored `name` cannot smuggle a path in. The original is attached
+            // as `cause`, which a developer in the process can read and no tool response serializes.
+            // Length-bounded as well as character-bounded: `name` is writable, and a 200 000-character
+            // one reached the MCP boundary verbatim. No real error class name is anywhere near 40.
+            //
+            // `{0,40}`, NOT `{1,40}`: a mandatory prefix rejected the name `Error` ITSELF, and that is the
+            // one name that actually occurs here — the only real producer of a synchronous non-RangeError
+            // throw from listen() is the bind-time guard in tests/setup/no-fixed-bind-port.ts, which
+            // throws `new Error(message)`. So the field this fix exists to carry was dropped in precisely
+            // the case that ships, and the reader got the information-free "an error". The bound is what
+            // does the work and is unchanged in substance: 45 characters at most.
+            const kind = err instanceof Error && /^[A-Za-z]{0,40}Error$/.test(err.name) ? err.name : 'an error';
+            throw err instanceof RangeError
+                ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
+                    cause: err,
+                })
+                : new Error(
+                // NOTHING ABOUT THE RANGE, AND NOTHING ABOUT THE RULE. Two rewrites of this sentence
+                // each smuggled a claim back in. "The port is inside the allowed range" is false for
+                // 0-1023: node's listen() throws RangeError only outside 0-65535, CALLBACK_PORT_RULE
+                // is 1024-65535, and nothing range-checks `port` before this call. "So the callback
+                // port rule is not the reason" is no better — nothing in this try enforces that rule
+                // (src/auth/config.ts:115 does, earlier and elsewhere), so it does not follow from
+                // `!(err instanceof RangeError)` either.
+                //
+                // What DOES follow is exactly one thing: node's own port validation throws RangeError,
+                // and a RangeError took the other branch. That is the whole sentence. "Before any bind
+                // was attempted" is gone too — there are two bindings, so a throw on the second one
+                // comes after the first has started binding.
+                `OAuth callback server could not start on port ${port}: listen() threw ${kind}, which` +
+                    ` is not node's own port validation — that throws RangeError and is reported` +
+                    ` separately.`, { cause: err });
         }
     });
 }
