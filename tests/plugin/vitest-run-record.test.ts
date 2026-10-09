@@ -32,7 +32,7 @@ describe('the run record vitest.config.ts writes', () => {
     // record nested one level deeper, both of which git still ignores — it pins the spelling, not
     // the property. 0 = ignored; 1 = git would offer it for commit, including when it is already
     // tracked; anything else means the question was never asked. Only 0 passes: fail-closed.
-    const asked = spawnSync('git', ['check-ignore', '-q', record as string], { cwd: root });
+    const asked = spawnSync('git', ['check-ignore', '-q', record as string], { cwd: root, encoding: 'utf8' });
     expect(asked.status, `git check-ignore ${record} exited ${asked.status}: ${asked.stderr}`).toBe(0);
   });
 });
