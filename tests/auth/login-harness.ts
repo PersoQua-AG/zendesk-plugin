@@ -48,8 +48,8 @@ export let tokensPath: string;
 //
 // What a claim cannot see: a foreign process holding a band port (#48 — an unrelated `next-server`
 // on *:20127 reddened a run). portHeldOn() below narrows that AFTER the claim is held. What it does
-// not narrow is the moment between its probe and the production bind; that remnant stays what line
-// 41 describes — a named EADDRINUSE, loud.
+// not narrow is the moment between its probe and the production bind; that remnant stays what step
+// 2 of the acquisition above describes — a named EADDRINUSE, loud.
 export const PORT_BAND_FIRST = 20_000;
 export const PORT_BAND_LAST = 29_999;
 export const PORT_BAND_SIZE = PORT_BAND_LAST - PORT_BAND_FIRST + 1;
@@ -194,16 +194,43 @@ export function claimPort(port: number): boolean {
 // Runs ONLY on a band port and ONLY once the claim is held, so the #13 window stays shut: nothing
 // binds before the claim, and no listen(0) anywhere can be given a band number.
 //
-// Binding is the only way to ask, and one bind is not enough. Measured, holder down the side:
+// Binding is the only way to ask, and one bind is not enough. ONE TABLE, holder down the side —
+// there were two for this question, and the measured one called the other "not measured on both
+// platforms", so the older stood refuted where it was.
 //
-//                      macOS probe        macOS prod. bind   Linux probe        Linux prod. bind
-//   holder ::          EADDRINUSE 0.0.0.0 EADDRINUSE         EADDRINUSE 0.0.0.0 EADDRINUSE
-//   holder 0.0.0.0     EADDRINUSE 0.0.0.0 succeeds           EADDRINUSE 0.0.0.0 EADDRINUSE
-//   holder 127.0.0.1   EADDRINUSE 127.0.0.1 succeeds         EADDRINUSE 0.0.0.0 EADDRINUSE
-//   holder ::1         EADDRINUSE ::1     succeeds           EADDRINUSE ::1     EADDRINUSE
-//   nobody             free               succeeds           free               succeeds
+// Measured (#107) with the same script on both sides, one holder at a time on one band port, each
+// address probed in its own child. darwin 25.3.0 / node v26.5.0; linux via
+// `docker run --user node --sysctl net.ipv4.ip_unprivileged_port_start=1024 node:20-bookworm`,
+// image node@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5, node
+// v20.20.2, one routable address 192.168.215.2. B = BOUND beside the holder, X = EADDRINUSE,
+// ? = NOT MEASURED — the `::1` holder row and the `prod. bind` column come from the earlier
+// darwin-reasoned run, which did not cover every cell, and a blank is not an observation. Every
+// cell the two runs share agrees; none was overwritten.
 //
-// "prod. bind" is src/auth/oauth-flow.ts:244, `server.listen(port)` with no host. On Linux it is
+//   holder \ probe        0.0.0.0   ::   127.0.0.1   ::1   routable   prod. bind
+//   darwin
+//     no host (wildcard)      X      X        B        B       B          X
+//     0.0.0.0                 X      B        B        B       B          B
+//     ::                      X      X        B        B       B          X
+//     127.0.0.1               B      B        X        B       B          B
+//     ::1                     B      ?        B        X       ?          B
+//     routable                B      B        B        B       X          B
+//     nobody                  B      B        B        B       B          B
+//   linux
+//     no host (wildcard)      X      X        X        X       X          X
+//     0.0.0.0                 X      X        X        B       X          X
+//     ::                      X      X        X        X       X          X
+//     127.0.0.1               X      X        X        B       B          X
+//     ::1                     B      ?        B        X       ?          X
+//     routable                X      X        B        B       X          ?
+//     nobody                  B      B        B        B       B          B
+//
+// The `::1` row is the ONLY reason `::1` is in PROBE_ADDRESSES (a holder there is refused at `::1`
+// and nowhere else on darwin); its cells come from the older answer `EADDRINUSE ::1`, and since the
+// probe reports the FIRST refusal, that says 0.0.0.0 and 127.0.0.1 bound and `::1` did not.
+//
+// "prod. bind" is `server.listen(port)` with no host in startCallbackListener(), and it is the
+// column that says what the probe SAVES rather than which probe is loud. On Linux it is
 // loud by itself. On macOS it is the column that MISSES three of the four, because libuv binds TCP
 // with SO_REUSEADDR and a wildcard bind therefore succeeds next to a more specific one — which then
 // takes the traffic. End to end on macOS: foreign HTTP server on 0.0.0.0:P, ours on the wildcard,
@@ -221,30 +248,6 @@ export function claimPort(port: number): boolean {
 //
 // CI run 36845405954 printed 44 724 skips, every one of them 127.0.0.1, and then declared the band
 // exhausted.
-//
-// MEASURED ON BOTH PLATFORMS (#107), which the table above was not — it was reasoned from a
-// darwin run. Same script on both sides, one holder at a time on one band port, each of the five
-// addresses probed in its own child. darwin 25.3.0 / node v26.5.0; linux via
-// `docker run --user node --sysctl net.ipv4.ip_unprivileged_port_start=1024 node:20-bookworm`,
-// image node@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5, node
-// v20.20.2, one routable address 192.168.215.2. B = the probe BOUND beside the holder,
-// X = EADDRINUSE.
-//
-//   holder \ probe        0.0.0.0   ::   127.0.0.1   ::1   routable
-//   darwin
-//     no host (wildcard)      X      X        B        B       B
-//     0.0.0.0                 X      B        B        B       B
-//     ::                      X      X        B        B       B
-//     127.0.0.1               B      B        X        B       B
-//     routable                B      B        B        B       X
-//     nobody                  B      B        B        B       B
-//   linux
-//     no host (wildcard)      X      X        X        X       X
-//     0.0.0.0                 X      X        X        B       X
-//     ::                      X      X        X        X       X
-//     127.0.0.1               X      X        X        B       B
-//     routable                X      X        B        B       X
-//     nobody                  B      B        B        B       B
 //
 // THE DIFFERENCE, stated so the darwin run stops passing for general: on Linux a wildcard probe
 // sees EVERY holder — one address would do — because Linux refuses a specific bind that overlaps a
@@ -280,18 +283,21 @@ export function claimPort(port: number): boolean {
 // holder on `::`". It can, every time — measured, 3 of 3, on this host and against this exact
 // three-address list:
 //   holder :: (listen with no host) -> status=1 out="EADDRINUSE 0.0.0.0"
-// which is also what the matrix below says (`holder :: → macOS probe EADDRINUSE 0.0.0.0`), because
+// which is also what the holder matrix ABOVE says (`darwin, holder :: → probe 0.0.0.0 = X`; it
+// which is also what the holder matrix above says (`darwin, holder :: -> probe 0.0.0.0 = X`), because
 // macOS treats `::` as dual-stack and the 0.0.0.0 bind collides with it. A fourth address that
 // catches nothing is dead weight, so it is gone.
 //
 // WHAT THAT ONE OBSERVATION WAS is therefore still open, and it is named rather than papered over.
-// Its shape is the window this file already documents at line 49: between the probe's close and
+// Its shape is the window the "What a claim cannot see" paragraph above portClaimPath() already
+// documents: between the probe's close and
 // the caller's bind, which is loud (a named EADDRINUSE) and is the remnant the design accepts. It
 // has not recurred — 12 shuffled full runs and 20 concurrent two-process rounds since.
 const PROBE_ADDRESSES = ['0.0.0.0', '127.0.0.1', '::1'] as const;
 const PROBE_TIMEOUT_MS = 2_000;
 
-// THE ROW THE TABLE ABOVE WAS MISSING (#106 finding 2): holder on a ROUTABLE address of this host.
+// THE `routable` ROW OF THE TABLE ABOVE (#106 finding 2), which that table was missing entirely
+// until this finding: holder on a ROUTABLE address of this host.
 // On macOS all three addresses above stay bindable beside it — the same SO_REUSEADDR that makes the
 // wildcard production bind succeed next to a specific socket also lets the 0.0.0.0 PROBE succeed
 // next to one — so portHeldOn answered '' FREE and freePort() handed the port out. Measured with a
@@ -350,8 +356,10 @@ export const MAX_PROBES_PER_ACQUISITION = 64;
 // always, because they are the hole this probe exists to close and a caller that forgot them would
 // re-open it silently. The parameter chooses the STRICT set — the addresses whose non-EADDRINUSE
 // bind error is thrown rather than skipped — which is what its two callers actually use it for
-// (foreign-listener-port.test.ts:116 with 192.0.2.1, port-probe-budget.test.ts:80 with 127.0.0.1
-// three times). Named here because the signature cannot say it.
+// — the two callers being "does not read a bind error other than EADDRINUSE as a holder" in
+// tests/auth/foreign-listener-port.test.ts with 192.0.2.1, and the overlap case in
+// tests/auth/port-probe-budget.test.ts with 127.0.0.1 three times. Named here because the signature
+// cannot say it. BY CASE NAME, NOT BY LINE: the numbers that stood here had drifted 66 lines.
 export function portHeldOn(port: number, addresses: readonly string[] = PROBE_ADDRESSES): string {
   // [host, strict] — strict hosts throw on a bind error that is not EADDRINUSE, discovered ones
   // are skipped. See routableAddresses() above for why the two classes differ.
@@ -420,8 +428,8 @@ export function freePort(): number {
       // as long as this process lives, and the sweep takes it back once the pid is gone. Releasing
       // it would only make the next acquirer — and the second pass above — pay for the same probe.
       //
-      // And it is said out loud, because the staleness assumption at line 69 had exactly one
-      // observation that could contradict it — the named EADDRINUSE from src/tools/login.ts:113 —
+      // And it is said out loud, because the MAX_CLAIM_AGE_MS staleness assumption had exactly one
+      // observation that could contradict it — the named EADDRINUSE from src/tools/login.ts —
       // and skipping the port here is what takes that observation away.
       //
       // The address is the FIRST one that refused the bind, which is not always the one the
