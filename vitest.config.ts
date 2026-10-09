@@ -22,15 +22,15 @@ export default defineConfig({
     //
     // The pid is in the NAME because two overlapping runs — a QA worktree beside a local watch, or
     // two CI jobs on one checkout — otherwise overwrite each other's evidence, which is the one
-    // thing this file exists to preserve. The directory is what .gitignore and .mcpbignore carry,
-    // so the name can vary freely.
+    // thing this file exists to preserve. It is the DIRECTORY that .gitignore excludes, so the name
+    // can vary freely.
     //
     // TWO THINGS THIS DOES NOT DO, said rather than left to be discovered. Nothing prunes the
     // directory, and an INTERRUPTED run leaves a record shaped exactly like a complete one — so a
     // short file is not evidence of a short run. And the record is a new on-disk sink for failure
-    // text, test sentinels included; the two ignore files keep it out of git and out of the bundle,
-    // and the audit's default-deny would refuse it even if they did not, but
-    // `expectNoSecretEchoed` guards the two streams and not this file.
+    // text, test sentinels included; .gitignore keeps it out of git — pinned by
+    // tests/plugin/vitest-run-record.test.ts — but `expectNoSecretEchoed` guards the two streams
+    // and not this file.
     reporters: ['default', 'json'],
     outputFile: { json: `test-results/vitest-${process.pid}.json` },
     // Runs once, after every file: the only place that can see what a SPAWNED child did to the machine.
