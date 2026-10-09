@@ -20,6 +20,18 @@ function throwsOnListen(err: unknown): void {
   });
 }
 
+// THE WHOLE SENTENCE, in one place, for every case whose message is determined. Each of these
+// cases knows the port and knows which `kind` the gate in src/auth/oauth-flow.ts will interpolate,
+// so the message is a single known string and nothing weaker needs to be asserted. Written once
+// rather than six times so one reading of src/auth/oauth-flow.ts settles all of them — and the
+// cases below pass `kind` explicitly, because WHICH kind arrives is the claim of several of them.
+function reason(port: number, kind: string): string {
+  return (
+    `OAuth callback server could not start on port ${port}: listen() threw ${kind}, which is` +
+    ` not node's own port validation — that throws RangeError and is reported separately.`
+  );
+}
+
 async function bindFailure(port: number): Promise<Error> {
   return (await settlesWithin(
     `startCallbackListener(${port})`,
@@ -43,11 +55,15 @@ describe('the reason a failed callback bind states', () => {
     const port = freePort();
     throwsOnListen(new TypeError('a bind-time guard refused this call'));
     const err = await bindFailure(port);
-    expect(err.message).toContain(`could not start on port ${port}`);
-    // The sentence the measurement in PR #101 produced for an in-range port. It must be gone.
-    expect(err.message).not.toContain('must be a whole number between');
-    expect(err.message).toContain("not node's own port validation");
-    expect(err.message).toContain('TypeError');
+    // THE EXACT SENTENCE, for the same reason the privileged-port case below carries it, and this
+    // is the case that needed it most: freePort() returns an IN-RANGE port, which is the range PR
+    // #101 actually measured the false reason on (port 8976), so this is the shape that ships.
+    // Measured while it hung on three substrings: appending
+    // `${port >= 1024 ? ' The port is outside the permitted range.' : ''}` — false for exactly the
+    // ports that occur in production, and invisible to the 0/1023 rows below — left the WHOLE suite
+    // green. Three substrings cover three wordings; the class of false range claims is larger, and
+    // only the whole sentence is the class.
+    expect(err.message).toBe(reason(port, 'TypeError'));
   });
 
   // THE SECOND FALSE REASON, which the first fix walked straight into. node's listen() throws
@@ -71,10 +87,7 @@ describe('the reason a failed callback bind states', () => {
     // for 0 and 1023, which is exactly this case's subject — kept all 1520 tests green, because
     // three negatives covered three wordings and the class has more. Same shape as the RangeError
     // case above, which has always been pinned this way.
-    expect(err.message).toBe(
-      `OAuth callback server could not start on port ${port}: listen() threw TypeError, which is` +
-        ` not node's own port validation — that throws RangeError and is reported separately.`,
-    );
+    expect(err.message).toBe(reason(port, 'TypeError'));
   });
 
   it('attaches the original error as the cause instead of discarding it', async () => {
@@ -110,8 +123,9 @@ describe('the reason a failed callback bind states', () => {
     disguised.name = '/Users/someone/secret/path';
     throwsOnListen(disguised);
     const err = await bindFailure(port);
-    expect(err.message).not.toContain('/Users/');
-    expect(err.message).toContain('threw an error, which');
+    // The exact sentence, so the path is excluded by the whole message rather than by one pattern:
+    // `not.toContain('/Users/')` says nothing about a Windows path, a URL or a bare directory name.
+    expect(err.message).toBe(reason(port, 'an error'));
   });
 
   // `name` is writable, so a long one is as much a leak as a wrong one: 200 000 characters reached
@@ -122,15 +136,34 @@ describe('the reason a failed callback bind states', () => {
     shouting.name = `${'A'.repeat(200_000)}Error`;
     throwsOnListen(shouting);
     const err = await bindFailure(port);
-    expect(err.message).toContain('threw an error, which');
-    expect(err.message.length).toBeLessThan(400);
+    // The exact sentence BOUNDS THE LENGTH by deriving it, which `length < 400` did not: 400 is a
+    // number nothing in the code or the ticket produces, and it stayed satisfied by any message
+    // under it — including one carrying 300 characters of a 200 000-character name.
+    expect(err.message).toBe(reason(port, 'an error'));
+  });
+
+  // THE NAME THAT ACTUALLY OCCURS. The gate's prefix was mandatory (`{1,40}`), which rejected
+  // `Error` itself — and the only real producer of a synchronous non-RangeError throw from listen()
+  // is the bind-time guard in tests/setup/no-fixed-bind-port.ts, which throws `new Error(message)`.
+  // The one case that ships therefore lost the class name the fix exists to carry. Unpinned in both
+  // directions before this: nothing noticed the name being dropped, and nothing held the bound that
+  // makes dropping it right for a long one. Both rows now.
+  it.each([
+    ['Error', 'Error', 'the class name of the one error this path really gets'],
+    [`${'A'.repeat(41)}Error`, 'an error', 'one character past the bound, so still not interpolated'],
+  ])('interpolates the name %s as %s — %s', async (name, kind) => {
+    const port = freePort();
+    const thrown = new Error('x');
+    thrown.name = name;
+    throwsOnListen(thrown);
+    expect((await bindFailure(port)).message).toBe(reason(port, kind));
   });
 
   it('survives a thrown value that is not an Error at all', async () => {
     const port = freePort();
     throwsOnListen('a string, thrown');
     const err = await bindFailure(port);
-    expect(err.message).toContain('threw an error, which');
+    expect(err.message).toBe(reason(port, 'an error'));
     expect(err.cause).toBe('a string, thrown');
   });
 });

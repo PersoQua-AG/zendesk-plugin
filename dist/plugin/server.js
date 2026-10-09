@@ -21504,7 +21504,7 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
       for (const binding of bindings) binding.server.listen(port, binding.address);
     } catch (err) {
       close();
-      const kind = err instanceof Error && /^[A-Za-z]{1,40}Error$/.test(err.name) ? err.name : "an error";
+      const kind = err instanceof Error && /^[A-Za-z]{0,40}Error$/.test(err.name) ? err.name : "an error";
       throw err instanceof RangeError ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
         cause: err
       }) : new Error(

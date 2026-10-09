@@ -352,7 +352,14 @@ export function startCallbackListener(
       // as `cause`, which a developer in the process can read and no tool response serializes.
       // Length-bounded as well as character-bounded: `name` is writable, and a 200 000-character
       // one reached the MCP boundary verbatim. No real error class name is anywhere near 40.
-      const kind = err instanceof Error && /^[A-Za-z]{1,40}Error$/.test(err.name) ? err.name : 'an error';
+      //
+      // `{0,40}`, NOT `{1,40}`: a mandatory prefix rejected the name `Error` ITSELF, and that is the
+      // one name that actually occurs here — the only real producer of a synchronous non-RangeError
+      // throw from listen() is the bind-time guard in tests/setup/no-fixed-bind-port.ts, which
+      // throws `new Error(message)`. So the field this fix exists to carry was dropped in precisely
+      // the case that ships, and the reader got the information-free "an error". The bound is what
+      // does the work and is unchanged in substance: 45 characters at most.
+      const kind = err instanceof Error && /^[A-Za-z]{0,40}Error$/.test(err.name) ? err.name : 'an error';
       throw err instanceof RangeError
         ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
             cause: err,
