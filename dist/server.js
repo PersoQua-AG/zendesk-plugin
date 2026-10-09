@@ -40,11 +40,11 @@ export const INCREMENTAL_RATE_LIMIT_RPM = 10;
 // safe substitute (any other port breaks the redirect_uri the user registered with Zendesk), a
 // security level does. And the port's throw is caught: resolveOrDegrade turns it into a server that
 // still starts and names the field in every tool's answer, while a throw out of parseSecurityLevel
-// would leave a dead extension with nothing to read — exactly the outcome resolveOrDegrade exists
-// to prevent. Absent stays 'standard', and since #68 that is not a mirror of a declared default but the
-// shipped behaviour itself: .claude-plugin/plugin.json declares no security_level at all and the
-// manifest.json default belongs to the retired MCPB dialog, so 'standard' IS the level the installed
-// plugin runs at (owner decision on #59, 2026-10-06).
+// would leave a dead server with nothing to read — exactly the outcome resolveOrDegrade exists
+// to prevent. Absent stays 'standard', and since #68 that is not a mirror of a declared default but
+// the shipped behaviour itself: .claude-plugin/plugin.json declares no security_level at all, and
+// the only other declaration there ever was belonged to the MCPB dialog, retired in #103. So
+// 'standard' IS the level the installed plugin runs at (owner decision on #59, 2026-10-06).
 export const SECURITY_LEVELS = ['strict', 'standard', 'off'];
 function parseSecurityLevel(raw) {
     const value = raw?.trim().toLowerCase();
@@ -102,14 +102,15 @@ function resolveOrDegrade(env, security) {
         const dataDir = dataDirOf(env);
         return {
             ok: false,
-            // Points at the setup page, which is what exists now: the Claude Code plugin has no settings
-            // dialog any more (#68 removed its user_config, the host bridge does not support one), and on a
-            // platform without a Keychain the environment is the only way in (#69). The MCPB extension still
-            // HAS the dialog, so it is named last rather than first.
+            // Points at the setup page and the environment, which is everything a shipped path offers:
+            // there is no settings dialog anywhere any more. #68 removed the plugin's user_config (the host
+            // bridge does not support one), and the MCPB extension, whose dialog used to be named here
+            // last, is retired (#103). On a platform without a Keychain the environment is the only way in
+            // (#69). Naming a dialog the product does not have would send a half-configured operator into a
+            // path that cannot be reached, so the clause is pinned shut in tests/server.unconfigured.test.ts.
             reason: `${reason}${problem ? ` ${problem}` : ''} Call the zendesk_login tool: on macOS it answers with a local setup page that ` +
                 'collects the subdomain, client id and client secret. Otherwise pass them in the environment ' +
-                '(ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET), or, in the Desktop ' +
-                'Extension, fill the configuration dialog under Settings \u2192 Extensions \u2192 Zendesk.',
+                '(ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET).',
             dataDir,
             tokensPath: join(dataDir, 'tokens.enc'),
         };
