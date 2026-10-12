@@ -21,8 +21,9 @@ const GUARD = join(root, 'scripts', 'assert-no-bound-port-literals.mjs');
 // THIS FILE IS NOW INSIDE THE SCANNED TREE (#82), so every sample literal here would be a finding
 // against the repo unless it is written split. It is, through ACQUIRES and BIND below.
 // A hook exports GIT_INDEX_FILE, and GIT_DIR in a linked worktree; inherited, they aim these git
-// calls at the outer repository. Without them git finds the repository from `cwd`.
-const GIT_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
+// calls at the outer repository. Without them git finds the repository from `cwd`. Read per call,
+// not once at load, so a variable set after load is filtered too; the decoy case below relies on it.
+const gitEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
 const temps: string[] = [];
 afterEach(() => {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -99,7 +100,7 @@ describe('the bound-port guard as a script', () => {
   // Every root that is not an ancestor is refused in words, which is where the narrow misedits
   // (`tests/plugin`, `tests/tools`) land.
   it('reports success only for the allocator tree and its ancestors, and refuses every other', () => {
-    const tracked = spawnSync('git', ['ls-files', '*.ts'], { cwd: root, encoding: 'utf8', env: GIT_ENV });
+    const tracked = spawnSync('git', ['ls-files', '*.ts'], { cwd: root, encoding: 'utf8', env: gitEnv() });
     expect(tracked.status, tracked.stderr).toBe(0);
     const files = tracked.stdout.trim().split('\n');
     const roots = [...new Set(files.map((f) => dirname(f)))].sort();
@@ -362,7 +363,7 @@ describe('the bound-port guard as a script', () => {
     // And the selector, the third part. Drifting it to `'*.mts'` changes the stated answer —
     // freePort is not defined in a .mts file — and left this test green as well (#79).
     expect(readFileSync(GUARD, 'utf8')).toContain(String.raw`git ls-files '*.ts' |`);
-    const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8', env: GIT_ENV });
+    const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8', env: gitEnv() });
     expect(run.stdout.trim().split('\n')).toEqual(['tests/auth']);
   });
 
@@ -439,7 +440,7 @@ describe('the bound-port guard as a script', () => {
   }
 
   function trackedOnDisk(repo: string): string[] {
-    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: repo, encoding: 'utf8', env: GIT_ENV });
+    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: repo, encoding: 'utf8', env: gitEnv() });
     expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
     return run.stdout.split('\0').filter((p) => p !== '' && existsSync(join(repo, p)));
   }
@@ -458,14 +459,14 @@ describe('the bound-port guard as a script', () => {
     temps.push(repo);
     mkdirSync(join(repo, 'tests'));
     for (const f of ['kept.ts', 'gone.ts']) writeFileSync(join(repo, 'tests', f), '');
-    // As a hook exports them: GIT_ENV must keep these calls off both.
+    // Exported as a hook exports them, so a call without gitEnv() inherits both and goes red here.
     const decoys = { GIT_DIR: join(repo, 'hook-git-dir'), GIT_INDEX_FILE: join(repo, 'hook-index') };
     // Under a real hook both are already set; the restore must give them back, not drop them.
     const saved = Object.fromEntries(Object.keys(decoys).map((k) => [k, process.env[k]]));
     Object.assign(process.env, decoys);
     try {
-      expect(spawnSync('git', ['init', '-q'], { cwd: repo, env: GIT_ENV }).status).toBe(0);
-      expect(spawnSync('git', ['add', 'tests'], { cwd: repo, env: GIT_ENV }).status).toBe(0);
+      expect(spawnSync('git', ['init', '-q'], { cwd: repo, env: gitEnv() }).status).toBe(0);
+      expect(spawnSync('git', ['add', 'tests'], { cwd: repo, env: gitEnv() }).status).toBe(0);
       rmSync(join(repo, 'tests', 'gone.ts'));
       expect(trackedOnDisk(repo)).toEqual(['tests/kept.ts']);
       for (const d of Object.values(decoys)) expect(existsSync(d), `a git call wrote ${d}`).toBe(false);
