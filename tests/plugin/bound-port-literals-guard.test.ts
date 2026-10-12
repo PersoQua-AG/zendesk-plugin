@@ -14,16 +14,13 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitEnv } from '../setup/git-env.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-bound-port-literals.mjs');
 
 // THIS FILE IS NOW INSIDE THE SCANNED TREE (#82), so every sample literal here would be a finding
 // against the repo unless it is written split. It is, through ACQUIRES and BIND below.
-// A hook exports GIT_INDEX_FILE, and GIT_DIR in a linked worktree; inherited, they aim these git
-// calls at the outer repository. Without them git finds the repository from `cwd`. Read per call,
-// not once at load, so a variable set after load is filtered too; the decoy case below relies on it.
-const gitEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
 const temps: string[] = [];
 afterEach(() => {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -439,8 +436,8 @@ describe('the bound-port guard as a script', () => {
     return join(dir, 'tests');
   }
 
-  function trackedOnDisk(repo: string): string[] {
-    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: repo, encoding: 'utf8', env: gitEnv() });
+  function trackedOnDisk(repo: string, env = gitEnv()): string[] {
+    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: repo, encoding: 'utf8', env });
     expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
     return run.stdout.split('\0').filter((p) => p !== '' && existsSync(join(repo, p)));
   }
@@ -459,23 +456,15 @@ describe('the bound-port guard as a script', () => {
     temps.push(repo);
     mkdirSync(join(repo, 'tests'));
     for (const f of ['kept.ts', 'gone.ts']) writeFileSync(join(repo, 'tests', f), '');
-    // Exported as a hook exports them, so a call without gitEnv() inherits both and goes red here.
+    // Exported as a hook exports them, and passed through the shared filter, so the filter is what
+    // keeps them away from git: without it both reach git and the case goes red here.
     const decoys = { GIT_DIR: join(repo, 'hook-git-dir'), GIT_INDEX_FILE: join(repo, 'hook-index') };
-    // Under a real hook both are already set; the restore must give them back, not drop them.
-    const saved = Object.fromEntries(Object.keys(decoys).map((k) => [k, process.env[k]]));
-    Object.assign(process.env, decoys);
-    try {
-      expect(spawnSync('git', ['init', '-q'], { cwd: repo, env: gitEnv() }).status).toBe(0);
-      expect(spawnSync('git', ['add', 'tests'], { cwd: repo, env: gitEnv() }).status).toBe(0);
-      rmSync(join(repo, 'tests', 'gone.ts'));
-      expect(trackedOnDisk(repo)).toEqual(['tests/kept.ts']);
-      for (const d of Object.values(decoys)) expect(existsSync(d), `a git call wrote ${d}`).toBe(false);
-    } finally {
-      for (const [k, v] of Object.entries(saved)) {
-        if (v === undefined) delete process.env[k];
-        else process.env[k] = v;
-      }
-    }
+    const env = gitEnv({ ...process.env, ...decoys });
+    expect(spawnSync('git', ['init', '-q'], { cwd: repo, env }).status).toBe(0);
+    expect(spawnSync('git', ['add', 'tests'], { cwd: repo, env }).status).toBe(0);
+    rmSync(join(repo, 'tests', 'gone.ts'));
+    expect(trackedOnDisk(repo, env)).toEqual(['tests/kept.ts']);
+    for (const d of Object.values(decoys)) expect(existsSync(d), `a git call wrote ${d}`).toBe(false);
   });
 
   // ACCEPTANCE CRITERION 1, with its control. Before #82 this file was simply not looked at:
