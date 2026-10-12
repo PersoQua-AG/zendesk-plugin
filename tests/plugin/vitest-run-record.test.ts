@@ -16,11 +16,19 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 describe('the run record vitest.config.ts writes', () => {
-  it('is written at all: the json reporter is still configured', async () => {
+  it('is configured at all: the json reporter is still in reporters', async () => {
     // outputFile alone writes nothing; without 'json' in reporters the case below stays green while #51
-    // loses its record. flat(2) reads both spellings vitest accepts: 'json' and ['json', options].
+    // loses its record. Reads the reporter by name in every spelling vitest 2.1.9 accepts: 'json',
+    // ['json'], ['json', options]. A JsonReporter instance is not recognised and goes red (fail-closed).
+    // An options.outputFile is refused: it would override the path the case below checks.
     const { default: config } = await import('../../vitest.config.js');
-    expect([config.test?.reporters].flat(2), 'vitest.config.ts no longer runs the json reporter').toContain('json');
+    const entries: unknown[] = [config.test?.reporters ?? []].flat(1);
+    const json = entries.find((r) => r === 'json' || (Array.isArray(r) && r[0] === 'json'));
+    expect(json, 'vitest.config.ts no longer runs the json reporter').toBeDefined();
+    expect(
+      Array.isArray(json) ? (json[1] as { outputFile?: unknown } | undefined)?.outputFile : undefined,
+      'a per-reporter outputFile overrides test.outputFile, so the case below would check a path nobody writes',
+    ).toBeUndefined();
   });
 
   it('is kept out of git, asked of git rather than of a parsed .gitignore', async () => {
