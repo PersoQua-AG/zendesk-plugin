@@ -164,13 +164,22 @@ sweepDeadClaims();
 // what makes that
 // impossible rather than improbable: the OS refuses the second create instead of the RNG not
 // repeating.
-// Exported for any helper that puts a port aside for itself. There is exactly one other, the
-// foreign-listener walk in tests/auth/foreign-listener-port.test.ts, and it used to take the name
-// with its own `writeFileSync(portClaimPath(n), pid, { flag: 'wx' })` — the create-then-write form
-// this function exists to avoid. Measured: an empty file under CLAIM_DIR IS reclaimed by
-// sweepDeadClaims() (pinned by "reclaims a claim that names no owner"), and that sweep runs in all
-// 207 test files at module load, so the window is open against the whole suite rather than against
-// one sibling. Nobody claims a band port by hand.
+// Exported for any helper that puts a port aside for itself. The foreign-listener walk in
+// tests/auth/foreign-listener-port.test.ts used to take the name with its own
+// `writeFileSync(portClaimPath(n), pid, { flag: 'wx' })` — the create-then-write form this function
+// exists to avoid. Measured: an empty file under CLAIM_DIR IS reclaimed by sweepDeadClaims()
+// (pinned by "reclaims a claim that names no owner"), and that sweep runs in all 207 test files at
+// module load, so the window is open against the whole suite, not against one sibling.
+//
+// ONE RAW CLAIM IS LEFT IN THE SUITE, named here rather than left to be rediscovered:
+// `reserveForOtherRuns()` in tests/auth/port-probe-budget.test.ts writes a create-then-write claim
+// into the SHARED claim directory, 64 times per run. It cannot simply call this function — that
+// file re-points TMPDIR before importing the harness on purpose, so CLAIM_DIR here is its own
+// private directory while the claims it needs other runs to SEE have to go in the shared one.
+// Closing it means the staging-plus-link protocol against a directory this module does not own, in
+// a file this ticket does not touch, so it stays with the harness flake ticket (#51) — with the
+// mechanism written down, because it is the one remaining way a band port can be handed out twice,
+// and the wildcard `EADDRINUSE` out of rebind() is what that looks like.
 export function claimPort(port: number): boolean {
   // Cheap enough to repeat (measured: 3.4 µs on a directory that exists) and it is the whole
   // recovery from macOS pruning its per-user temp dir under a running suite — which it did in this
