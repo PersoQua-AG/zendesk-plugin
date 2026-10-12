@@ -1,8 +1,8 @@
 // #104: the bind failure stated a false reason and threw the real one away. The property this file
-// holds is the pair — a RangeError keeps the port rule word for word, and anything else gets a
-// sentence that says nothing it does not know — together with the assurance the old bluntness was
-// bought with: nothing of node's own text, no stack frame and no absolute path reaches the message
-// a caller reads at the MCP boundary.
+// holds is the pair — a RangeError with code ERR_SOCKET_BAD_PORT keeps the port rule word for
+// word, and anything else gets a sentence that says nothing it does not know — together with the
+// assurance the old bluntness was bought with: nothing of node's own text, no stack frame and no
+// absolute path reaches the message a caller reads at the MCP boundary.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Server } from 'node:http';
 import { startCallbackListener } from '../../src/auth/oauth-flow.js';
@@ -11,9 +11,10 @@ import { freePort, settlesWithin, setupLoginHarness } from './login-harness.js';
 
 setupLoginHarness('login-bind-reason-');
 
-// A synchronous throw from listen() that is NOT a RangeError. The real producer is PR #101's
-// bind-time port guard, which patches this very method; standing in for it here keeps the case on
-// this branch rather than on that one, and covers every other synchronous thrower equally.
+// A synchronous throw from listen() that is not node's port validation (RangeError +
+// ERR_SOCKET_BAD_PORT). The real producer is PR #101's bind-time port guard, which patches this
+// very method; standing in for it here keeps the case on this branch rather than on that one, and
+// covers every other synchronous thrower equally.
 function throwsOnListen(err: unknown): void {
   vi.spyOn(Server.prototype, 'listen').mockImplementation(() => {
     throw err;
@@ -28,7 +29,8 @@ function throwsOnListen(err: unknown): void {
 function reason(port: number, kind: string): string {
   return (
     `OAuth callback server could not start on port ${port}: listen() threw ${kind}, which is` +
-    ` not node's own port validation — that throws RangeError and is reported separately.`
+    ` not node's own port validation — that is a RangeError with code ERR_SOCKET_BAD_PORT and is` +
+    ` reported separately.`
   );
 }
 
@@ -70,6 +72,14 @@ describe('the reason a failed callback bind states', () => {
     const port = freePort();
     throwsOnListen(new RangeError('a patched listen() refused this call'));
     expect((await bindFailure(port)).message).toBe(reason(port, 'RangeError'));
+  });
+
+  // The class as well as the code: ERR_SOCKET_BAD_PORT on anything but a RangeError is not node's
+  // port validation either, so a gate keyed on the code alone would hand it the port rule.
+  it('does not give the port rule to ERR_SOCKET_BAD_PORT on a non-RangeError', async () => {
+    const port = freePort();
+    throwsOnListen(Object.assign(new TypeError('x'), { code: 'ERR_SOCKET_BAD_PORT' }));
+    expect((await bindFailure(port)).message).toBe(reason(port, 'TypeError'));
   });
 
   // THE SECOND FALSE REASON, which the first fix walked straight into. node's listen() throws
