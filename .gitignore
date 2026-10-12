@@ -14,3 +14,7 @@ scripts/.mutant-*.mjs
 # Machine-readable run record from every `npm test` (see vitest.config.ts, #51): it carries the
 # file and full name of every test, so a failing run is classifiable without scroll-back.
 test-results/
+
+# Build artifact of the MCPB Desktop Extension path, retired in #103 and #118: `npm run pack` and
+# scripts/audit-bundle.mjs are gone, so a `.mcpb` in a tree is unreproducible residue, not output.
+*.mcpb
