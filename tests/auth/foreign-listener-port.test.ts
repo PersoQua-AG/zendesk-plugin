@@ -162,7 +162,7 @@ describe('freePort() and a foreign listener in the band', () => {
     //     'binds nothing before the claim is taken (#13)' below, read from the source because the
     //     window is not observable from inside one process.
     // Those two together are the property, without a race in the assertion.
-    it(`skips a band port held on ${host ?? 'the wildcard'} without a claim`, async () => {
+    it(`does not return a band port held on ${host ?? 'the wildcard'} without a claim`, async () => {
       const foreign = await foreignListenerOnNextCandidate(host);
       const port = freePort();
       expect(port).not.toBe(foreign);
@@ -205,18 +205,9 @@ describe('freePort() and a foreign listener in the band', () => {
   // one whose owner is alive" in tests/auth/login-harness.port.test.ts. It is deliberately NOT
   // repeated here; what this file has to answer is only that it routes through that protocol.
   //
-  // NO TEXT. THIS USED TO READ ITS OWN SOURCE AND COULD NOT GO RED — the fifth instance of the
-  // class this PR kept closing, in its sharpest form: the needle it searched for
-  // (`'claimed = claimPort(next);'`) was supplied BY THE ASSERTION LINE ITSELF, because the comment
-  // strip removes `//` lines and not string literals. Measured: with the walk reverted to
-  // `const claimFile = portClaimPath(next); writeFileSync(claimFile, …)` all 8 cases stayed green.
-  // The companion check was no better — `/(\w+)\(\s*portClaimPath\(/` only ever sees a
-  // syntactically ADJACENT call, so one intermediate variable made the set `['rmSync']` again while
-  // the comment claimed "every call this file hands a claim path to is collected".
-  //
-  // So it is behaviour now, and a behavioural guard cannot be satisfied by its own text. The claim
+  // Behaviour, not source text: a source check here could not go red (measured, 4cd6f24). The claim
   // is "the port this file puts a stranger on was obtained from the allocator", and it is checked
-  // by watching claimPort() actually be asked for that port. Any route that does not go through
+  // by watching claimPort() be asked for that port AND grant it. Any route that does not go through
   // claimPort — writeFileSync, appendFileSync, openSync, an alias, via a variable, or anything not
   // invented yet — leaves the call absent, so the negative covers the CLASS by construction rather
   // than by naming members of it. The port is the one the walk returns, so freePort()'s own
@@ -225,10 +216,9 @@ describe('freePort() and a foreign listener in the band', () => {
     const spy = vi.spyOn(harness, 'claimPort');
     try {
       const port = await foreignListenerOnNextCandidate();
-      expect(
-        spy.mock.calls.map((c) => c[0]),
-        `the stranger sits on ${port}, but claimPort() was never asked for it`,
-      ).toContain(port);
+      const i = spy.mock.calls.findIndex((c) => c[0] === port);
+      expect(i, `the stranger sits on ${port}, but claimPort() was never asked for it`).toBeGreaterThanOrEqual(0);
+      expect(spy.mock.results[i]?.value, `claimPort(${port}) did not succeed, yet a stranger sits on it`).toBe(true);
     } finally {
       spy.mockRestore();
     }
