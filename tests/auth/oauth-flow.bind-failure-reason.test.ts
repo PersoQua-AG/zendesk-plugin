@@ -66,6 +66,12 @@ describe('the reason a failed callback bind states', () => {
     expect(err.message).toBe(reason(port, 'TypeError'));
   });
 
+  it('does not give the port rule to a RangeError that is not node\'s port validation', async () => {
+    const port = freePort();
+    throwsOnListen(new RangeError('a patched listen() refused this call'));
+    expect((await bindFailure(port)).message).toBe(reason(port, 'RangeError'));
+  });
+
   // THE SECOND FALSE REASON, which the first fix walked straight into. node's listen() throws
   // RangeError only outside 0-65535; CALLBACK_PORT_RULE is 1024-65535 and nothing range-checks
   // `port` before the call. So for a privileged port that threw something else, a message saying

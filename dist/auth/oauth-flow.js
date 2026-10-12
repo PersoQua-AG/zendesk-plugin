@@ -285,7 +285,9 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
             // the case that ships, and the reader got the information-free "an error". The bound is what
             // does the work and is unchanged in substance: 45 characters at most.
             const kind = err instanceof Error && /^[A-Za-z]{0,40}Error$/.test(err.name) ? err.name : 'an error';
-            throw err instanceof RangeError
+            // The code as well as the class: any other RangeError is not node's port validation.
+            const badPort = err instanceof RangeError && err.code === 'ERR_SOCKET_BAD_PORT';
+            throw badPort
                 ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
                     cause: err,
                 })
@@ -298,8 +300,8 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                 // (src/auth/config.ts:115 does, earlier and elsewhere), so it does not follow from
                 // `!(err instanceof RangeError)` either.
                 //
-                // What DOES follow is exactly one thing: node's own port validation throws RangeError,
-                // and a RangeError took the other branch. That is the whole sentence. "Before any bind
+                // What DOES follow is exactly one thing: node's own port validation throws RangeError
+                // ERR_SOCKET_BAD_PORT, and that took the other branch. That is the whole sentence. "Before any bind
                 // was attempted" is gone too — there are two bindings, so a throw on the second one
                 // comes after the first has started binding.
                 `OAuth callback server could not start on port ${port}: listen() threw ${kind}, which` +

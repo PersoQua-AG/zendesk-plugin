@@ -21505,7 +21505,8 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
     } catch (err) {
       close();
       const kind = err instanceof Error && /^[A-Za-z]{0,40}Error$/.test(err.name) ? err.name : "an error";
-      throw err instanceof RangeError ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
+      const badPort = err instanceof RangeError && err.code === "ERR_SOCKET_BAD_PORT";
+      throw badPort ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
         cause: err
       }) : new Error(
         // NOTHING ABOUT THE RANGE, AND NOTHING ABOUT THE RULE. Two rewrites of this sentence
@@ -21516,8 +21517,8 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
         // (src/auth/config.ts:115 does, earlier and elsewhere), so it does not follow from
         // `!(err instanceof RangeError)` either.
         //
-        // What DOES follow is exactly one thing: node's own port validation throws RangeError,
-        // and a RangeError took the other branch. That is the whole sentence. "Before any bind
+        // What DOES follow is exactly one thing: node's own port validation throws RangeError
+        // ERR_SOCKET_BAD_PORT, and that took the other branch. That is the whole sentence. "Before any bind
         // was attempted" is gone too — there are two bindings, so a throw on the second one
         // comes after the first has started binding.
         `OAuth callback server could not start on port ${port}: listen() threw ${kind}, which is not node's own port validation \u2014 that throws RangeError and is reported separately.`,
