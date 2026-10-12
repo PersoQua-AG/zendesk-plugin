@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitEnv } from '../setup/git-env.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-executor-safety.mjs');
@@ -585,7 +586,7 @@ export const f = (server: { listen: (p: number) => void }, port: number) =>
       // Read out of the header, not retyped: a header that drifts from the command actually run
       // would put the claim back on paper only.
       expect(readFileSync(GUARD, 'utf8')).toContain(COUNT);
-      const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8' });
+      const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8', env: gitEnv() });
       expect(run.stdout.trim().split('\n')).toEqual(['src/server.ts']);
     });
   });
