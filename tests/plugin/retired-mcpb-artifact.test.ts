@@ -17,29 +17,49 @@ const git = (...args: string[]) => spawnSync('git', args, { cwd: root, encoding:
 
 describe('the retired MCPB artifact', () => {
   it('is nowhere in the index', () => {
-    // Asked of the index rather than of a directory listing: an untracked copy in someone's tree is
-    // their business, a tracked one is everyone's. -z, so a path with a newline cannot hide a row.
+    // A tripwire, not a gate: no edit to .gitignore can turn this red, because an ignore rule never
+    // applies to an already-tracked path — which is why the case below cannot answer this question.
+    // What it catches is a `git add -f` and a merge from a branch older than the rule. -z, so a path
+    // with a newline in it cannot hide a row.
     const listed = git('ls-files', '-z');
     expect(listed.status, `git ls-files never answered (${listed.error?.message ?? listed.stderr})`).toBe(0);
     const tracked = listed.stdout.split('\0').filter((p) => p.endsWith('.mcpb'));
     expect(tracked, 'a retired-path bundle is tracked; remove it from the index').toEqual([]);
   });
 
-  it('is ignored wherever it lands, asked of git rather than of a parsed .gitignore', () => {
+  it('is ignored wherever it lands, by a rule that travels, asked of git rather than of a parsed .gitignore', () => {
     // Asked of git, not of the text of .gitignore, for the reason measured in
-    // vitest-run-record.test.ts on 2026-10-09: an assertion on a literal line pins the spelling, not
-    // the property — `*.mcpb` and `**/*.mcpb` ignore the same set and only git says so. Two paths,
-    // one at the root and one nested, because a pattern anchored with a leading slash would catch
-    // only the first. Neither path need exist; check-ignore answers about the path, not the file.
-    // 0 = ignored; 1 = git would offer it for commit; anything else means the question was never
-    // asked. Only 0 passes: fail-closed.
-    for (const path of ['zendesk.mcpb', 'build/nested/zendesk.mcpb']) {
-      const asked = git('check-ignore', '-q', path);
+    // vitest-run-record.test.ts on 2026-10-09.
+    //
+    // The verdict is `-q` and never `-v`: measured on git 2.55.0 (2026-10-12), `-v` exits 0 on a
+    // NEGATED match too, so a `!zendesk-*.mcpb` under the rule would read here as ignored while git
+    // went on offering the file. `-v` may name where a rule came from; it may not decide.
+    //
+    // Two paths, one at the root and one nested under a DIFFERENT name: a rule anchored with a
+    // leading slash (`/*.mcpb`) catches only the first, and a rule naming one file (`zendesk.mcpb`)
+    // also catches only the first — scripts/audit-bundle.mjs:343 wrote `zendesk-<version>.mcpb`
+    // beside `zendesk.mcpb` until #118 removed it, so the second name is residue that really exists.
+    // Neither path need exist; check-ignore answers about the path, not about a file.
+    //
+    // And where the rule comes from is checked, not only its effect: git ignores from
+    // .git/info/exclude and core.excludesFile as well, both of which stay on one machine, while the
+    // instruction is that this artifact never reaches origin. Only a rule carried by a file in the
+    // index reaches another clone.
+    for (const path of ['zendesk.mcpb', 'build/nested/zendesk-1.1.0.mcpb']) {
+      const verdict = git('check-ignore', '-q', path);
+      // -q prints nothing on exit 1, and a missing git leaves status null: the message has to carry
+      // the diagnosis. 1 is also the answer for an already-tracked path, rule present or not.
       const why =
-        asked.status === 1
-          ? 'git would offer it for commit — not ignored'
-          : `git check-ignore never answered (${asked.error?.message ?? asked.stderr})`;
-      expect(asked.status, `${path}: ${why}`).toBe(0);
+        verdict.status === 1
+          ? 'git would offer it for commit — not ignored, or already tracked'
+          : `git check-ignore never answered (${verdict.error?.message ?? verdict.stderr})`;
+      expect(verdict.status, `${path}: ${why}`).toBe(0);
+      // `<source>:<line>:<pattern>\t<path>`, so the source is what stands before the last `:<line>:`.
+      const shown = git('check-ignore', '-v', path);
+      const source = /^(.+):\d+:/.exec(shown.stdout.split('\t')[0] ?? '')?.[1];
+      expect(source, `${path}: check-ignore -v named no source (${shown.error?.message ?? shown.stderr})`).toBeTypeOf('string');
+      const carrier = git('ls-files', '--error-unmatch', '--', source as string);
+      expect(carrier.status, `${path}: ignored by ${source}, which is not in the index — that rule stays on this machine`).toBe(0);
     }
   });
 });
