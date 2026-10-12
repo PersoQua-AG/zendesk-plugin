@@ -35,8 +35,10 @@ export default defineConfig({
     //
     // Nothing prunes the directory either. And the record is a new on-disk sink for failure text,
     // test sentinels included; .gitignore keeps it out of git — pinned by
-    // tests/plugin/vitest-run-record.test.ts — but `expectNoSecretEchoed` guards the two streams
-    // and not this file, so the radius is the local disk.
+    // tests/plugin/vitest-run-record.test.ts. Nothing keeps secrets out of the file itself:
+    // `expectNoCanary` in tests/plugin/token-canary.test.ts checks what the code under test writes
+    // to the console, not the run's own output, and when it fails, vitest 2.1.9 records the canary
+    // in that test's `failureMessages` (measured). The radius is the local disk.
     reporters: ['default', 'json'],
     outputFile: { json: `test-results/vitest-${process.pid}.json` },
     // Runs once, after every file: the only place that can see what a SPAWNED child did to the machine.
