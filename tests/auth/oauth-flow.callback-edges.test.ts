@@ -1,22 +1,49 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { startCallbackListener } from '../../src/auth/oauth-flow.js';
 import { answerFromOurListener, closeRawSockets, freePort, settlesWithin } from './login-harness.js';
 
 // Two edges of the callback listener's rejection text, which reaches the model as tool output.
 afterEach(closeRawSockets);
 
+// The clock is FAKED, and advanced by this function after every target has been answered.
+//
+// Two of the cases below assert on a note the timeout message carries only if the stray callback
+// was handled before the timer fired, and they used to give the listener 200 ms of real wall clock
+// to manage it in. That is a race, not a property: the request has to arrive, be parsed and be
+// answered inside the very budget the timer is counting down. Measured in the PR #42 review, a
+// 250 ms stall ahead of the stray callback turned both red on a machine that was merely busy. The
+// ordering is structural now — nothing but the advance below moves the timer, so no wall-clock
+// delay can reach it. The 200 ms is unchanged: raising it moves the race rather than removing it.
+//
+// Only setTimeout/clearTimeout are faked, so the sockets stay on the real event loop. The
+// watchdogs in settlesWithin are built on a setTimeout captured at module load (login-harness.ts),
+// precisely so that faking the clock here cannot disarm them: a hung exchange still fails with the
+// label that names which call hung.
+//
+// WHAT THAT LEAVES, stated rather than glossed over: settlesWithin's own 2 s deadline is on the
+// REAL clock and the listener's timer is frozen, so an exchange slower than two seconds turns
+// these cases red with "the listener never settled within 2000ms". That is a ten-fold wider budget
+// than the 200 ms it replaces, and it fails with a label instead of with a wrong expectation —
+// but it is a budget, not a proof, and it is the reason this file is not called race-free.
 async function rejectionAfter(targets: string[], timeoutMs: number): Promise<string> {
   const port = freePort();
-  const listener = await startCallbackListener(port, 'state-abc', timeoutMs);
-  const message = settlesWithin('the listener', listener.promise).then(
-    () => 'resolved, but a rejection was expected',
-    (err: Error) => err.message,
-  );
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   try {
-    for (const target of targets) await answerFromOurListener(port, target);
-    return await message;
+    const listener = await startCallbackListener(port, 'state-abc', timeoutMs);
+    const message = settlesWithin('the listener', listener.promise).then(
+      () => 'resolved, but a rejection was expected',
+      (err: Error) => err.message,
+    );
+    try {
+      for (const target of targets) await answerFromOurListener(port, target);
+      // THE TIMER IS ADVANCED HERE, and nowhere else — after every target above has been answered.
+      await vi.advanceTimersByTimeAsync(timeoutMs);
+      return await message;
+    } finally {
+      listener.close();
+    }
   } finally {
-    listener.close();
+    vi.useRealTimers();
   }
 }
 
