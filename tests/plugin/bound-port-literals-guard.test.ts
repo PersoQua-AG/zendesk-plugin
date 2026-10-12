@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -369,46 +370,96 @@ describe('the bound-port guard as a script', () => {
   // 203 on 35f4c5d.
   // ──────────────────────────────────────────────────────────────────────────────────────────────
 
-  // The probe is a real file in a real subdirectory of the real scanned tree, removed in a finally
-  // so a failed assertion cannot leave it behind. Not named *.test.ts on purpose: vitest must not
-  // collect it, and the guard must still scan it — which is the "scans helper files too" rule.
-  // A `finally` does not cover a killed process, so an abort here leaves the probe on disk. How
-  // loud that residue is depends on which probe it is, and only one of the two is caught by the
-  // gate: the bound-literal probe makes `check:ports` go red, the `deps(freePort())` probe leaves
-  // it green (measured: exit 0) and is shown by `git status` alone. Both are named for what they
-  // are, which is what makes the quiet one survivable. No test file but this one runs the port
-  // guard, so the window is this file's own, not a race with the rest of a parallel `vitest run`.
-  function withProbe<T>(relDir: string, source: string, body: () => T): T {
-    const probe = join(root, relDir, 'zz-port-guard-probe.ts');
-    writeFileSync(probe, source);
-    try {
-      return body();
-    } finally {
-      rmSync(probe, { force: true });
+  // A COPY OF THE REAL TEST TREE, not the repository itself and not a tree this test invents.
+  //
+  // THE CLAIM THIS REPLACES WAS MEASURABLY WRONG (#106, fourth instance). It read: "No test file
+  // but this one runs the port guard, so the window is this file's own, not a race with the rest
+  // of a parallel `vitest run`." Running the port guard is not the only way to read these files.
+  // `tests/plugin/no-real-keychain.test.ts` walks `tests/**` with a recursive readdirSync and then
+  // readFileSync's every entry, and in a shuffled full run it hit the probe after the `finally`
+  // had unlinked it:
+  //   Error: ENOENT: no such file or directory, open
+  //     '…/tests/tools/zz-port-guard-probe.ts'   (tests/plugin/no-real-keychain.test.ts:86)
+  // That is the same defect as the mutant files this ticket moved out of `scripts/`: the tracked
+  // tree is not this file's private workspace while other suites are walking it. And the keychain
+  // guard is not the place to fix it — it may not be weakened, and tolerating a vanished entry is
+  // the #85 class anyway.
+  //
+  // WHY A COPY ANSWERS #82 and a hand-built fixture did not. The defect #82 fixed was a scan one
+  // directory deep, invisible to any small tree the test wrote itself. A faithful copy of `tests/`
+  // has the real structure — 227 files, the same subdirectories, `freePort()` defined in
+  // tests/auth/login-harness.ts so the tree is MARKED — so a one-deep scan misses tests/tools
+  // there exactly as it did in the repository. 1.5 MB per case, measured. The repository's own
+  // wired root is still run against, unplanted, by the sweep case above
+  // (`expect(runGuard(wiredRoot()).status).toBe(0)`), so nothing stops exercising the real tree.
+  //
+  // The probe is still not named *.test.ts: vitest must not collect it and the guard must still
+  // scan it, which is the "scans helper files too" rule. Nothing has to be removed in a `finally`
+  // any more, so a killed process leaves no residue in the repository at all.
+  // Returns the scan root to point the guard at. No callback: cleanup is `temps`/`afterEach`, so
+  // there is nothing for a `finally` to do. `tests/tools` is not a parameter — every case wants a
+  // directory the wired root only reaches by recursing, and that is the one.
+  function plantProbe(source: string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'port-guard-tree-'));
+    temps.push(dir);
+    // THE COPY IS OF THE TRACKED TREE, AND "TRACKED" IS ASKED OF GIT, NOT GUESSED FROM A NAME.
+    // Copying the live working tree put this file on the other side of the defect it was built to
+    // close: while tests/plugin/typecheck-tests-wiring.test.ts holds
+    // `tests/tools/zz-typecheck-probe-<uuid>.ts` on disk for the length of an `npx tsc` run, a
+    // recursive copy of tests/ races it and throws ENOENT. Measured, 60 copies each: 13 of 60
+    // against the real suite and 32 of 60 against a tight plant/remove loop, both 0 of 60 after.
+    //
+    // A `zz-` PREFIX FILTER IS WHAT THIS FIRST WAS, and it rested on a convention nothing pins:
+    // only typecheck-tests-wiring.test.ts keeps it. Measured against a probe named `tmp-…`, 60
+    // copies each: no filter 37 of 60 ENOENT, the `zz-` filter 34 of 60 — it buys almost nothing
+    // outside the one name it knows — and copying only tracked files 0 of 60, as it also is for the
+    // `zz-` probe. Pinning the convention would mean a guard over every
+    // write into tests/, which is text matching of exactly the kind that just failed this PR's own
+    // claim guard. So the convention is not pinned, it is NOT RELIED ON: `git ls-files` is the
+    // authority on what belongs to the tree — four suites here already use it — and anything it
+    // does not name is not copied, whatever it is called and whether or not it exists any more.
+    //
+    // Each tracked file is copied by name, so the live tests/ is never listed and an entry another
+    // suite removes mid-copy cannot be reached. The #82 assurance is untouched: what answers #82 is
+    // the real structure and the real depth (tests/tools reached only by recursing, freePort() in
+    // tests/auth/login-harness.ts so the tree is MARKED), and that is exactly what git lists.
+    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: root, encoding: 'utf8' });
+    expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
+    const tracked = run.stdout.split('\0').filter((p) => p !== '');
+    expect(tracked.length, 'git ls-files named no file under tests/ — the copy would be empty').toBeGreaterThan(100);
+    for (const p of tracked) {
+      mkdirSync(dirname(join(dir, p)), { recursive: true });
+      copyFileSync(join(root, p), join(dir, p));
     }
+    writeFileSync(join(dir, 'tests', 'tools', 'zz-port-guard-probe.ts'), source);
+    return join(dir, 'tests');
   }
+
+  // #106, fourth instance, as a position rather than a race — the same assertion shape that holds
+  // the mutant files in tests/plugin/executor-safety-guard.test.ts. Red the moment a probe goes
+  // back under the repository root.
+  it('plants its probe outside the repository, where no other suite can race it', () => {
+    const scanRoot = plantProbe('// nothing to find here\n');
+    expect(relative(root, scanRoot), scanRoot).toMatch(/^\.\./);
+  });
 
   // ACCEPTANCE CRITERION 1, with its control. Before #82 this file was simply not looked at:
   // measured on b9f0615, `npm run check:ports` with this exact probe in tests/tools printed
   // "Bound port literals in tests/auth/: 50 files scanned." and exited 0.
   it('fails and names file and line for a bound literal OUTSIDE tests/auth', () => {
-    withProbe('tests/tools', `${ACQUIRES}\nexport const start = () => ${BOUND};\n`, () => {
-      const run = runGuard(wiredRoot());
-      expect(run.status).toBe(1);
-      expect(run.stderr).toContain(`tests/tools/zz-port-guard-probe.ts:3 ${BOUND}`);
-    });
+    const run = runGuard(plantProbe(`${ACQUIRES}\nexport const start = () => ${BOUND};\n`));
+    expect(run.status).toBe(1);
+    // The scan root is outside the repository, so the guard names it by its way out (`../…`) —
+    // that is its own documented rule for a temp tree. The part that matters is the depth.
+    // `/tests/tools/`, with both segments: `tools/…` alone would also match a flat report and
+    // the depth is the whole claim of this case.
+    expect(run.stderr).toContain(`/tests/tools/zz-port-guard-probe.ts:3 ${BOUND}`);
   });
 
   it('passes the same file once the port is acquired instead of written', () => {
-    withProbe(
-      'tests/tools',
-      `${ACQUIRES}\nexport const start = () => ${BIND('freePort()')};\n`,
-      () => {
-        const run = runGuard(wiredRoot());
-        expect(run.stderr).toBe('');
-        expect(run.status).toBe(0);
-      },
-    );
+    const run = runGuard(plantProbe(`${ACQUIRES}\nexport const start = () => ${BIND('freePort()')};\n`));
+    expect(run.stderr).toBe('');
+    expect(run.status).toBe(0);
   });
 
   // The empty string is a root only in the sense that resolve() accepts it, and recursion is what
