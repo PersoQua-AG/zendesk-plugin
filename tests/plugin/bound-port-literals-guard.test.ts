@@ -436,8 +436,8 @@ describe('the bound-port guard as a script', () => {
     return join(dir, 'tests');
   }
 
-  function trackedOnDisk(repo: string, env = gitEnv()): string[] {
-    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: repo, encoding: 'utf8', env });
+  function trackedOnDisk(repo: string): string[] {
+    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: repo, encoding: 'utf8', env: gitEnv() });
     expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
     return run.stdout.split('\0').filter((p) => p !== '' && existsSync(join(repo, p)));
   }
@@ -456,15 +456,24 @@ describe('the bound-port guard as a script', () => {
     temps.push(repo);
     mkdirSync(join(repo, 'tests'));
     for (const f of ['kept.ts', 'gone.ts']) writeFileSync(join(repo, 'tests', f), '');
-    // Exported as a hook exports them, and passed through the shared filter, so the filter is what
-    // keeps them away from git: without it both reach git and the case goes red here.
+    // Exported on process.env as a hook exports them, not passed in: a call that drops `env: gitEnv()`
+    // or a gitEnv() that stops filtering then inherits both, and the case goes red here.
     const decoys = { GIT_DIR: join(repo, 'hook-git-dir'), GIT_INDEX_FILE: join(repo, 'hook-index') };
-    const env = gitEnv({ ...process.env, ...decoys });
-    expect(spawnSync('git', ['init', '-q'], { cwd: repo, env }).status).toBe(0);
-    expect(spawnSync('git', ['add', 'tests'], { cwd: repo, env }).status).toBe(0);
-    rmSync(join(repo, 'tests', 'gone.ts'));
-    expect(trackedOnDisk(repo, env)).toEqual(['tests/kept.ts']);
-    for (const d of Object.values(decoys)) expect(existsSync(d), `a git call wrote ${d}`).toBe(false);
+    // Under a real hook both are already set; the restore must give them back, not drop them.
+    const saved = Object.fromEntries(Object.keys(decoys).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, decoys);
+    try {
+      expect(spawnSync('git', ['init', '-q'], { cwd: repo, env: gitEnv() }).status).toBe(0);
+      expect(spawnSync('git', ['add', 'tests'], { cwd: repo, env: gitEnv() }).status).toBe(0);
+      rmSync(join(repo, 'tests', 'gone.ts'));
+      expect(trackedOnDisk(repo)).toEqual(['tests/kept.ts']);
+      for (const d of Object.values(decoys)) expect(existsSync(d), `a git call wrote ${d}`).toBe(false);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   });
 
   // ACCEPTANCE CRITERION 1, with its control. Before #82 this file was simply not looked at:
