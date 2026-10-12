@@ -4,7 +4,7 @@
 // Structural, not statistical: `nextCandidate` advances by exactly one per candidate examined, so
 // the port freePort() will look at NEXT is the one it just returned plus one. The foreign listener
 // goes there, and the case is reached on every run rather than waited for.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { once } from 'node:events';
 import { readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
@@ -19,6 +19,10 @@ import {
   portClaimPath,
   portHeldOn,
 } from './login-harness.js';
+// The same module again as a namespace, solely so the allocator guard at the bottom can spy on
+// claimPort(). The named binding above is what the walk calls, and a spy placed here does observe
+// that call — measured, both ways round, before this guard was written.
+import * as harness from './login-harness.js';
 import { allowForeignBind } from '../setup/acquired-ports.js';
 
 // The body of a named function in the harness source, for the two cases whose rule is not
@@ -194,21 +198,39 @@ describe('freePort() and a foreign listener in the band', () => {
   });
 
   // THE CLAIM PROTOCOL IS THE ALLOCATOR'S, NOT THIS FILE'S. The walk above used to take a band port
-  // with `writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' })`, and a claim that
-  // exists before its owner is written is one sweepDeadClaims() reclaims as ownerless — pinned, as a
-  // behaviour, by "reclaims a claim that names no owner" and "keeps a claim whose owner is alive" in
-  // tests/auth/login-harness.port.test.ts. Source, because the window between create and write is
-  // not observable from inside one process; what IS checkable here is that no such window is opened.
+  // by creating the claim name first and writing the owner second, and a claim that exists before
+  // its owner does is one sweepDeadClaims() reclaims as ownerless — after which the port goes out
+  // twice. That half is a property of claimPort() and is pinned where claimPort() lives, by
+  // "reclaims a claim that names no owner" and "reclaims a claim whose owner has exited, and keeps
+  // one whose owner is alive" in tests/auth/login-harness.port.test.ts. It is deliberately NOT
+  // repeated here; what this file has to answer is only that it routes through that protocol.
   //
-  // THE NEGATIVE IS ON THE CLASS, NOT ON A WORDING. Asserting `not.toContain('writeFileSync(portClaimPath')`
-  // would pass again for appendFileSync, openSync, writeSync or any alias. So every call this file
-  // hands a claim path to is collected and the whole set is compared: releasing with rmSync is the
-  // only thing a claim path may be passed to here, and taking one goes through claimPort().
-  it('takes its claims through the allocator and only ever releases them itself', () => {
-    const source = readFileSync(fileURLToPath(import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, '');
-    expect(source).toContain('claimed = claimPort(next);');
-    const callers = [...source.matchAll(/(\w+)\(\s*portClaimPath\(/g)].map((m) => m[1]);
-    expect(callers.length, 'no claim path is used at all — the walk cannot be doing its job').toBeGreaterThan(0);
-    expect([...new Set(callers)].sort()).toEqual(['rmSync']);
+  // NO TEXT. THIS USED TO READ ITS OWN SOURCE AND COULD NOT GO RED — the fifth instance of the
+  // class this PR kept closing, in its sharpest form: the needle it searched for
+  // (`'claimed = claimPort(next);'`) was supplied BY THE ASSERTION LINE ITSELF, because the comment
+  // strip removes `//` lines and not string literals. Measured: with the walk reverted to
+  // `const claimFile = portClaimPath(next); writeFileSync(claimFile, …)` all 8 cases stayed green.
+  // The companion check was no better — `/(\w+)\(\s*portClaimPath\(/` only ever sees a
+  // syntactically ADJACENT call, so one intermediate variable made the set `['rmSync']` again while
+  // the comment claimed "every call this file hands a claim path to is collected".
+  //
+  // So it is behaviour now, and a behavioural guard cannot be satisfied by its own text. The claim
+  // is "the port this file puts a stranger on was obtained from the allocator", and it is checked
+  // by watching claimPort() actually be asked for that port. Any route that does not go through
+  // claimPort — writeFileSync, appendFileSync, openSync, an alias, via a variable, or anything not
+  // invented yet — leaves the call absent, so the negative covers the CLASS by construction rather
+  // than by naming members of it. The port is the one the walk returns, so freePort()'s own
+  // claim of the anchor cannot stand in for it.
+  it('obtains the port it puts a stranger on from the allocator', async () => {
+    const spy = vi.spyOn(harness, 'claimPort');
+    try {
+      const port = await foreignListenerOnNextCandidate();
+      expect(
+        spy.mock.calls.map((c) => c[0]),
+        `the stranger sits on ${port}, but claimPort() was never asked for it`,
+      ).toContain(port);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
