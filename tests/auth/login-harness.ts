@@ -283,7 +283,6 @@ export function claimPort(port: number): boolean {
 // holder on `::`". It can, every time — measured, 3 of 3, on this host and against this exact
 // three-address list:
 //   holder :: (listen with no host) -> status=1 out="EADDRINUSE 0.0.0.0"
-// which is also what the holder matrix ABOVE says (`darwin, holder :: → probe 0.0.0.0 = X`; it
 // which is also what the holder matrix above says (`darwin, holder :: -> probe 0.0.0.0 = X`), because
 // macOS treats `::` as dual-stack and the 0.0.0.0 bind collides with it. A fourth address that
 // catches nothing is dead weight, so it is gone.
@@ -314,8 +313,9 @@ const PROBE_TIMEOUT_MS = 2_000;
 // privacy address answers EADDRNOTAVAIL, and an address this host cannot bind is not one a
 // stranger can be listening on either. The strict contract — "I could not look" is never read as
 // an answer — stays exactly where it was measured to matter: on the addresses the CALLER names,
-// which is what tests/auth/foreign-listener-port.test.ts:92 pins with 192.0.2.1.
-// NOT exported, deliberately. The one consumer is nine lines below in this file, and the one file
+// which is what "does not read a bind error other than EADDRINUSE as a holder" in
+// tests/auth/foreign-listener-port.test.ts pins with 192.0.2.1.
+// NOT exported, deliberately. The one consumer is portHeldOn() in this file, and the one file
 // that might import it — tests/auth/port-probe-routable.test.ts — may not: discovering the
 // addresses a second time, independently, is that file's whole control argument (sharing this
 // function made it blind, measured: `routableAddresses() -> []` left it reporting
