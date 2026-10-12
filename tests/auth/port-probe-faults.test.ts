@@ -1,4 +1,4 @@
-// #48 follow-up: portHeldOn() (login-harness.ts:246-260) asks about the three addresses Node
+// #48 follow-up: portHeldOn() in login-harness.ts asks about the three addresses Node
 // cannot bind synchronously, and spawnSync reports "the port is taken" and "I could not look"
 // through the SAME value — status is 1 on EADDRINUSE and null on a failed fork, on SIGKILL, on
 // SIGTERM and on a timeout. Collapsing those into "not free" is the defect these cases pin.
@@ -12,7 +12,7 @@
 //
 // A failed fork is not rare on a loaded CI box: EAGAIN under the per-user process limit, ENOMEM,
 // or an execPath removed under a running suite (fnm/nvm switching the version). freePort() keeps
-// the claim on every rejected port (login-harness.ts:289-291), so "I could not look" would cost the
+// the claim on every rejected port, so "I could not look" would cost the
 // whole probe budget in one pass and end on the wrong message.
 //
 // The faults are injected through process.execPath, which Node leaves writable — the real probe
@@ -100,7 +100,7 @@ describe('freePort() when the probe itself cannot run', () => {
     });
     const elapsed = Date.now() - started;
 
-    // spawnSync at login-harness.ts:252 blocks the event loop, so
+    // portHeldOn()'s spawnSync in login-harness.ts blocks the event loop, so
     // vitest's own test timeout cannot interrupt it. A child that never exits — a probe that
     // inherits NODE_OPTIONS=--inspect-brk does exactly that, measured — hangs the run forever.
     expect(elapsed, `one probe blocked freePort() for ${elapsed} ms`).toBeLessThan(SECONDS * 1000);
