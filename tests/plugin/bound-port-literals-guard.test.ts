@@ -20,8 +20,8 @@ const GUARD = join(root, 'scripts', 'assert-no-bound-port-literals.mjs');
 
 // THIS FILE IS NOW INSIDE THE SCANNED TREE (#82), so every sample literal here would be a finding
 // against the repo unless it is written split. It is, through ACQUIRES and BIND below.
-// A hook exports GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE; inherited, they aim these git calls at the
-// outer repository. Without them git finds the repository from `cwd`.
+// A hook exports GIT_INDEX_FILE, and GIT_DIR in a linked worktree; inherited, they aim these git
+// calls at the outer repository. Without them git finds the repository from `cwd`.
 const GIT_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
 const temps: string[] = [];
 afterEach(() => {
@@ -458,10 +458,23 @@ describe('the bound-port guard as a script', () => {
     temps.push(repo);
     mkdirSync(join(repo, 'tests'));
     for (const f of ['kept.ts', 'gone.ts']) writeFileSync(join(repo, 'tests', f), '');
-    expect(spawnSync('git', ['init', '-q'], { cwd: repo, env: GIT_ENV }).status).toBe(0);
-    expect(spawnSync('git', ['add', 'tests'], { cwd: repo, env: GIT_ENV }).status).toBe(0);
-    rmSync(join(repo, 'tests', 'gone.ts'));
-    expect(trackedOnDisk(repo)).toEqual(['tests/kept.ts']);
+    // As a hook exports them: GIT_ENV must keep these calls off both.
+    const decoys = { GIT_DIR: join(repo, 'hook-git-dir'), GIT_INDEX_FILE: join(repo, 'hook-index') };
+    // Under a real hook both are already set; the restore must give them back, not drop them.
+    const saved = Object.fromEntries(Object.keys(decoys).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, decoys);
+    try {
+      expect(spawnSync('git', ['init', '-q'], { cwd: repo, env: GIT_ENV }).status).toBe(0);
+      expect(spawnSync('git', ['add', 'tests'], { cwd: repo, env: GIT_ENV }).status).toBe(0);
+      rmSync(join(repo, 'tests', 'gone.ts'));
+      expect(trackedOnDisk(repo)).toEqual(['tests/kept.ts']);
+      for (const d of Object.values(decoys)) expect(existsSync(d), `a git call wrote ${d}`).toBe(false);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   });
 
   // ACCEPTANCE CRITERION 1, with its control. Before #82 this file was simply not looked at:
