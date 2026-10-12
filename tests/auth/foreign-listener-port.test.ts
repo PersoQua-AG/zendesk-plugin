@@ -213,7 +213,9 @@ describe('freePort() and a foreign listener in the band', () => {
   // than by naming members of it. The port is the one the walk returns, so freePort()'s own
   // claim of the anchor cannot stand in for it.
   it('obtains the port it puts a stranger on from the allocator', async () => {
-    const spy = vi.spyOn(harness, 'claimPort');
+    // The first candidate answers "taken", as another run's claim would, so a walk that ignores the
+    // answer puts the stranger on a port it was refused.
+    const spy = vi.spyOn(harness, 'claimPort').mockReturnValueOnce(false);
     try {
       const port = await foreignListenerOnNextCandidate();
       const i = spy.mock.calls.findIndex((c) => c[0] === port);
