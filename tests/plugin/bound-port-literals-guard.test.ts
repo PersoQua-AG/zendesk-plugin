@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  cpSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -399,29 +399,6 @@ describe('the bound-port guard as a script', () => {
   // Returns the scan root to point the guard at. No callback: cleanup is `temps`/`afterEach`, so
   // there is nothing for a `finally` to do. `tests/tools` is not a parameter — every case wants a
   // directory the wired root only reaches by recursing, and that is the one.
-  // Every absolute path cpSync may copy: the tracked files under tests/, plus each of their
-  // ancestor directories, since a filter that says no to a directory skips its whole subtree.
-  // Derived from the paths themselves rather than from the filesystem — one `git ls-files` and no
-  // stat — so nothing here can trip over an entry another suite is in the middle of removing.
-  // Memoised: the tracked set does not change under a run, and every case plants a probe.
-  let trackedCache: Set<string> | undefined;
-  function trackedUnderTests(): Set<string> {
-    if (trackedCache) return trackedCache;
-    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: root, encoding: 'utf8' });
-    expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
-    const rel = run.stdout.split('\0').filter((p) => p !== '');
-    expect(rel.length, 'git ls-files named no file under tests/ — the copy would be empty').toBeGreaterThan(100);
-    const keep = new Set<string>();
-    for (const r of rel) {
-      keep.add(join(root, r));
-      // Add tests/, tests/auth, tests/auth/… — every prefix up to but excluding the file itself.
-      const parts = r.split('/');
-      for (let i = 1; i < parts.length; i += 1) keep.add(join(root, ...parts.slice(0, i)));
-    }
-    trackedCache = keep;
-    return keep;
-  }
-
   function plantProbe(source: string): string {
     const dir = mkdtempSync(join(tmpdir(), 'port-guard-tree-'));
     temps.push(dir);
@@ -435,24 +412,25 @@ describe('the bound-port guard as a script', () => {
     // A `zz-` PREFIX FILTER IS WHAT THIS FIRST WAS, and it rested on a convention nothing pins:
     // only typecheck-tests-wiring.test.ts keeps it. Measured against a probe named `tmp-…`, 60
     // copies each: no filter 37 of 60 ENOENT, the `zz-` filter 34 of 60 — it buys almost nothing
-    // outside the one name it knows — and this tracked-set filter 0 of 60, as it also is for the
+    // outside the one name it knows — and copying only tracked files 0 of 60, as it also is for the
     // `zz-` probe. Pinning the convention would mean a guard over every
     // write into tests/, which is text matching of exactly the kind that just failed this PR's own
     // claim guard. So the convention is not pinned, it is NOT RELIED ON: `git ls-files` is the
     // authority on what belongs to the tree — four suites here already use it — and anything it
     // does not name is not copied, whatever it is called and whether or not it exists any more.
     //
-    // No stat anywhere in the filter, because statting an entry that may already be gone IS the
-    // race: the directories are derived from the tracked paths instead. The #82 assurance is
-    // untouched and gets sharper — what answers #82 is the real structure and the real depth
-    // (tests/tools reached only by recursing, freePort() in tests/auth/login-harness.ts so the tree
-    // is MARKED), and that is exactly what the tracked set contains. This probe's own file is
-    // written on the next line, after the copy, so the filter never sees it.
-    const keep = trackedUnderTests();
-    cpSync(join(root, 'tests'), join(dir, 'tests'), {
-      recursive: true,
-      filter: (src) => keep.has(src),
-    });
+    // Each tracked file is copied by name, so the live tests/ is never listed and an entry another
+    // suite removes mid-copy cannot be reached. The #82 assurance is untouched: what answers #82 is
+    // the real structure and the real depth (tests/tools reached only by recursing, freePort() in
+    // tests/auth/login-harness.ts so the tree is MARKED), and that is exactly what git lists.
+    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: root, encoding: 'utf8' });
+    expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
+    const tracked = run.stdout.split('\0').filter((p) => p !== '');
+    expect(tracked.length, 'git ls-files named no file under tests/ — the copy would be empty').toBeGreaterThan(100);
+    for (const p of tracked) {
+      mkdirSync(dirname(join(dir, p)), { recursive: true });
+      copyFileSync(join(root, p), join(dir, p));
+    }
     writeFileSync(join(dir, 'tests', 'tools', 'zz-port-guard-probe.ts'), source);
     return join(dir, 'tests');
   }
