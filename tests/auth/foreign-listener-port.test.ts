@@ -74,17 +74,13 @@ describe('freePort() and a foreign listener in the band', () => {
   // THE ATTEMPT LOG STAYS. It is what turned "20 attempts" from a count into a measurement, and
   // the next failure here has to arrive with its ports and its reasons attached.
   async function foreignListenerOnNextCandidate(host?: string): Promise<number> {
-    // BOUNDED, because the walk is. Capping the attempts at 20 used to bound this list too; the
-    // bound is the band now, so an exhausted band would otherwise put ~10 000 entries and ~200 KB
-    // into one assertion message. The first attempts are the ones that carry the pattern — the
-    // step-by-two signature of #106 finding 3 was legible in the first four — and the total is what
-    // says how far the walk got, so both are kept and nothing in between is.
+    // The concern is the MESSAGE, not memory held: capping the attempts at 20 used to bound this
+    // list too, and with the bound now the band an exhausted walk would put ~10 000 entries and
+    // ~200 KB into one assertion message. So everything is pushed and the cut happens where the
+    // message is built — `refused.length` is the total for free and `slice(0, 20)` the sample. The
+    // first attempts are the ones that carry the pattern: the step-by-two signature of #106
+    // finding 3 was legible in the first four.
     const refused: string[] = [];
-    let refusedCount = 0;
-    const refuse = (reason: string): void => {
-      refusedCount += 1;
-      if (refused.length < 20) refused.push(reason);
-    };
     const anchor = freePort();
     // IT WRAPS, like the cursor it follows. `for (next = anchor + 1; next <= PORT_BAND_LAST)` ran
     // zero times when freePort() returned the last port of the band, and the case then failed
@@ -92,7 +88,12 @@ describe('freePort() and a foreign listener in the band', () => {
     // itself wraps (`PORT_BAND_FIRST + nextCandidate % PORT_BAND_SIZE`), and the 20-attempt loop
     // this replaced inherited that wrap; a band edge is roughly 1 pid residue in 10 000, which is
     // exactly the kind of rate that reaches somebody else and not you.
-    for (let step = 1; step <= PORT_BAND_SIZE; step += 1) {
+    // `step < PORT_BAND_SIZE`, not `<=`: at step == PORT_BAND_SIZE the walk wraps back onto the
+    // ANCHOR, which freePort() already holds a claim on, so the last iteration could only ever log
+    // one more `claim EEXIST` against our own claim and say nothing. Steps 1..SIZE-1 visit every
+    // other port of the band exactly once, which is the whole band minus the one port that is ours
+    // and must not be made a stranger's.
+    for (let step = 1; step < PORT_BAND_SIZE; step += 1) {
       const next = PORT_BAND_FIRST + ((anchor - PORT_BAND_FIRST + step) % PORT_BAND_SIZE);
       // THE ALLOCATOR'S OWN PROTOCOL, never a claim written by hand. This was
       // `writeFileSync(portClaimPath(next), String(process.pid), { flag: 'wx' })` — create the name
@@ -109,18 +110,18 @@ describe('freePort() and a foreign listener in the band', () => {
       } catch (err) {
         // claimPort() throws for everything that is not "the name is taken", with the path in the
         // message; it is not an ErrnoException by then, so the message is what there is to log.
-        refuse(`${next} claim ${(err as Error).message}`);
+        refused.push(`${next} claim ${(err as Error).message}`);
         continue;
       }
       if (!claimed) {
-        refuse(`${next} claim EEXIST`);
+        refused.push(`${next} claim EEXIST`);
         continue;
       }
       try {
         opened.push(await bind(next, host));
       } catch (err) {
         rmSync(portClaimPath(next), { force: true });
-        refuse(`${next} bind ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
+        refused.push(`${next} bind ${(err as NodeJS.ErrnoException).code ?? String(err)}`);
         continue;
       }
       rmSync(portClaimPath(next), { force: true });
@@ -128,8 +129,8 @@ describe('freePort() and a foreign listener in the band', () => {
     }
     return expect.fail(
       `no band port left to put a stranger on in ${PORT_BAND_FIRST}-${PORT_BAND_LAST}, walking ` +
-        `from ${anchor + 1} (host ${host ?? 'wildcard'}): ${refusedCount} refused, first ` +
-        `${refused.length}: ${refused.join(', ')}`,
+        `from ${anchor + 1} (host ${host ?? 'wildcard'}): ${refused.length} refused, first ` +
+        `${Math.min(refused.length, 20)}: ${refused.slice(0, 20).join(', ')}`,
     );
   }
 
