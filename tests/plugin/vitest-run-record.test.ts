@@ -20,21 +20,14 @@ describe('the run record vitest.config.ts writes', () => {
     // THE PATH IS READ OUT OF THE CONFIG, not retyped: the config is importable — tests/tsconfig.json
     // already includes it — so this test asks about the path the reporter ACTUALLY writes, where a
     // retyped literal would keep matching nothing while the reporter wrote somewhere else.
-    //
-    // It is caught at RUN TIME, not by the type checker, and the difference is worth stating because
-    // an earlier version of this comment claimed the opposite. Measured 2026-10-12: delete the
-    // `outputFile` line, or empty it to `{}`, and `tsc -p tests/tsconfig.json` exits 0 with no
-    // diagnostic either way — the `as { json?: unknown }` below is what erases it. What does fire is
-    // the next assertion, naming the key that went missing. That is the guarantee; the type checker
-    // is not part of it.
+    // Caught at run time by the assertions below, not by tsc: `defineConfig` types `outputFile` the
+    // same with or without the key (measured 2026-10-12).
     const { default: config } = await import('../../vitest.config.js');
     const outputFile = config.test?.outputFile;
-    // Narrowed through these two assertions, not cast straight to `{ json: string }`: that cast made
-    // a removed key a TypeError from `dirname(undefined)` further down instead of the clear failure
-    // these messages promise. Measured: removing the key fails here with "no longer configures an
-    // outputFile: expected undefined to be type of 'object'".
-    expect(outputFile, 'vitest.config.ts no longer configures an outputFile').toBeTypeOf('object');
-    const record = (outputFile as { json?: unknown }).json;
+    // Narrowed, not cast straight to `{ json: string }`: that cast made a removed key a TypeError
+    // from `dirname(undefined)` further down instead of the clear failure this message promises.
+    // A string outputFile is the json reporter's path too, so either shape counts.
+    const record = typeof outputFile === 'string' ? outputFile : (outputFile as { json?: unknown } | undefined)?.json;
     expect(record, 'vitest.config.ts no longer configures a json outputFile').toBeTypeOf('string');
     // Asked of git, not of the text of .gitignore. Measured on 2026-10-09: an assertion that the
     // literal line `test-results/` appears goes red on a respelling to `/test-results/` and on a
@@ -42,13 +35,11 @@ describe('the run record vitest.config.ts writes', () => {
     // the property. 0 = ignored; 1 = git would offer it for commit, including when it is already
     // tracked; anything else means the question was never asked. Only 0 passes: fail-closed.
     const asked = spawnSync('git', ['check-ignore', '-q', record as string], { cwd: root, encoding: 'utf8' });
-    // The message carries the diagnosis, because `-q` prints NOTHING on the branch that fires: exit
-    // 1 is "not ignored" with no output at all, and a missing git gives status null with stderr
-    // undefined, so interpolating stderr alone said "exited 1: " and "exited null: undefined".
+    // -q prints nothing on exit 1, and a missing git leaves status null: the message has to carry the diagnosis.
     const why =
       asked.status === 1
-        ? 'git would offer it for commit — no ignore rule covers it'
-        : `git check-ignore never answered (${asked.error?.message ?? asked.stderr ?? 'no output'})`;
+        ? 'git would offer it for commit — not ignored, or already tracked'
+        : `git check-ignore never answered (${asked.error?.message ?? asked.stderr})`;
     expect(asked.status, `${record}: ${why}`).toBe(0);
   });
 });

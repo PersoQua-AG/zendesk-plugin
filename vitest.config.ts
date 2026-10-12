@@ -30,10 +30,8 @@ export default defineConfig({
     // `test-results/` directory created and no summary line — the json reporter only writes once the
     // run ends. So this instrument classifies a run that COMPLETES, failures included, and it does
     // nothing for a run that DIES, which is the harder half of #51. What an interrupt leaves instead
-    // is orphaned vitest workers still holding their band claims (12 after the first interrupt, 1
-    // after the second) — the next run then contends against them. An earlier version of this
-    // comment claimed the opposite, that an interrupted run leaves a record shaped like a complete
-    // one; that was wrong in the direction that would mislead a reader who relies on it.
+    // is orphaned vitest workers, a varying number, still holding their band claims — the next run
+    // then contends against them.
     //
     // Nothing prunes the directory either. And the record is a new on-disk sink for failure text,
     // test sentinels included; .gitignore keeps it out of git — pinned by
@@ -60,13 +58,8 @@ export default defineConfig({
         // 98.8% statements / 98.4% functions / 98.8% lines, and branches land in 93.4–93.5%
         // (it was 97.98/88.50/97.10/97.98 when these floors were written).
         //
-        // THE SECOND DECIMAL IS NOT STABLE, and no comment here should pretend otherwise. Five
-        // measurements of branch coverage across this branch and development on 2026-10-09..12 gave
-        // 93.43, 93.44, 93.48 and 93.49 depending on the checkout and the sandbox. An earlier
-        // version of this comment claimed the branch figure equalled development's exactly; that
-        // claim was unfalsifiable noise, and a reader who diffed two runs would have "found" a
-        // regression that was not there. Compare against the FLOORS below, never against a prior
-        // run's last digit.
+        // The second decimal moves between checkouts (branches 93.43–93.49, 2026-10-09..12): compare
+        // against the floors below, never a prior run's last digit.
         //
         // The floors are absolute minima, not a ratchet: they catch a collapse, not a regression —
         // the headroom above them is roughly 6.4 points on branches, 2.4 on functions and 1.8 on

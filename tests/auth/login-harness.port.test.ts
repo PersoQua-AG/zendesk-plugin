@@ -191,11 +191,8 @@ describe('the sweep that reclaims the band', () => {
     // removal. `inodeBefore` is read off an fd this test still holds, so the number cannot come
     // back and "different" is safe to read off it alone. Measured: mutations O1 ('1') and O2 (process.ppid) survived every
     // assertion above with 9 passed, and are red on this line.
-    //
-    // One stat(2), so there is no check-then-use window; `throwIfNoEntry: false` makes an
-    // already-removed claim read as null (which differs from any inode) while every other error
-    // still throws.
-    expect(statSync(claim, { throwIfNoEntry: false })?.ino ?? null).not.toBe(inodeBefore);
+    // One stat(2): no check-then-use window; a removed claim reads undefined, any other error throws.
+    expect(statSync(claim, { throwIfNoEntry: false })?.ino).not.toBe(inodeBefore);
   }
 
   afterEach(() => {
@@ -264,14 +261,8 @@ describe('the sweep that reclaims the band', () => {
       // succeeds, which would satisfy this case through the `return true` path and pin the EPERM
       // branch not at all. A non-root uid is necessary but not sufficient — a container or a
       // platform that lets this user signal init would pass for the wrong reason, silently.
-      let raised: NodeJS.ErrnoException | null = null;
-      try {
-        process.kill(1, 0);
-      } catch (err) {
-        raised = err as NodeJS.ErrnoException;
-      }
-      expect(raised?.code, 'kill(1, 0) did not raise EPERM here, so this case never reaches the EPERM branch').toBe(
-        'EPERM',
+      expect(() => process.kill(1, 0), 'kill(1, 0) did not raise EPERM here, so this case never reaches the EPERM branch').toThrow(
+        expect.objectContaining({ code: 'EPERM' }),
       );
       expect(pidIsLive(1)).toBe(true);
     },
