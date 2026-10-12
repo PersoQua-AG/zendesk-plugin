@@ -18,17 +18,18 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 describe('the run record vitest.config.ts writes', () => {
   it('is configured at all: the json reporter is still in reporters', async () => {
     // outputFile alone writes nothing; without 'json' in reporters the case below stays green while #51
-    // loses its record. Reads the reporter by name in every spelling vitest 2.1.9 accepts: 'json',
+    // loses its record. Reads EVERY json reporter by name, in every spelling vitest 2.1.9 accepts: 'json',
     // ['json'], ['json', options]. A JsonReporter instance is not recognised and goes red (fail-closed).
-    // An options.outputFile is refused: it would override the path the case below checks.
+    // An options.outputFile on any json entry is refused: that reporter writes a record to a path the
+    // case below never checks.
     const { default: config } = await import('../../vitest.config.js');
     const entries: unknown[] = [config.test?.reporters ?? []].flat(1);
-    const json = entries.find((r) => r === 'json' || (Array.isArray(r) && r[0] === 'json'));
-    expect(json, 'vitest.config.ts no longer runs the json reporter').toBeDefined();
-    expect(
-      Array.isArray(json) ? (json[1] as { outputFile?: unknown } | undefined)?.outputFile : undefined,
-      'a per-reporter outputFile overrides test.outputFile, so the case below would check a path nobody writes',
-    ).toBeUndefined();
+    const json = entries.filter((r) => r === 'json' || (Array.isArray(r) && r[0] === 'json'));
+    expect(json.length, 'vitest.config.ts no longer runs the json reporter').toBeGreaterThan(0);
+    const overrides = json
+      .map((r) => (Array.isArray(r) ? (r[1] as { outputFile?: unknown } | undefined)?.outputFile : undefined))
+      .filter((f) => f !== undefined);
+    expect(overrides, 'a per-reporter outputFile writes a record to a path the case below never checks').toEqual([]);
   });
 
   it('is kept out of git, asked of git rather than of a parsed .gitignore', async () => {
