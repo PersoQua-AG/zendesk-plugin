@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -417,22 +418,14 @@ describe('the bound-port guard as a script', () => {
     // write into tests/, which is text matching of exactly the kind that just failed this PR's own
     // claim guard. So the convention is not pinned, it is NOT RELIED ON: `git ls-files` is the
     // authority on what belongs to the tree — four suites here already use it — and anything it
-    // does not name is not copied, whatever it is called. A tracked file deleted from the working
-    // tree but not staged is still named by `ls-files`, and copying it threw ENOENT in every case
-    // that plants a probe, so `ls-files --deleted` is subtracted: the copy is what is tracked AND
-    // on disk, which is what the guard scans in the repository too.
+    // does not name is not copied, whatever it is called. Nor is a tracked file missing from disk:
+    // `ls-files` still names an unstaged deletion, and copying it threw ENOENT in every probe case.
     //
     // Each tracked file is copied by name, so the live tests/ is never listed and an entry another
     // suite removes mid-copy cannot be reached. The #82 assurance is untouched: what answers #82 is
     // the real structure and the real depth (tests/tools reached only by recursing, freePort() in
     // tests/auth/login-harness.ts so the tree is MARKED), and that is exactly what git lists.
-    const files = (...flags: string[]): string[] => {
-      const run = spawnSync('git', ['ls-files', '-z', ...flags, 'tests'], { cwd: root, encoding: 'utf8' });
-      expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
-      return run.stdout.split('\0').filter((p) => p !== '');
-    };
-    const deleted = new Set(files('--deleted'));
-    const tracked = files().filter((p) => !deleted.has(p));
+    const tracked = trackedOnDisk(root);
     expect(tracked.length, 'git ls-files named no file under tests/ — the copy would be empty').toBeGreaterThan(100);
     for (const p of tracked) {
       mkdirSync(dirname(join(dir, p)), { recursive: true });
@@ -442,12 +435,30 @@ describe('the bound-port guard as a script', () => {
     return join(dir, 'tests');
   }
 
+  function trackedOnDisk(repo: string): string[] {
+    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: repo, encoding: 'utf8' });
+    expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
+    return run.stdout.split('\0').filter((p) => p !== '' && existsSync(join(repo, p)));
+  }
+
   // #106, fourth instance, as a position rather than a race — the same assertion shape that holds
   // the mutant files in tests/plugin/executor-safety-guard.test.ts. Red the moment a probe goes
   // back under the repository root.
   it('plants its probe outside the repository, where no other suite can race it', () => {
     const scanRoot = plantProbe('// nothing to find here\n');
     expect(relative(root, scanRoot), scanRoot).toMatch(/^\.\./);
+  });
+
+  // No commit, so no git identity is needed: `ls-files` reads the index, which still names gone.ts.
+  it('leaves a tracked file out of the copy once it is deleted but not staged', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'port-guard-git-'));
+    temps.push(repo);
+    mkdirSync(join(repo, 'tests'));
+    for (const f of ['kept.ts', 'gone.ts']) writeFileSync(join(repo, 'tests', f), '');
+    expect(spawnSync('git', ['init', '-q'], { cwd: repo }).status).toBe(0);
+    expect(spawnSync('git', ['add', 'tests'], { cwd: repo }).status).toBe(0);
+    rmSync(join(repo, 'tests', 'gone.ts'));
+    expect(trackedOnDisk(repo)).toEqual(['tests/kept.ts']);
   });
 
   // ACCEPTANCE CRITERION 1, with its control. Before #82 this file was simply not looked at:
