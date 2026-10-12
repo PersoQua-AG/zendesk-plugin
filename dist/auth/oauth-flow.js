@@ -263,7 +263,7 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
             // listener that refuses to bind.
             close();
             // ONE REASON PER CAUSE (#104). This used to answer EVERY synchronous throw with the port
-            // rule, and for anything but a RangeError that sentence is FALSE: the port is in range.
+            // rule, and for anything but node's port validation that sentence is FALSE.
             // Measured in PR #101 — a bind-time guard threw here and the caller was told
             // `port 8976 (… must be a whole number between 1024 and 65535)`, so the reader went to check
             // a number that was never the problem while the only description of the real cause was
@@ -298,15 +298,15 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
                 // is 1024-65535, and nothing range-checks `port` before this call. "So the callback
                 // port rule is not the reason" is no better — nothing in this try enforces that rule
                 // (src/auth/config.ts:115 does, earlier and elsewhere), so it does not follow from
-                // `!(err instanceof RangeError)` either.
+                // `!badPort` either.
                 //
-                // What DOES follow is exactly one thing: node's own port validation throws RangeError
-                // ERR_SOCKET_BAD_PORT, and that took the other branch. That is the whole sentence. "Before any bind
-                // was attempted" is gone too — there are two bindings, so a throw on the second one
-                // comes after the first has started binding.
+                // What DOES follow is exactly one thing: node's own port validation is a RangeError
+                // with code ERR_SOCKET_BAD_PORT, and that took the other branch. That is the whole
+                // sentence. "Before any bind was attempted" is gone too — there are two bindings, so a
+                // throw on the second one comes after the first has started binding.
                 `OAuth callback server could not start on port ${port}: listen() threw ${kind}, which` +
-                    ` is not node's own port validation — that throws RangeError and is reported` +
-                    ` separately.`, { cause: err });
+                    ` is not node's own port validation — that is a RangeError with code` +
+                    ` ERR_SOCKET_BAD_PORT and is reported separately.`, { cause: err });
         }
     });
 }
