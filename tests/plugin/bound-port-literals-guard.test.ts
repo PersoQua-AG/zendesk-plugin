@@ -417,15 +417,22 @@ describe('the bound-port guard as a script', () => {
     // write into tests/, which is text matching of exactly the kind that just failed this PR's own
     // claim guard. So the convention is not pinned, it is NOT RELIED ON: `git ls-files` is the
     // authority on what belongs to the tree — four suites here already use it — and anything it
-    // does not name is not copied, whatever it is called and whether or not it exists any more.
+    // does not name is not copied, whatever it is called. A tracked file deleted from the working
+    // tree but not staged is still named by `ls-files`, and copying it threw ENOENT in every case
+    // that plants a probe, so `ls-files --deleted` is subtracted: the copy is what is tracked AND
+    // on disk, which is what the guard scans in the repository too.
     //
     // Each tracked file is copied by name, so the live tests/ is never listed and an entry another
     // suite removes mid-copy cannot be reached. The #82 assurance is untouched: what answers #82 is
     // the real structure and the real depth (tests/tools reached only by recursing, freePort() in
     // tests/auth/login-harness.ts so the tree is MARKED), and that is exactly what git lists.
-    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: root, encoding: 'utf8' });
-    expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
-    const tracked = run.stdout.split('\0').filter((p) => p !== '');
+    const files = (...flags: string[]): string[] => {
+      const run = spawnSync('git', ['ls-files', '-z', ...flags, 'tests'], { cwd: root, encoding: 'utf8' });
+      expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
+      return run.stdout.split('\0').filter((p) => p !== '');
+    };
+    const deleted = new Set(files('--deleted'));
+    const tracked = files().filter((p) => !deleted.has(p));
     expect(tracked.length, 'git ls-files named no file under tests/ — the copy would be empty').toBeGreaterThan(100);
     for (const p of tracked) {
       mkdirSync(dirname(join(dir, p)), { recursive: true });
