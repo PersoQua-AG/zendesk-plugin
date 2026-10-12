@@ -109,9 +109,13 @@ describe('the reason a failed callback bind states', () => {
     );
     throwsOnListen(planted);
     const err = await bindFailure(port);
-    expect(err.message).not.toMatch(/node:|permission denied|EACCES|\/Users\//);
-    expect(err.message).not.toMatch(/^\s+at /m);
-    expect(err.message.split('\n')).toHaveLength(1);
+    // THE EXACT SENTENCE HERE TOO, and this was the last case still owed it: "pin every determined
+    // message exactly" was said one case too early while this one hung on three negative patterns
+    // plus a line count. Its message IS determined — a plain `new Error` has the name `Error`,
+    // which the gate carries — and the whole sentence excludes the planted EACCES wording, the
+    // `node:` frame and the absolute path by leaving no room for them, rather than by naming three
+    // shapes a leak might take.
+    expect(err.message).toBe(reason(port, 'Error'));
   });
 
   // A name is an identifier or it is not used. `name` is a writable property on any object, so a
@@ -148,9 +152,14 @@ describe('the reason a failed callback bind states', () => {
   // The one case that ships therefore lost the class name the fix exists to carry. Unpinned in both
   // directions before this: nothing noticed the name being dropped, and nothing held the bound that
   // makes dropping it right for a long one. Both rows now.
+  // THREE ROWS, AND THE MIDDLE ONE IS WHY 40 IS A NUMBER AND NOT A WISH. With only the two ends, a
+  // mutant one character tighter — `{0,39}` — left all cases green, so the bound was pinned on one
+  // side only. A 40-character prefix is the longest name the gate carries and 41 the shortest it
+  // refuses, so both edges are asserted and neither `{0,39}` nor `{0,41}` survives.
   it.each([
     ['Error', 'Error', 'the class name of the one error this path really gets'],
-    [`${'A'.repeat(41)}Error`, 'an error', 'one character past the bound, so still not interpolated'],
+    [`${'A'.repeat(40)}Error`, `${'A'.repeat(40)}Error`, 'exactly at the bound, so still carried'],
+    [`${'A'.repeat(41)}Error`, 'an error', 'one character past the bound, so not interpolated'],
   ])('interpolates the name %s as %s — %s', async (name, kind) => {
     const port = freePort();
     const thrown = new Error('x');
