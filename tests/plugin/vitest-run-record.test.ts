@@ -19,17 +19,20 @@ describe('the run record vitest.config.ts writes', () => {
   it('is configured at all: the json reporter is still in reporters', async () => {
     // outputFile alone writes nothing; without 'json' in reporters the case below stays green while #51
     // loses its record. Reads EVERY json reporter by name, in every spelling vitest 2.1.9 accepts: 'json',
-    // ['json'], ['json', options]. A JsonReporter instance is not recognised and goes red (fail-closed).
-    // An options.outputFile on any json entry is refused: that reporter writes a record to a path the
-    // case below never checks.
+    // ['json'], ['json', options]. Any entry that is not a name — a JsonReporter instance or an inline
+    // reporter object — is refused (fail-closed): it cannot be read by name, and it can write a record
+    // anywhere. A non-nullish options.outputFile on any json entry is refused: vitest reads it with `??`
+    // in place of test.outputFile, so that reporter does not write the path the case below checks.
     const { default: config } = await import('../../vitest.config.js');
     const entries: unknown[] = [config.test?.reporters ?? []].flat(1);
+    const unnamed = entries.filter((r) => typeof r !== 'string' && !(Array.isArray(r) && typeof r[0] === 'string'));
+    expect(unnamed.length, 'a reporter given as an object cannot be checked for where it writes').toBe(0);
     const json = entries.filter((r) => r === 'json' || (Array.isArray(r) && r[0] === 'json'));
     expect(json.length, 'vitest.config.ts no longer runs the json reporter').toBeGreaterThan(0);
     const overrides = json
-      .map((r) => (Array.isArray(r) ? (r[1] as { outputFile?: unknown } | undefined)?.outputFile : undefined))
-      .filter((f) => f !== undefined);
-    expect(overrides, 'a per-reporter outputFile writes a record to a path the case below never checks').toEqual([]);
+      .map((r) => (Array.isArray(r) ? (r[1] as { outputFile?: unknown } | null | undefined)?.outputFile : undefined))
+      .filter((f) => f != null);
+    expect(overrides, 'a per-reporter outputFile replaces test.outputFile, so this reporter does not write the path the case below checks').toEqual([]);
   });
 
   it('is kept out of git, asked of git rather than of a parsed .gitignore', async () => {
