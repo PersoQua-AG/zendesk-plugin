@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitEnv } from '../setup/git-env.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-attribution.mjs');
@@ -17,7 +18,7 @@ afterEach(() => {
 type Run = { status: number; stdout: string; stderr: string };
 
 const run = (args: string[], { input, cwd = root, guard = GUARD }: { input?: string; cwd?: string; guard?: string } = {}): Run => {
-  const r = spawnSync('node', [guard, ...args], { encoding: 'utf8', input, cwd });
+  const r = spawnSync('node', [guard, ...args], { encoding: 'utf8', input, cwd, env: gitEnv() });
   return { status: r.status ?? -1, stdout: r.stdout, stderr: r.stderr };
 };
 
@@ -27,7 +28,7 @@ function repoWith(bodies: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'attribution-guard-'));
   temps.push(dir);
   const git = (...args: string[]) =>
-    spawnSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } });
+    spawnSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...gitEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } });
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 't@example.com');
   git('config', 'user.name', 'T');

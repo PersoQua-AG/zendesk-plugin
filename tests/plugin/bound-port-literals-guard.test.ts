@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -13,6 +14,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitEnv } from '../setup/git-env.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-bound-port-literals.mjs');
@@ -21,6 +23,7 @@ const GUARD = join(root, 'scripts', 'assert-no-bound-port-literals.mjs');
 // against the repo unless it is written split. It is, through ACQUIRES and BIND below.
 const temps: string[] = [];
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -95,7 +98,7 @@ describe('the bound-port guard as a script', () => {
   // Every root that is not an ancestor is refused in words, which is where the narrow misedits
   // (`tests/plugin`, `tests/tools`) land.
   it('reports success only for the allocator tree and its ancestors, and refuses every other', () => {
-    const tracked = spawnSync('git', ['ls-files', '*.ts'], { cwd: root, encoding: 'utf8' });
+    const tracked = spawnSync('git', ['ls-files', '*.ts'], { cwd: root, encoding: 'utf8', env: gitEnv() });
     expect(tracked.status, tracked.stderr).toBe(0);
     const files = tracked.stdout.trim().split('\n');
     const roots = [...new Set(files.map((f) => dirname(f)))].sort();
@@ -358,7 +361,7 @@ describe('the bound-port guard as a script', () => {
     // And the selector, the third part. Drifting it to `'*.mts'` changes the stated answer —
     // freePort is not defined in a .mts file — and left this test green as well (#79).
     expect(readFileSync(GUARD, 'utf8')).toContain(String.raw`git ls-files '*.ts' |`);
-    const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8' });
+    const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8', env: gitEnv() });
     expect(run.stdout.trim().split('\n')).toEqual(['tests/auth']);
   });
 
@@ -417,15 +420,14 @@ describe('the bound-port guard as a script', () => {
     // write into tests/, which is text matching of exactly the kind that just failed this PR's own
     // claim guard. So the convention is not pinned, it is NOT RELIED ON: `git ls-files` is the
     // authority on what belongs to the tree — four suites here already use it — and anything it
-    // does not name is not copied, whatever it is called and whether or not it exists any more.
+    // does not name is not copied, whatever it is called. Nor is a tracked file missing from disk:
+    // `ls-files` still names an unstaged deletion, and copying it threw ENOENT in every probe case.
     //
     // Each tracked file is copied by name, so the live tests/ is never listed and an entry another
     // suite removes mid-copy cannot be reached. The #82 assurance is untouched: what answers #82 is
     // the real structure and the real depth (tests/tools reached only by recursing, freePort() in
     // tests/auth/login-harness.ts so the tree is MARKED), and that is exactly what git lists.
-    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: root, encoding: 'utf8' });
-    expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
-    const tracked = run.stdout.split('\0').filter((p) => p !== '');
+    const tracked = trackedOnDisk(root);
     expect(tracked.length, 'git ls-files named no file under tests/ — the copy would be empty').toBeGreaterThan(100);
     for (const p of tracked) {
       mkdirSync(dirname(join(dir, p)), { recursive: true });
@@ -435,12 +437,35 @@ describe('the bound-port guard as a script', () => {
     return join(dir, 'tests');
   }
 
+  function trackedOnDisk(repo: string): string[] {
+    const run = spawnSync('git', ['ls-files', '-z', 'tests'], { cwd: repo, encoding: 'utf8', env: gitEnv() });
+    expect(run.status, `git ls-files failed: ${run.stderr || run.error?.message}`).toBe(0);
+    return run.stdout.split('\0').filter((p) => p !== '' && existsSync(join(repo, p)));
+  }
+
   // #106, fourth instance, as a position rather than a race — the same assertion shape that holds
   // the mutant files in tests/plugin/executor-safety-guard.test.ts. Red the moment a probe goes
   // back under the repository root.
   it('plants its probe outside the repository, where no other suite can race it', () => {
     const scanRoot = plantProbe('// nothing to find here\n');
     expect(relative(root, scanRoot), scanRoot).toMatch(/^\.\./);
+  });
+
+  // No commit, so no git identity is needed: `ls-files` reads the index, which still names gone.ts.
+  it('leaves a tracked file out of the copy once it is deleted but not staged', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'port-guard-git-'));
+    temps.push(repo);
+    mkdirSync(join(repo, 'tests'));
+    for (const f of ['kept.ts', 'gone.ts']) writeFileSync(join(repo, 'tests', f), '');
+    // Exported on process.env as a hook exports them, not passed in: a call that drops `env: gitEnv()`
+    // or a gitEnv() that stops filtering then inherits both, and the case goes red here.
+    const decoys = { GIT_DIR: join(repo, 'hook-git-dir'), GIT_INDEX_FILE: join(repo, 'hook-index') };
+    for (const [k, v] of Object.entries(decoys)) vi.stubEnv(k, v);
+    expect(spawnSync('git', ['init', '-q'], { cwd: repo, env: gitEnv() }).status).toBe(0);
+    expect(spawnSync('git', ['add', 'tests'], { cwd: repo, env: gitEnv() }).status).toBe(0);
+    rmSync(join(repo, 'tests', 'gone.ts'));
+    expect(trackedOnDisk(repo)).toEqual(['tests/kept.ts']);
+    for (const d of Object.values(decoys)) expect(existsSync(d), `a git call wrote ${d}`).toBe(false);
   });
 
   // ACCEPTANCE CRITERION 1, with its control. Before #82 this file was simply not looked at:

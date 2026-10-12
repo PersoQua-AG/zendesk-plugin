@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../../src/server.js';
 import { keychain } from '../auth/keychain.js';
+import { gitEnv } from '../setup/git-env.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // Realpathed so the launch is not through a symlink (macOS tmpdir is /var -> /private/var).
@@ -18,7 +19,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 // What an install receives: the tracked files, so node_modules/ and uncommitted build output are out.
 function copyPluginPayload(dest: string): void {
-  const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
+  const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8', env: gitEnv() })
     .split('\0')
     .filter(Boolean);
   for (const file of files) {

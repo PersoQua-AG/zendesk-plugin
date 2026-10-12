@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,20 +37,29 @@ describe('the test type-check is wired, and over all of tests/ (#57)', () => {
 
   // The whole claim, end to end: a type error planted in a folder that the old curated list did
   // not name makes the real command exit non-zero. tests/tools/ is one of the folders #57 names.
+  //
+  // Run on a copy outside the repository: a probe in the live tests/tools is a file that appears and
+  // vanishes under every suite that walks tests/ in the same run, and the bound-port guard exits 2
+  // on a file it listed and could not read. The copy is both tsconfigs byte for byte, so `include`
+  // resolves exactly as it does in the repo, and the probe is the only file it can find.
   it('a type error in a folder the old list never named fails the command', () => {
-    // NOT a dot-prefixed name: tsc's include globs skip those, so a `.probe.ts` would be absent
-    // from both runs and the ablation below would pass without proving anything.
-    const probe = join(root, 'tests', 'tools', `zz-typecheck-probe-${randomUUID()}.ts`);
-    writeFileSync(probe, 'export const probe: number = "not a number";\n');
+    const dir = mkdtempSync(join(tmpdir(), 'typecheck-wiring-'));
     try {
-      const run = spawnSync('npx', ['tsc', '-p', join(root, 'tests', 'tsconfig.json')], {
+      mkdirSync(join(dir, 'tests', 'tools'), { recursive: true });
+      copyFileSync(join(root, 'tsconfig.json'), join(dir, 'tsconfig.json'));
+      copyFileSync(join(root, 'tests', 'tsconfig.json'), join(dir, 'tests', 'tsconfig.json'));
+      // NOT a dot-prefixed name: tsc's include globs skip those, so a `.probe.ts` would be absent
+      // from both runs and the ablation below would pass without proving anything.
+      writeFileSync(join(dir, 'tests', 'tools', 'zz-typecheck-probe.ts'), 'export const probe: number = "not a number";\n');
+      const run = spawnSync('npx', ['tsc', '-p', join(dir, 'tests', 'tsconfig.json')], {
         cwd: root,
         encoding: 'utf8',
       });
       expect(run.status).not.toBe(0);
+      // A list that misses tools/ finds no input in the copy and answers TS18003 instead.
       expect(run.stdout).toContain('TS2322');
     } finally {
-      rmSync(probe, { force: true });
+      rmSync(dir, { recursive: true, force: true });
     }
   }, 120_000);
 });
