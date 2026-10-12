@@ -16,6 +16,13 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 describe('the run record vitest.config.ts writes', () => {
+  it('is written at all: the json reporter is still configured', async () => {
+    // outputFile alone writes nothing; without 'json' in reporters the case below stays green while #51
+    // loses its record. flat(2) reads both spellings vitest accepts: 'json' and ['json', options].
+    const { default: config } = await import('../../vitest.config.js');
+    expect([config.test?.reporters].flat(2), 'vitest.config.ts no longer runs the json reporter').toContain('json');
+  });
+
   it('is kept out of git, asked of git rather than of a parsed .gitignore', async () => {
     // THE PATH IS READ OUT OF THE CONFIG, not retyped: the config is importable — tests/tsconfig.json
     // already includes it — so this test asks about the path the reporter ACTUALLY writes, where a
