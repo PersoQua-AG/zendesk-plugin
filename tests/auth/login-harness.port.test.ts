@@ -158,10 +158,6 @@ describe('the sweep that reclaims the band', () => {
     }
   }
 
-  /** The inode a claim is published under, or null if it is already gone. One stat(2), so there is
-   * no check-then-use window; every non-ENOENT error still throws. */
-  const inodeOf = (claim: string): number | null => statSync(claim, { throwIfNoEntry: false })?.ino ?? null;
-
   /** Acquires a port, then writes the fixture body through an fd opened while the claim is ours. */
   function plantAndPin(body: string): { claim: string; inode: number } {
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -191,11 +187,15 @@ describe('the sweep that reclaims the band', () => {
     // claim in place with any live third pid, which is not reclamation at all: the dead owner's
     // name was never freed. The inode tells the two apart: an in-place overwrite keeps it, while
     // the only legitimate way this name can carry a foreign owner is a concurrent run's
-    // claimPort() publishing a DIFFERENT file by linkSync (login-harness.ts:172) after the
+    // `claimPort()` publishing a DIFFERENT file through its `linkSync` (login-harness.ts) after the
     // removal. `inodeBefore` is read off an fd this test still holds, so the number cannot come
     // back and "different" is safe to read off it alone. Measured: mutations O1 ('1') and O2 (process.ppid) survived every
     // assertion above with 9 passed, and are red on this line.
-    expect(inodeOf(claim)).not.toBe(inodeBefore);
+    //
+    // One stat(2), so there is no check-then-use window; `throwIfNoEntry: false` makes an
+    // already-removed claim read as null (which differs from any inode) while every other error
+    // still throws.
+    expect(statSync(claim, { throwIfNoEntry: false })?.ino ?? null).not.toBe(inodeBefore);
   }
 
   afterEach(() => {
@@ -252,7 +252,7 @@ describe('the sweep that reclaims the band', () => {
     expect(readFileSync(ours, 'utf8')).toBe(String(process.pid));
   });
 
-  // The EPERM branch of pidIsLive (login-harness.ts:118), which decides every "keeps one whose
+  // The EPERM branch of `pidIsLive` (login-harness.ts), which decides every "keeps one whose
   // owner is alive" above and was pinned by nothing: a catch returning plain `false` read a live
   // process owned by ANOTHER USER as dead, and its claim was then reclaimed under it. pid 1 is the
   // init process and belongs to root, so kill(1, 0) from an unprivileged process answers EPERM —
@@ -260,6 +260,19 @@ describe('the sweep that reclaims the band', () => {
   it.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
     'reads a process it may not signal as alive, because EPERM means it is there',
     () => {
+      // THE PREMISE IS ASSERTED, not assumed. `pidIsLive(1)` is also true when kill(1, 0) simply
+      // succeeds, which would satisfy this case through the `return true` path and pin the EPERM
+      // branch not at all. A non-root uid is necessary but not sufficient — a container or a
+      // platform that lets this user signal init would pass for the wrong reason, silently.
+      let raised: NodeJS.ErrnoException | null = null;
+      try {
+        process.kill(1, 0);
+      } catch (err) {
+        raised = err as NodeJS.ErrnoException;
+      }
+      expect(raised?.code, 'kill(1, 0) did not raise EPERM here, so this case never reaches the EPERM branch').toBe(
+        'EPERM',
+      );
       expect(pidIsLive(1)).toBe(true);
     },
   );
