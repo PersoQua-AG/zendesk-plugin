@@ -1,0 +1,92 @@
+name: Release
+
+# Publishes the Claude Code plugin archive once a state reaches `main`: own manifest, build and
+# dist-drift gates, then the packaging and the two deliveries (GitHub release, gateway).
+on:
+  push:
+    branches: [main]
+
+# Two pushes to `main` must not overtake each other: the gateway refuses a version it already
+# holds. `cancel-in-progress: false` only keeps the RUNNING run alive: GitHub holds a single
+# pending run per group and cancels the waiting one when a newer push arrives, and a cancelled run
+# is not a red run — so if that waiting run carried the only version bump, that version is never
+# published and nothing turns red. Not configurable away. Operator rule: release to `main` one
+# push at a time, and after a burst check `gh release list` against .claude-plugin/plugin.json.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # `gh release create` writes a tag and a release to this repo.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      # Before the build: the version this workflow publishes is read out of a manifest.
+      - run: node scripts/validate-manifests.mjs
+      - run: npm run build
+      # `ci.yml` is parallel with no `needs:`: it cannot block a publish out of unverified `main`.
+      - run: git diff --exit-code dist/
+      # Its own step so both deliveries read one value — tag and archive cannot disagree.
+      - id: version
+        run: |
+          VERSION=$(node -p "require('./.claude-plugin/plugin.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      # The path list is explicit rather than zipping the tree and subtracting: the archive is the
+      # plugin layer and nothing else, and no new top-level directory drifts in unnoticed. `-MM`
+      # guards the list: a member that no longer matches is exit 18, not a green hollow archive.
+      - run: zip -MM -r zendesk-plugin.zip .claude-plugin agents commands skills dist/plugin README.md LICENSE
+      # `-MM` proves presence, not content: an emptied entrypoint bundles as an empty server.js.
+      - run: unzip -p zendesk-plugin.zip dist/plugin/server.js | grep -q .
+      # Runs BEFORE the gateway publish so the job is re-runnable whole: this half is idempotent
+      # through `view`/`upload --clobber`, the gateway holds a version once it has one (see below).
+      # Rejected: `X-Force` on retry, which silently overwrites a published archive, and a two-job
+      # split, which pays an artifact hand-off and a second checkout for the same resumability.
+      # Why a release at all: one versioned ZIP per tag, grabbable without repacking, and a record
+      # of what each release shipped. Not a customer install path — the one customer has no GitHub
+      # account and this repo goes private. And it has no substitute: `git tag -l 'v*'` is 0 and
+      # `gh release list` empty, because this step is the repo's only writer of a `v*` tag, so there
+      # is no tag to check out and repack. Keeping it is the owner's decision of 2026-10-07.
+      - name: Attach the archive to a GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" zendesk-plugin.zip --clobber
+          else
+            gh release create "v$VERSION" zendesk-plugin.zip \
+              --title "v$VERSION" \
+              --notes "Zendesk plugin v$VERSION. Customers install it from the PersoQua plugin marketplace at https://plugins.persoqua.de. This archive is the same artifact, kept for internal traceability, not a customer install path, since customers have no GitHub account and this repository is private."
+          fi
+      # The token comes through `env:` like VERSION: an inline `${{ }}` writes it into the
+      # generated script and into curl's argv, where a quote or `$` in it would break the quoting.
+      # The timeouts stop a hung gateway from holding the job — and the concurrency group — for 6h.
+      #
+      # 409 = the gateway already holds this version, from either of two causes and only one is a
+      # version mistake: it really is published, or an earlier run committed it and then died on
+      # the transport — `code=$(curl …)` is a command substitution, so under `bash -e` a curl
+      # failure (reset, proxy 502 after the commit, `--max-time`, killed runner) exits this step
+      # red before the comparisons below, with the version held. A 409 alone is not a bump signal.
+      - name: Publish to the plugin gateway
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PUBLISH_TOKEN: ${{ secrets.PLUGIN_GATEWAY_PUBLISH_TOKEN }}
+        run: |
+          code=$(curl -sS -X POST https://plugins.persoqua.de/admin/publish \
+            --connect-timeout 10 --max-time 300 \
+            -H "Authorization: Bearer $PUBLISH_TOKEN" \
+            -H "X-Plugin: zendesk" \
+            -H "X-Version: $VERSION" \
+            -H "Content-Type: application/zip" \
+            --data-binary @zendesk-plugin.zip \
+            -o publish-body.txt -w '%{http_code}')
+          [ "$code" = "409" ] && { echo "::error::Gateway already holds $VERSION. Do not bump yet: either that version is genuinely published, or an earlier run committed it and then died on the transport. Check the live version at https://plugins.persoqua.de against this run's archive first."; exit 1; }
+          [ "$code" = "200" ] || { echo "::error::Gateway publish of $VERSION failed: HTTP $code."; cat publish-body.txt; exit 1; }
