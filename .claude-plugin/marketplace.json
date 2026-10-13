@@ -13,7 +13,7 @@
     {
       "name": "zendesk",
       "source": "./",
-      "description": "Manage Zendesk tickets, users, organizations, business rules, and Help Center content from Claude Code.",
+      "description": "Run your Zendesk support desk from Claude Code",
       "category": "productivity"
     }
   ]
