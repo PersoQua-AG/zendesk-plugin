@@ -40,19 +40,20 @@ jobs:
       # disagree with what Claude Code reads out of the plugin.
       - id: version
         run: echo "version=$(node -p "require('./.claude-plugin/plugin.json').version")" >> "$GITHUB_OUTPUT"
-      # An explicit path list, not `.mcpbignore`: that file excludes exactly the plugin layer
-      # (.claude-plugin/, skills/, commands/, agents/, dist/plugin/ — lines 17-23), because it
-      # describes the Desktop Extension bundle. It is the inverse of this archive.
-      # No node_modules: dist/plugin/server.js is esbuild-bundled and committed.
+      # The path list is written out rather than zipping the tree and subtracting: the archive is
+      # the plugin layer and nothing else, so src/, tests/, scripts/ and .github/ stay out, and a
+      # new top-level directory cannot drift into a release unnoticed. Everything Claude Code
+      # resolves has to be listed — .claude-plugin/ (plugin.json, marketplace.json), the agents,
+      # commands and skills it registers, and dist/plugin/server.js as the MCP entrypoint — plus
+      # README.md and LICENSE. No node_modules: server.js is esbuild-bundled and committed.
       - run: zip -r zendesk-plugin.zip .claude-plugin agents commands skills dist/plugin README.md LICENSE
       # Prove the archive before it is published: Claude Code resolves the plugin through
       # .claude-plugin/plugin.json, and an empty server.js would install but never start.
       - run: |
           unzip -l zendesk-plugin.zip | grep -q ' \.claude-plugin/plugin\.json$'
           unzip -p zendesk-plugin.zip dist/plugin/server.js | grep -q .
-      # PLUGIN_GATEWAY_PUBLISH_TOKEN must be set as a repository secret before the first run;
-      # it does not exist yet. The gateway's status is the only verdict read here, so 409 can be
-      # told apart from every other failure.
+      # PLUGIN_GATEWAY_PUBLISH_TOKEN is set as a repository secret. The gateway's status is the
+      # only verdict read here, so 409 can be told apart from every other failure.
       - name: Publish to the plugin gateway
         env:
           VERSION: ${{ steps.version.outputs.version }}
