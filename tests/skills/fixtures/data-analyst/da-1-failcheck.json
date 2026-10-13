@@ -3,12 +3,12 @@
   "row": "DA-1",
   "skill": "data-analyst",
   "role": "failcheck",
-  "status": "pending-owner-decision",
+  "status": "recorded",
   "source": [
     {
       "file": "skills/data-analyst/SKILL.md",
       "line": 23,
-      "quote": "- a **CSAT** summary (good/bad + satisfaction %)."
+      "quote": "- a **CSAT** summary: the **good**, **bad** and **rated** counts"
     },
     {
       "file": "skills/data-analyst/SKILL.md",
@@ -22,12 +22,13 @@
     },
     {
       "file": "src/tools/analytics/report.ts",
-      "line": 190,
-      "quote": "const csat = report.csat.scorePct === null ? 'no rated"
+      "line": 191,
+      "quote": "const csat = report.csat.rated === 0 ? 'no rated responses'"
     }
   ],
   "input": {
-    "prompt": "Give me the KPI summary for July 2026."
+    "prompt": "Give me the KPI summary for July 2026.",
+    "report_line": "CSAT: 2 good / 1 bad / 3 rated"
   },
-  "expected": "Open. The rule \"KPIs: no percentages, numbers only\" (ops handover 2026-08-25:33) contradicts the code (CSAT rendered as NN%) and the skill text (satisfaction %). No expectation is recorded in either direction until the owner decides (S0 finding 1)."
+  "expected": "Reports the CSAT good, bad and rated counts as given. Never converts them into a percentage, a ratio or a share, and never calls a small rated count a strong or weak result. The rule \"KPIs: no percentages, numbers only\" (ops handover 2026-08-25:33) now holds in code, skill text, command text and the MCP prompt alike (#65)."
 }

@@ -1,8 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, utimesSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, utimesSync, mkdirSync, chmodSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ResponseCache } from '../../src/client/cache.js';
+import { modeBitsIgnored } from '../setup/mode-bits.js';
+
+function thrownBy(fn: () => unknown): Error | undefined {
+  try {
+    fn();
+  } catch (err) {
+    return err as Error;
+  }
+}
 
 describe('ResponseCache', () => {
   let dir: string;
@@ -63,5 +72,124 @@ describe('ResponseCache', () => {
     const second = cache.save('zendesk_get_ticket', { d: 'bbbbbbbbbbbbbbbbbbbb' });
     expect(() => cache.load(first.handle)).toThrow(/not found/i);
     expect(cache.load(second.handle)).toBeDefined();
+  });
+
+  // #54: the constructor, not the first save(), must reject a cache dir it cannot use. One row per
+  // mode bit the check names; chmod does not bite for root, where the dir would prove nothing.
+  it.skipIf(modeBitsIgnored).each([
+    { what: 'an existing read-only directory (0500)', mode: 0o500 },
+    { what: 'a write-only directory (0300), which sweep() cannot read', mode: 0o300 },
+    { what: 'a non-traversable directory (0600), whose entries cannot be reached', mode: 0o600 },
+  ])('throws EACCES at construction for $what', ({ mode }) => {
+    const target = join(dir, `cache-${mode.toString(8)}`);
+    mkdirSync(target);
+    chmodSync(target, mode);
+    try {
+      expect(() => new ResponseCache(target)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+    } finally {
+      chmodSync(target, 0o700);
+    }
+  });
+
+  // The constructor's check goes stale (ENOSPC, EROFS, a quota, plain TOCTOU). save() must still
+  // not hand Node's raw error — which carries the absolute path — to the tool result.
+  it.skipIf(modeBitsIgnored)('reports a write failure by code, without the path', () => {
+    const cache = new ResponseCache(dir);
+    chmodSync(dir, 0o500); // becomes unwritable AFTER construction succeeded
+    try {
+      let thrown: Error | undefined;
+      try {
+        cache.save('zendesk_get_me', { a: 1 });
+      } catch (err) {
+        thrown = err as Error;
+      }
+      expect(thrown?.message).toContain('EACCES');
+      expect(thrown?.message).toMatch(/free space/);
+      expect(thrown?.message).not.toContain(dir);
+      expect(thrown?.message).not.toContain('.json');
+      // …and the sanitized message does not throw the diagnosable original away.
+      expect((thrown?.cause as NodeJS.ErrnoException | undefined)?.code).toBe('EACCES');
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+  });
+
+  // A payload that cannot be serialised carries no errno, so the disk remedy is the wrong answer.
+  it('reports an unserialisable payload as such, not as a disk failure', () => {
+    const cache = new ResponseCache(dir);
+    const thrown = thrownBy(() => cache.save('zendesk_get_me', { a: 1n }));
+    expect(thrown?.message).toMatch(/cannot be converted to JSON/i);
+    expect(thrown?.message).not.toMatch(/free space/);
+    expect(thrown?.message).not.toMatch(/unknown error/);
+    expect(readdirSync(dir)).toHaveLength(0);
+  });
+
+  // #54 names load() as well, and only save() was sanitized. The cache dir is NESTED so that a leak
+  // of either path segment is caught, and both names would appear inside Node's errno message.
+  it.skipIf(modeBitsIgnored)('reports an unreadable entry as a miss, by code, without the path', () => {
+    const nested = join(dir, 'deep', 'cache');
+    mkdirSync(nested, { recursive: true });
+    const cache = new ResponseCache(nested);
+    const entry = cache.save('zendesk_get_me', { a: 1 });
+    chmodSync(entry.path, 0o000);
+    try {
+      const thrown = thrownBy(() => cache.load(entry.handle));
+      expect(thrown?.message).toMatch(/not found/i);
+      expect(thrown?.message).toContain('EACCES');
+      expect(thrown?.message).not.toContain(dir);
+      expect(thrown?.message).not.toContain(nested);
+      expect(thrown?.message).not.toContain('.json');
+      expect((thrown?.cause as NodeJS.ErrnoException | undefined)?.code).toBe('EACCES');
+    } finally {
+      chmodSync(entry.path, 0o600);
+    }
+  });
+
+  // The reap of an expired entry can fail too — unlink needs the write bit on the directory.
+  it.skipIf(modeBitsIgnored)('reports an expired entry it cannot reap as a miss, without the path', () => {
+    const nested = join(dir, 'deep', 'cache');
+    mkdirSync(nested, { recursive: true });
+    const cache = new ResponseCache(nested, { ttlMs: 1000 });
+    const entry = cache.save('zendesk_get_me', { a: 1 });
+    const old = new Date(Date.now() - 10_000);
+    utimesSync(entry.path, old, old);
+    chmodSync(nested, 0o500);
+    try {
+      const thrown = thrownBy(() => cache.load(entry.handle));
+      expect(thrown?.message).toMatch(/not found/i);
+      expect(thrown?.message).not.toContain(dir);
+      expect(thrown?.message).not.toContain(nested);
+      expect(thrown?.message).not.toContain('.json');
+    } finally {
+      chmodSync(nested, 0o700);
+    }
+  });
+
+  // sweep()'s own expired-reap branch, which the TTL case above exercises through load() instead.
+  it('reaps an expired entry on the next save, not only on load', () => {
+    const cache = new ResponseCache(dir, { ttlMs: 1000 });
+    const stale = cache.save('zendesk_get_ticket', { a: 1 });
+    const old = new Date(Date.now() - 10_000);
+    utimesSync(stale.path, old, old);
+    cache.save('zendesk_get_me', { b: 2 });
+    expect(readdirSync(dir)).toHaveLength(1);
+  });
+
+  // 0300 is write+traverse without read: the write lands, sweep()'s readdirSync throws. The entry
+  // is on disk, so the caller must still get its handle instead of a "caching failed" error.
+  it.skipIf(modeBitsIgnored)('returns the handle when only the sweep fails', () => {
+    const cache = new ResponseCache(dir);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    chmodSync(dir, 0o300);
+    try {
+      const entry = cache.save('zendesk_get_me', { a: 1 });
+      expect(entry.handle).toMatch(/^zendesk_get_me-/);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
+      // The code, never the path — that is the whole reason errorCode exists.
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining(dir));
+    } finally {
+      chmodSync(dir, 0o700);
+      warn.mockRestore();
+    }
   });
 });

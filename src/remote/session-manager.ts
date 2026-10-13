@@ -6,11 +6,12 @@ import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.
 import { isInitializeRequest, type JSONRPCMessage, type RequestId } from '@modelcontextprotocol/sdk/types.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { createServer } from '../server.js';
-import { ResponseCache } from '../client/cache.js';
+import { ResponseCache, type CacheStore } from '../client/cache.js';
 import type { RateLimiter } from '../client/rate-limiter.js';
 import type { IdentityAuthResolver } from '../auth/identity-resolver.js';
 import { WriteAuditLog, type AuditOutcome } from './audit-log.js';
 import { log } from './logger.js';
+import { errorCode } from '../util/error-code.js';
 import type { RunSecurity } from '../auth/store-key.js';
 
 // Mutating tools worth an audit trail (REQ-10). Reads are intentionally not audited.
@@ -149,9 +150,27 @@ export class SessionManager {
     return bound.transport.handleRequest(req, res, req.body);
   }
 
+  // A cache dir this identity cannot use must not kill initialize: it is one unusable directory,
+  // not an invalid request. Degrade like the stdio path, with the code alone reaching the log.
+  private openCacheOrDegrade(identity: string): CacheStore {
+    try {
+      return new ResponseCache(sessionCacheDir(this.deps.dataDir, identity));
+    } catch (err) {
+      const code = errorCode(err);
+      log({ msg: `session cache unavailable (${code}); responses are not cached`, outcome: 'degraded' });
+      const fail = (): never => {
+        throw new Error(
+          `Caching is unavailable for this session (${code}), so responses cannot be stored or ` +
+            'replayed. Ask the operator to check the data directory.',
+        );
+      };
+      return { save: fail, load: fail };
+    }
+  }
+
   private async openSession(req: ReqWithAuth, res: ServerResponse): Promise<void> {
     const identity = identityOf(req);
-    const cache = new ResponseCache(sessionCacheDir(this.deps.dataDir, identity));
+    const cache = this.openCacheOrDegrade(identity);
     const { server } = createServer(this.env, {
       security: this.deps.security,
       authManager: this.deps.resolver.forIdentity(identity),

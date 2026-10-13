@@ -4,7 +4,7 @@
 // through the field-agnostic deep screen).
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../../client/http-client.js';
-import type { ResponseCache } from '../../client/cache.js';
+import type { CacheStore } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
 import { makeScreener, screenRecordDeep, makeDescribe, screenNote } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from '../cbp-list.js';
@@ -25,7 +25,7 @@ const describeView = makeDescribe<View>('view', (v) => `#${v.id} ${v.title ?? '(
 
 export async function listViews(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -51,7 +51,7 @@ const SingleViewSchema = z.object({ view: ViewSchema });
 
 export async function getView(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { viewId: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -82,7 +82,7 @@ const describeViewTicket = makeDescribe<ViewTicket>('view-ticket', (t) => `#${t.
 
 export async function executeView(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { viewId: number; pageSize?: number; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {

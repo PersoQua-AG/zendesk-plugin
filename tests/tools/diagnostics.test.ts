@@ -8,6 +8,7 @@ import { diagnosticsReport, substitutionState } from '../../src/tools/diagnostic
 import { createServer } from '../../src/server.js';
 import { keychain } from '../auth/keychain.js';
 import { freePort } from '../auth/login-harness.js';
+import { allowForeignBind } from '../setup/acquired-ports.js';
 
 // Why this tool exists at all: Claude Desktop loads no local plugin — it serves plugins from the
 // account marketplace, which pulls `main` — so the only way to measure the host is to ship the
@@ -73,6 +74,9 @@ describe('the diagnostics report', () => {
     expect(free).toContain(`127.0.0.1:${port} binds`);
 
     // A port below 1024 is privileged, which is the one unavailability every runner agrees on.
+    // Declared to the bind-time guard (#74): the product binds this one, and 1 is chosen BECAUSE
+    // no runner lets it bind. A port that cannot be taken cannot collide with a concurrent run.
+    allowForeignBind(1, 'a privileged port the probe is expected to fail on');
     const refused = await diagnosticsReport({ rawEnv: {}, callbackPort: 1, clientCapabilities: {} });
     expect(refused).toMatch(/127\.0\.0\.1:1 unavailable \(E[A-Z]+\)/);
   });

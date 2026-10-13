@@ -2,9 +2,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { AuthManager } from './auth/auth-manager.js';
 import { TokenStore } from './auth/token-store.js';
-import { callbackPortOrDefault, dataDirOf, DEFAULT_SCOPES, resolveAuthConfig, stripPlaceholders, USER_CONFIG_FIELD_BY_ENV, } from './auth/config.js';
+import { callbackPortOrDefault, dataDirOf, DEFAULT_SCOPES, resolveAuthConfig, stripPlaceholders, } from './auth/config.js';
 import { readKeychainConfig, resolveTokenStoreKey, runSecurity, writeKeychainConfig, } from './auth/store-key.js';
 import { warnConfig } from './util/warn-config.js';
+import { errorCode } from './util/error-code.js';
 import { RateLimiter } from './client/rate-limiter.js';
 import { ZendeskHttpClient } from './client/http-client.js';
 import { ResponseCache } from './client/cache.js';
@@ -22,7 +23,8 @@ import { registerPrompts } from './register/prompts.js';
 import { parseReportConfig } from './tools/analytics/business-hours.js';
 import { argv } from 'node:process';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { statSync } from 'node:fs';
 // Account-wide rate buckets (PRD §5 infra 1): everything shares 400/min; incremental export is
 // special-cased to 10/min.
 export const DEFAULT_RATE_LIMIT_RPM = 400;
@@ -38,20 +40,29 @@ export const INCREMENTAL_RATE_LIMIT_RPM = 10;
 // safe substitute (any other port breaks the redirect_uri the user registered with Zendesk), a
 // security level does. And the port's throw is caught: resolveOrDegrade turns it into a server that
 // still starts and names the field in every tool's answer, while a throw out of parseSecurityLevel
-// would leave a dead extension with nothing to read — exactly the outcome resolveOrDegrade exists
-// to prevent. Absent stays 'standard', and since #68 that is not a mirror of a declared default but the
-// shipped behaviour itself: .claude-plugin/plugin.json declares no security_level at all and the
-// manifest.json default belongs to the retired MCPB dialog, so 'standard' IS the level the installed
-// plugin runs at (owner decision on #59, 2026-10-06).
+// would leave a dead server with nothing to read — exactly the outcome resolveOrDegrade exists
+// to prevent. Absent stays 'standard', and since #68 that is not a mirror of a declared default but
+// the shipped behaviour itself: .claude-plugin/plugin.json declares no security_level at all, and
+// the only other declaration there ever was belonged to the MCPB dialog, retired in #103. So
+// 'standard' IS the level the installed plugin runs at (owner decision on #59, 2026-10-06).
 export const SECURITY_LEVELS = ['strict', 'standard', 'off'];
 function parseSecurityLevel(raw) {
     const value = raw?.trim().toLowerCase();
-    if (!value)
+    // Absence was the one resolution with no symptom at all, and it was silent in the dangerous
+    // direction (#93 gap B): an operator who believed they had configured `strict` got `standard` and
+    // nothing anywhere said so. In the installed plugin absence IS every start, and once per opened
+    // session on the remote path.
+    if (!value) {
+        warnConfig('ZENDESK_SECURITY_LEVEL is not set — injection screening runs at standard, the shipped level. ' +
+            'The installed plugin declares no configuration field for it, so only a hand-started server ' +
+            `or the remote connector reads this variable (${SECURITY_LEVELS.join(' | ')}; README, Security).`);
         return 'standard';
+    }
     if (SECURITY_LEVELS.includes(value))
         return value;
-    warnConfig(`ZENDESK_SECURITY_LEVEL "${raw}" is not one of ${SECURITY_LEVELS.join(' | ')} (extension configuration ` +
-        `field "${USER_CONFIG_FIELD_BY_ENV.ZENDESK_SECURITY_LEVEL}") \u2014 using ` +
+    // JSON.stringify, not interpolation: it supplies the quotes AND escapes the breaks, so a value
+    // like 'str\nict' can no longer forge a second line on the channel that reports it.
+    warnConfig(`ZENDESK_SECURITY_LEVEL ${JSON.stringify(raw)} is not one of ${SECURITY_LEVELS.join(' | ')} \u2014 using ` +
         `strict, the strictest level, rather than silently screening less.`);
     return 'strict';
 }
@@ -68,8 +79,7 @@ function parseMarkdownDefault(raw) {
         return true;
     if (value === 'true' || value === 'false')
         return value === 'true';
-    warnConfig(`ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false (extension configuration field ` +
-        `"${USER_CONFIG_FIELD_BY_ENV.ZENDESK_MARKDOWN_CONVERSION}") \u2014 using true, the shipped ` +
+    warnConfig(`ZENDESK_MARKDOWN_CONVERSION "${raw}" is not true | false \u2014 using true, the shipped ` +
         `default, rather than reading it as a "no".`);
     return true;
 }
@@ -92,35 +102,35 @@ function resolveOrDegrade(env, security) {
         const dataDir = dataDirOf(env);
         return {
             ok: false,
-            // Points at the setup page, which is what exists now: the Claude Code plugin has no settings
-            // dialog any more (#68 removed its user_config, the host bridge does not support one), and on a
-            // platform without a Keychain the environment is the only way in (#69). The MCPB extension still
-            // HAS the dialog, so it is named last rather than first.
+            // Points at the setup page and the environment, which is everything a shipped path offers:
+            // there is no settings dialog anywhere any more. #68 removed the plugin's user_config (the host
+            // bridge does not support one), and the MCPB extension, whose dialog used to be named here
+            // last, is retired (#103). On a platform without a Keychain the environment is the only way in
+            // (#69). Naming a dialog the product does not have would send a half-configured operator into a
+            // path that cannot be reached, so the clause is pinned shut in tests/server.unconfigured.test.ts.
             reason: `${reason}${problem ? ` ${problem}` : ''} Call the zendesk_login tool: on macOS it answers with a local setup page that ` +
                 'collects the subdomain, client id and client secret. Otherwise pass them in the environment ' +
-                '(ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET), or, in the Desktop ' +
-                'Extension, fill the configuration dialog under Settings \u2192 Extensions \u2192 Zendesk.',
+                '(ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET).',
             dataDir,
             tokensPath: join(dataDir, 'tokens.enc'),
         };
     }
 }
-// mkdir can throw (EACCES/ENOSPC/ENOTDIR); tokens share the dir, so degrade like a bad config.
+// Opening the cache can throw (EACCES/ENOSPC/ENOTDIR — the dir is created AND checked usable);
+// tokens share the dir, so degrade like a bad config.
 function openCacheOrDegrade(auth) {
     try {
         return { auth, cache: new ResponseCache(join(auth.dataDir, 'cache')), cacheOk: true };
     }
     catch (err) {
-        const code = err instanceof Error && 'code' in err ? String(err.code) : 'unknown error';
+        const code = errorCode(err);
         const problem = `The extension's data directory cannot be used (${code}), so responses cannot be cached and ` +
             `tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;
         const reason = auth.ok ? problem : `${auth.reason.replace(/,? then reload the extension\.$/, '.')} ${problem}`;
         const fail = () => {
             throw new Error(reason);
         };
-        // ResponseCache is nominal (private fields); tools only call save/load.
-        const stub = { save: fail, load: fail };
-        const cache = stub;
+        const cache = { save: fail, load: fail };
         return { auth: { ok: false, reason, dataDir: auth.dataDir, tokensPath: auth.tokensPath }, cache, cacheOk: false };
     }
 }
@@ -253,7 +263,23 @@ export function createServer(rawEnv = process.env, deps = {}) {
 }
 // Connect stdio only when run as the process entrypoint (node dist/server.js), so importing this
 // module for tests does not attempt to open a transport.
-if (argv[1] && import.meta.url === pathToFileURL(argv[1]).href) {
+//
+// Compared by file IDENTITY, not by name (#63): Node resolves symlinks in an ES module's
+// import.meta.url but leaves argv[1] as the host spelled it, so a plugin root reached through a
+// symlink made a name comparison unequal — the module loaded, no transport was connected, and the
+// process exited 0 with an empty stderr. dev+ino is what the filesystem itself calls identity, so
+// no spelling can split one file into two. An argv[1] that names no file answers "not the
+// entrypoint", and { throwIfNoEntry: false } draws exactly that line: measured ENOENT and ENOTDIR
+// return undefined while ELOOP and EACCES still throw, so a stat that fails for any other reason
+// leaves a stack on stderr instead of the silent exit 0 with no transport that #63 forbids.
+function startedAsEntrypoint() {
+    const started = argv[1] ? statSync(argv[1], { throwIfNoEntry: false }) : undefined;
+    if (!started)
+        return false;
+    const self = statSync(fileURLToPath(import.meta.url));
+    return started.dev === self.dev && started.ino === self.ino;
+}
+if (startedAsEntrypoint()) {
     const { server } = createServer();
     await server.connect(new StdioServerTransport());
 }

@@ -24,8 +24,8 @@ function fakeStore(initial: StoredTokens | null): TokenStore {
   } as unknown as TokenStore;
 }
 
-// A Desktop Extension user has no terminal, so "run the OAuth setup flow" is not an instruction
-// they can follow. Every unauthorized path must name the tool they can actually call.
+// Someone working in a chat has no terminal to hand, so "run the OAuth setup flow" is not an
+// instruction they can follow. Every unauthorized path must name the tool they can actually call.
 describe('actionable authorization messages', () => {
   it('names zendesk_login when no authorization is stored', async () => {
     const manager = new AuthManager(fakeStore(null), config);

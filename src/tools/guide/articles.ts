@@ -8,7 +8,7 @@
 // field-agnostic deep screen).
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../../client/http-client.js';
-import type { ResponseCache } from '../../client/cache.js';
+import type { CacheStore } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
 import { makeScreener, screenRecordDeep, summariseScreened, makeDescribe, screenNote } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP, MAX_PAGE_SIZE } from '../cbp-list.js';
@@ -75,7 +75,7 @@ function renderRequiredBody(body: string | undefined, useMarkdown: boolean): str
 
 export async function listArticles(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -99,7 +99,7 @@ const SingleArticleSchema = z.object({ article: ArticleSchema });
 
 export async function getArticle(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { articleId: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -120,7 +120,7 @@ const ArticleSearchSchema = z.object({ results: z.array(ArticleSchema) });
 
 export async function searchArticles(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { query: string; locale?: string; perPage?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -156,7 +156,7 @@ export interface ArticleCreateFields {
 
 export function createArticle(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { sectionId: number; fields: ArticleCreateFields; markdown: boolean },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -180,7 +180,7 @@ export interface ArticleUpdateFields {
 
 export function updateArticle(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { articleId: number; fields: ArticleUpdateFields; markdown: boolean },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -201,7 +201,7 @@ export type TranslationCreateFields = ArticleCreateFields;
 
 export function createArticleTranslation(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { articleId: number; fields: TranslationCreateFields; markdown: boolean },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -222,7 +222,7 @@ export type TranslationUpdateFields = ArticleUpdateFields;
 
 export function updateArticleTranslation(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { articleId: number; locale: string; fields: TranslationUpdateFields; markdown: boolean },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {

@@ -6,7 +6,7 @@
 // construction — this helper cannot serve an unscreened record. Reused by M4–M6 list tools.
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import { cbpPageSchema, collectCbp, type CbpPage } from '../client/paginator.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { summariseScreened, type RecordScreen, type Screener } from './screening.js';
@@ -20,7 +20,7 @@ export const MAX_PAGE_SIZE = 100; // Zendesk CBP per-page hard maximum
 
 export interface ListCbpConfig<T extends { id: number }> {
   client: ZendeskHttpClient;
-  cache: ResponseCache;
+  cache: CacheStore;
   securityLevel: SecurityLevel;
   path: string; // request path, e.g. '/organizations.json'
   key: string; // envelope array key, e.g. 'organizations'

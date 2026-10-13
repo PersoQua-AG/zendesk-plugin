@@ -2,17 +2,16 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitEnv } from '../setup/git-env.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-executor-safety.mjs');
 
 const temps: string[] = [];
-const mutants: string[] = [];
 afterEach(() => {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
-  for (const f of mutants.splice(0)) rmSync(f, { force: true });
 });
 
 type Run = { status: number; stdout: string; stderr: string };
@@ -61,16 +60,35 @@ function runGuard(source?: string, fileName = 'subject.ts'): Run {
   return { status: run.status ?? -1, stdout: run.stdout, stderr: run.stderr };
 }
 
-// A mutant is the guard with one rule ablated. It has to live beside the real one so that its
-// `import ts from 'typescript'` resolves against the repo's node_modules.
+// A mutant is the guard with one rule ablated. It lives in a temp directory with a node_modules
+// symlink, NOT in scripts/, so that `import ts from 'typescript'` still resolves while the file
+// stays OUT OF THE TRACKED TREE (#106 finding 1). As `scripts/.mutant-<random>.mjs` it raced the
+// sibling guard: `tests/plugin/bound-port-literals-guard.test.ts` runs that guard over `.`, its
+// readFileSync hit a mutant this suite had already unlinked, and an ENOENT there is exit 2 — an
+// abort that prints no mark, so the sweep's expected set silently lost `.`.
+// REJECTED: letting assert-no-bound-port-literals.mjs tolerate a vanished file. That guard draws
+// the line between "could not look" (exit 2) and "looked and found" (exit 1) on purpose, and
+// teaching it to skip an unreadable entry is the #85 defect class — a tree that scanned less than
+// it claims, reported green. The mutant is the thing that does not belong in the repository.
 function mutate(edits: Array<[string, string]>): string {
   let code = readFileSync(GUARD, 'utf8');
   for (const [find, replace] of edits) {
     expect(code, `mutation anchor missing: ${find.slice(0, 60)}`).toContain(find);
     code = code.replace(find, replace);
   }
-  const path = join(root, 'scripts', `.mutant-${Math.random().toString(36).slice(2)}.mjs`);
-  mutants.push(path);
+  // A sandbox shaped like the repository root, by symlink, so the mutant's own `root` — which it
+  // computes as `<its directory>/..` and which every relative scan argument and every reported
+  // path is resolved against — still answers the way the real guard's does. `node_modules` carries
+  // `import ts from 'typescript'` and is what the empty-root ablation must find itself walking;
+  // `tests` and `src` are the two relative roots the ablations below name. Nothing is copied and
+  // nothing is written inside the repository.
+  const dir = mkdtempSync(join(tmpdir(), 'executor-guard-mutant-'));
+  temps.push(dir);
+  for (const mirror of ['node_modules', 'tests', 'src']) {
+    symlinkSync(join(root, mirror), join(dir, mirror));
+  }
+  mkdirSync(join(dir, 'scripts'));
+  const path = join(dir, 'scripts', 'mutant.mjs');
   writeFileSync(path, code);
   return path;
 }
@@ -519,6 +537,16 @@ export const f = (server: { listen: (p: number) => void }, port: number) =>
     // ONE ABLATION PER RULE, as for the detection rules below: remove the rule from a copy of the
     // guard and the fixture that pins it must change its verdict. A rule no fixture distinguishes
     // fails here, now.
+    // #106 finding 1, as a position rather than a race: a mutant under scripts/ was read by the
+    // sibling guard's sweep over `.` and unlinked by this suite's afterEach mid-read, which is
+    // exit 2, which prints no mark, which lost `.` from the expected set in
+    // tests/plugin/bound-port-literals-guard.test.ts:125. Nothing inside the repository, nothing
+    // for any sweep to race. Red if a mutant goes back under scripts/.
+    it('writes every mutant outside the repository, where no sweep over . can race it', () => {
+      const path = mutate([]);
+      expect(relative(root, path), path).toMatch(/^\.\./);
+    });
+
     it('ablated: a mark that is not stat-ed accepts a directory and a symlink again', () => {
       const ablated = mutate([[' && lstatSync(ENTRY_PATH).isFile()', '']]);
       for (const what of ['a directory', 'a symlink out of the tree'] as const) {
@@ -558,8 +586,142 @@ export const f = (server: { listen: (p: number) => void }, port: number) =>
       // Read out of the header, not retyped: a header that drifts from the command actually run
       // would put the claim back on paper only.
       expect(readFileSync(GUARD, 'utf8')).toContain(COUNT);
-      const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8' });
+      const run = spawnSync('sh', ['-c', COUNT], { cwd: root, encoding: 'utf8', env: gitEnv() });
       expect(run.stdout.trim().split('\n')).toEqual(['src/server.ts']);
+    });
+  });
+
+  // #85. The scan ROOT refusals above are about pointing the guard at the wrong tree. These are
+  // about the right tree with a file missing from it: the file is collected, counted as scanned,
+  // and never walked. The wedge in each fixture is the same nested unguarded `danger()` that w1
+  // reports normally, so a verdict of 0 executors here is the guard crediting a file it never read.
+  describe('#85 — a file the walk never saw is refused, not counted clean', () => {
+    const WEDGE = 'export const p = new Promise((a, b) => { new Promise((r) => { danger(); r(1); }); a(1); });\n';
+
+    // chmod 000 on the file, not on the directory: the walk lists it, ts.createProgram cannot open
+    // it, and getSourceFile returns undefined. The 0o000 is restored so afterEach can remove it.
+    function withUnreadableFile(run: (target: string) => Run): Run {
+      const target = fixtureDir(WEDGE, 'w.ts');
+      const file = join(target, 'w.ts');
+      chmodSync(file, 0o000);
+      try {
+        return run(target);
+      } finally {
+        chmodSync(file, 0o644);
+      }
+    }
+
+    it('refuses a tree holding a file the compiler could not open, and names that file', () => {
+      const run = withUnreadableFile((t) => spawnSync('node', [GUARD, t], { encoding: 'utf8' }) as Run);
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('could not be read');
+      expect(run.stderr).toContain('w.ts');
+      expect(run.stderr).not.toMatch(/^\s+at .*\(node:/m);
+    });
+
+    // THE SAME HOLE, ONE INDIRECTION DEEPER. `lstatSync` reports the LINK, so a `.ts` symlink whose
+    // target cannot be opened answered "not a file" and was dropped without a word. Measured before
+    // the fix: `0 executors, 0 inspected` and exit 0 — the identical green #85 was filed about.
+    // The link target lives OUTSIDE the scanned tree on purpose: inside it, the walk collects the
+    // real file by its own name as well, so the refusal would come from that second entry and the
+    // symlink arm would never be exercised. Measured — the first spelling of this fixture passed
+    // against the unfixed guard for exactly that reason.
+    function withUnreadableTarget(run: (target: string) => Run): Run {
+      const target = fixtureDir('export const marker = 1;\n', 'unused.ts');
+      const outside = mkdtempSync(join(tmpdir(), 'executor-guard-outside-'));
+      temps.push(outside);
+      const real = join(outside, 'real.ts');
+      writeFileSync(real, WEDGE);
+      symlinkSync(real, join(target, 'w.ts'));
+      chmodSync(real, 0o000);
+      try {
+        return run(target);
+      } finally {
+        chmodSync(real, 0o644);
+      }
+    }
+
+    it('refuses a symlink whose target the compiler could not open, and names it', () => {
+      const run = withUnreadableTarget((t) => spawnSync('node', [GUARD, t], { encoding: 'utf8' }) as Run);
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('could not be read');
+      expect(run.stderr).toContain('w.ts');
+    });
+
+    // A DANGLING symlink stays what #76/#77 decided it is — not the guarded tree, not an unread
+    // file. statSync answers it with ENOENT, and ENOENT is the one throw that is not a read
+    // failure. Without that arm the fix above would have turned three settled cases red.
+    // A DANGLING link stays what #76/#77 decided it is — not the guarded tree, not an unread file.
+    // Its SELF-REFERENTIAL twin is the same category answered by a different errno, ELOOP, and
+    // before the carve-out it refused the entire tree: the opposite verdict for the same thing.
+    it.each([
+      ['dangling', (dir: string) => symlinkSync(join(dir, 'nothing-here.ts'), join(dir, 'link.ts'))],
+      ['self-referential', (dir: string) => symlinkSync('link.ts', join(dir, 'link.ts'))],
+    ])('still treats a %s symlink as not-a-file rather than as unread', (_label, plant) => {
+      const target = fixtureDir('export const marker = 1;\n', 'unused.ts');
+      plant(target);
+      const run = spawnSync('node', [GUARD, target], { encoding: 'utf8' });
+      expect(run.stderr).not.toContain('could not be read');
+      expect(run.stderr).not.toContain('Nothing to inspect');
+      expect(run.status).toBe(0);
+    });
+
+    it('ablated: back on lstat, the symlink to an unreadable file is credited clean', () => {
+      const ablated = mutate([['    stats = statSync(file);', '    stats = lstatSync(file);']]);
+      const run = withUnreadableTarget((t) => spawnSync('node', [ablated, t], { encoding: 'utf8' }) as Run);
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain('0 executors, 0 inspected');
+    });
+
+    // An unterminated template literal on line 1: the AST stops there, so the executor below it is
+    // not merely unflagged, it is absent. The position is asserted because "somewhere in this file"
+    // is not enough to act on.
+    it('refuses a tree holding a file that does not parse, and names the file and the position', () => {
+      const run = runGuard(`const s = \`unterminated\n${WEDGE}`, 'broken.ts');
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('did not parse');
+      expect(run.stderr).toMatch(/broken\.ts:\d+:\d+/);
+      expect(run.stderr).toContain('Unterminated template literal');
+    });
+
+    // The same breakage in the MARKED file itself, which is the case that would otherwise read as
+    // the most trustworthy run there is: the tree carries its mark and reports nothing.
+    it('refuses it in server.ts itself, the file the mark points at', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'executor-guard-'));
+      temps.push(dir);
+      writeFileSync(join(dir, 'server.ts'), `const s = \`unterminated\n${WEDGE}`);
+      const run = spawnSync('node', [GUARD, dir], { encoding: 'utf8' });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('did not parse');
+      expect(run.stderr).toContain('server.ts');
+    });
+
+    // Semantic diagnostics are deliberately not consulted: the program runs with noLib/noResolve,
+    // so src/ itself carries hundreds of them. A tree that only offends the type checker must pass.
+    it('does not refuse a file that merely fails the type checker', () => {
+      const run = runGuard('export const n: number = "not a number";\n');
+      expect(run.stderr).not.toContain('did not parse');
+      expect(run.status).toBe(0);
+    });
+
+    // Dropping the file instead of naming it IS the pre-#85 code: the old `if (!source) continue;`
+    // by another spelling. Measured state it restores: 0 executors, exit 0, the wedge unseen.
+    it('ablated: without the unread-file refusal, the unreadable file is credited clean', () => {
+      const ablated = mutate([
+        ['  unread.push(`${rel(file)}  (could not be read)`);', '  void 0;'],
+      ]);
+      const run = withUnreadableFile((t) => spawnSync('node', [ablated, t], { encoding: 'utf8' }) as Run);
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain('0 executors, 0 inspected');
+    });
+
+    it('ablated: without the syntactic-diagnostic refusal, the wedge below the breakage is gone', () => {
+      const ablated = mutate([['for (const d of program.getSyntacticDiagnostics()) {', 'for (const d of []) {']]);
+      const run = spawnSync('node', [ablated, fixtureDir(`const s = \`unterminated\n${WEDGE}`, 'broken.ts')], {
+        encoding: 'utf8',
+      });
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain('0 executors, 0 inspected');
     });
   });
 

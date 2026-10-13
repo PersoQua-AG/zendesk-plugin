@@ -1,7 +1,7 @@
 // src/tools/search.ts
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { screenRecordDeep, summariseScreened, type RecordScreen, type Screener } from './screening.js';
 import { collectCbp, collectOffset, type CbpPage } from '../client/paginator.js';
@@ -27,7 +27,7 @@ function describeResult(record: Record<string, unknown>, screen: Screener): Reco
 
 export async function search(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { query: string; type?: string; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -60,7 +60,7 @@ const ExportPageSchema = z.object({
 
 export async function searchExport(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { query: string; type: string; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {

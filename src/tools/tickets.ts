@@ -1,12 +1,13 @@
 // src/tools/tickets.ts
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, screenNote } from './screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from './cbp-list.js';
 import { markdownToHtml } from '../util/markdown.js';
 import { safeUpdateWithConflict } from './write-helpers.js';
+import { readStatus, transitionRefusal, BIRTH_STATE_REFUSAL } from './ticket-status.js';
 import type { ReadResult } from './result.js';
 
 const TicketSchema = z.object({
@@ -25,7 +26,7 @@ const describeTicket = makeDescribe<Ticket>('ticket', (t) => `#${t.id} [${t.stat
 
 export async function listTickets(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -49,7 +50,7 @@ const SingleTicketSchema = z.object({ ticket: TicketSchema });
 
 export async function getTicket(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ticketId: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult & { updatedStamp: string | null }> {
@@ -69,7 +70,7 @@ const ManyTicketsSchema = z.object({ tickets: z.array(TicketSchema) });
 
 export async function getTicketsMany(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ids: number[] },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -98,9 +99,27 @@ export interface NewTicketInput {
   // Resolved boolean (register applies the markdown_conversion default); no hidden tool default.
   markdown: boolean;
   public?: boolean;
+  // Closed source ticket for a linked follow-up; maps to Zendesk's write-only via_followup_source_id.
+  followupSourceId?: number;
 }
 
-export function buildComment(text: string, useMarkdown: boolean, isPublic: boolean): Record<string, unknown> {
+// #64: visibility is opt-in. An omitted `public` means an INTERNAL note, because publishing an
+// internal remark to the customer cannot be undone while an internal note can be reposted.
+// Four comment-writing surfaces, four defaults, and NONE of them is this parameter for MCP traffic:
+// every registered surface publishes its own default in the schema, so `public` arrives already
+// resolved. addComment (src/tools/ticket-comments.ts) and createTicket below are this function's
+// only two callers, and their register-layer defaults fire first; zendesk_create_tickets_bulk
+// bypasses this function entirely (it forwards raw Zendesk records to create_many, so
+// bulkCreateTicketSchema in src/register/tickets.ts is its one funnel).
+// This parameter default is therefore the backstop for callers that do NOT come through MCP, and
+// the reason the type keeps `public` optional. Removing either layer is a silent regression, so
+// both are pinned.
+// The fourth surface, zendesk_apply_macro_to_ticket (applyMacroToTicket in
+// src/tools/business-rules/macros.ts), resolves no default at all: scoped out of #64 because the
+// macro's author chooses the visibility in Zendesk and the model cannot set the flag — tracked
+// in #116. Symbols, not line numbers: a line number in a comment is unchecked and drifts (the
+// same reason tm-9-failcheck lost its own).
+export function buildComment(text: string, useMarkdown: boolean, isPublic = false): Record<string, unknown> {
   return useMarkdown
     ? { html_body: markdownToHtml(text), public: isPublic }
     : { body: text, public: isPublic };
@@ -108,12 +127,12 @@ export function buildComment(text: string, useMarkdown: boolean, isPublic: boole
 
 export async function createTicket(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: NewTicketInput,
 ): Promise<{ summary: string; cacheHandle: string }> {
   const ticket: Record<string, unknown> = {
     subject: params.subject,
-    comment: buildComment(params.comment, params.markdown, params.public ?? true),
+    comment: buildComment(params.comment, params.markdown, params.public),
   };
   if (params.requesterId !== undefined) ticket.requester_id = params.requesterId;
   if (params.priority) ticket.priority = params.priority;
@@ -121,6 +140,7 @@ export async function createTicket(
   if (params.tags) ticket.tags = params.tags;
   if (params.groupId !== undefined) ticket.group_id = params.groupId;
   if (params.assigneeId !== undefined) ticket.assignee_id = params.assigneeId;
+  if (params.followupSourceId !== undefined) ticket.via_followup_source_id = params.followupSourceId;
 
   const raw = await client.request<{ ticket: { id: number } }>('/tickets.json', {
     method: 'POST',
@@ -146,7 +166,7 @@ export type UpdateTicketResult =
 
 export async function updateTicket(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ticketId: number; fields: TicketUpdateFields; updatedStamp?: string; force?: boolean },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<UpdateTicketResult> {
@@ -158,6 +178,13 @@ export async function updateTicket(
     throw new Error(
       'Refusing to update ticket without an updatedStamp: pass the updatedStamp from a prior read to enable safe optimistic-concurrency (recommended), or set force:true to deliberately overwrite without a concurrency check.',
     );
+  }
+  // #61: the lifecycle table is enforced before any write, force:true included — force acknowledges
+  // a concurrency overwrite, not an impossible transition. → new needs no read, so it skips one.
+  const target = params.fields.status;
+  if (target !== undefined) {
+    const refusal = target === 'new' ? BIRTH_STATE_REFUSAL : transitionRefusal(await readStatus(client, params.ticketId), target);
+    if (refusal) throw new Error(refusal);
   }
   const result = await safeUpdateWithConflict(client, cache, {
     path: `/tickets/${params.ticketId}.json`,

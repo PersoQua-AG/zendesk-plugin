@@ -6,7 +6,7 @@
 // schema (RuleSchema); only their collection/label differ.
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../../client/http-client.js';
-import type { ResponseCache } from '../../client/cache.js';
+import type { CacheStore } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
 import { summariseScreened, makeDescribe } from '../screening.js';
 import { listCbp, DEFAULT_LIST_CAP } from '../cbp-list.js';
@@ -39,7 +39,7 @@ const describeAutomation = makeDescribe<Rule>('automation', (a) => `#${a.id} ${a
 
 export async function listTriggers(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -61,7 +61,7 @@ export async function listTriggers(
 
 export async function listAutomations(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { pageSize?: number; maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -97,7 +97,7 @@ const SlaListSchema = z.object({ sla_policies: z.array(SlaPolicySchema) });
 
 export async function listSlaPolicies(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { maxRecords?: number } = {},
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -158,7 +158,7 @@ const TRIGGER_WRITE: Omit<RuleWriteConfig, 'toolName'> = { collection: '/trigger
 
 export function createTrigger(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { fields: RuleWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -167,7 +167,7 @@ export function createTrigger(
 
 export function updateTrigger(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { id: number; fields: RuleWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -178,7 +178,7 @@ const AUTOMATION_WRITE: Omit<RuleWriteConfig, 'toolName'> = { collection: '/auto
 
 export function createAutomation(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { fields: RuleWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -187,7 +187,7 @@ export function createAutomation(
 
 export function updateAutomation(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { id: number; fields: RuleWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -202,7 +202,7 @@ const SLA_WRITE: Omit<RuleWriteConfig, 'toolName'> = { collection: '/slas/polici
 
 export function createSla(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { fields: SlaWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -211,7 +211,7 @@ export function createSla(
 
 export function updateSla(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { id: number; fields: SlaWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {

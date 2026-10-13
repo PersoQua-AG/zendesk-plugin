@@ -32,8 +32,8 @@ describe('createServer wiring', () => {
     expect(ctx.reportConfig).toBeDefined();
   });
 
-  // 64 Zendesk tools + zendesk_login (the Desktop Extension's in-app OAuth entry point) +
-  // zendesk_diagnostics (what this host did with the plugin), both local-path only.
+  // 64 Zendesk tools + zendesk_login (the in-app OAuth entry point) + zendesk_diagnostics (what
+  // this host did with the plugin), both local-path only.
   it('registers all 66 tools', () => {
     const spy = vi.spyOn(McpServer.prototype, 'registerTool');
     createServer(fixtureEnv(), { security: keychain() });

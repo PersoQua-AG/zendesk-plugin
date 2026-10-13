@@ -6,6 +6,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createServer } from '../server.js';
 import { ResponseCache } from '../client/cache.js';
 import { log } from './logger.js';
+import { errorCode } from '../util/error-code.js';
 // Mutating tools worth an audit trail (REQ-10). Reads are intentionally not audited.
 const WRITE_TOOL = /^zendesk_(update|create|apply|add|upsert|import|bulk|attach|delete|remove|set)/;
 const TARGET_KEYS = [
@@ -120,9 +121,25 @@ export class SessionManager {
         }
         return bound.transport.handleRequest(req, res, req.body);
     }
+    // A cache dir this identity cannot use must not kill initialize: it is one unusable directory,
+    // not an invalid request. Degrade like the stdio path, with the code alone reaching the log.
+    openCacheOrDegrade(identity) {
+        try {
+            return new ResponseCache(sessionCacheDir(this.deps.dataDir, identity));
+        }
+        catch (err) {
+            const code = errorCode(err);
+            log({ msg: `session cache unavailable (${code}); responses are not cached`, outcome: 'degraded' });
+            const fail = () => {
+                throw new Error(`Caching is unavailable for this session (${code}), so responses cannot be stored or ` +
+                    'replayed. Ask the operator to check the data directory.');
+            };
+            return { save: fail, load: fail };
+        }
+    }
     async openSession(req, res) {
         const identity = identityOf(req);
-        const cache = new ResponseCache(sessionCacheDir(this.deps.dataDir, identity));
+        const cache = this.openCacheOrDegrade(identity);
         const { server } = createServer(this.env, {
             security: this.deps.security,
             authManager: this.deps.resolver.forIdentity(identity),

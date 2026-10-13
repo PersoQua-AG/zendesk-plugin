@@ -1,7 +1,7 @@
 // src/tools/users.ts
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeDescribe, makeScreener, screenRecordDeep, summariseScreened, screenNote } from './screening.js';
 import { SEARCH_HARD_CAP } from './search.js';
@@ -42,7 +42,7 @@ const SearchUsersPageSchema = z.object({
 
 export async function searchUsers(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { query: string; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -73,7 +73,7 @@ const SingleUserSchema = z.object({ user: UserSchema });
 
 export async function getUser(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { userId: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -108,7 +108,7 @@ export interface UserWriteFields {
 
 export async function upsertUser(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { fields: UserWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -132,7 +132,7 @@ export async function upsertUser(
 
 export async function updateUser(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { userId: number; fields: UserWriteFields },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
@@ -158,7 +158,7 @@ const describeIdentity = makeDescribe<Identity>(
 
 export async function listUserIdentities(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { userId: number; pageSize?: number; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {

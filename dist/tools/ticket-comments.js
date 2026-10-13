@@ -4,13 +4,14 @@ import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import { listCbp } from './cbp-list.js';
 import { buildComment } from './tickets.js';
 export async function addComment(client, cache, 
-// `markdown` is a resolved boolean (the register layer applies the markdown_conversion default);
-// the tool holds no hidden default of its own, matching the Guide write path.
+// `markdown` is a resolved boolean (the register layer applies the markdown_conversion default).
 params, securityLevel = 'standard') {
     if (params.body.trim() === '')
         throw new Error('Comment body must not be empty.');
-    const isPublic = params.public ?? true;
-    const comment = buildComment(params.body, params.markdown, isPublic);
+    const comment = buildComment(params.body, params.markdown, params.public);
+    // The visibility default is buildComment's (#64); read the resolved flag back so this
+    // summary can never claim a visibility other than the one that was sent.
+    const isPublic = comment.public === true;
     const raw = await client.request(`/tickets/${params.ticketId}.json`, {
         method: 'PUT',
         body: JSON.stringify({ ticket: { comment } }),

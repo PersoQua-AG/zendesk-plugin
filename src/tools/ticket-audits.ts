@@ -1,7 +1,7 @@
 // src/tools/ticket-audits.ts
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { screenRecordDeep, type RecordScreen, type Screener } from './screening.js';
 import { listCbp } from './cbp-list.js';
@@ -23,7 +23,7 @@ function describeAudit(a: Audit, screen: Screener): RecordScreen<Audit> {
 
 export async function getTicketAudits(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { ticketId: number; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {

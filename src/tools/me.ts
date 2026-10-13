@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 
@@ -17,7 +17,7 @@ type Me = z.infer<typeof MeResponse>;
 
 export async function getMe(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   securityLevel: SecurityLevel = 'standard',
 ): Promise<{ summary: string; cacheHandle: string }> {
   const raw = await client.request<unknown>('/users/me.json');

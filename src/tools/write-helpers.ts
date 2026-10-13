@@ -13,7 +13,7 @@
 // enforced by construction.
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import { makeScreener, screenRecordDeep, screenNote } from './screening.js';
 import { ZendeskConflictError, ZendeskPermissionError } from '../client/errors.js';
@@ -58,7 +58,7 @@ const ConflictRefetchSchema = z.object({
 
 export async function safeUpdateWithConflict(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   opts: SafeUpdateOptions,
 ): Promise<MutationResult> {
   const screener = makeScreener(opts.securityLevel);
@@ -139,7 +139,7 @@ const IdRecordSchema = z.object({ id: z.number() }).passthrough();
 
 export async function updateEntity<F extends object>(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   config: UpdateEntityConfig,
   id: number | string,
   fields: F,
@@ -179,7 +179,7 @@ export interface CreateEntityConfig {
 // precise field shape lives on callers). Screens the echo BEFORE caching, like every write helper.
 export async function createEntity<F extends object>(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   config: CreateEntityConfig,
   fields: F,
   securityLevel: SecurityLevel,

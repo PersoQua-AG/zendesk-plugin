@@ -8,6 +8,7 @@ import { describe, it, expect, afterAll, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:net';
+import { allowForeignBind } from '../setup/acquired-ports.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -55,6 +56,8 @@ async function strangerOn(port: number): Promise<void> {
   // it — measured: without this the case reddens roughly one run in three on a machine running the
   // suite concurrently, which is the very flakiness #48 is about.
   s.on('error', () => {});
+  // Declared to the bind-time guard (#74): a stranger is the fixture here, not a mistake.
+  allowForeignBind(port, 'a stranger planted in front of the probe budget');
   s.listen(port);
   try {
     await once(s, 'listening');
@@ -84,7 +87,7 @@ describe('the probe never collides with its own sockets', () => {
 describe('the probe budget', () => {
   // MAX_PROBES_PER_ACQUISITION bounds the blocked event loop, and that is worth having. What it
   // must not do is refuse while the very next candidate is free: the claims the rejected ports keep
-  // (login-harness.ts:289-291) mean no second pass repeats any of that work, so giving up costs a
+  // (freePort() in login-harness.ts) mean no second pass repeats any of that work, so giving up costs a
   // red run for nothing. Measured on the shipped shape: 64 strangers in front, freePort() throws
   // "gave up after probing 64 band ports", portHeldOn() on the next candidate returns '', and the
   // immediately following freePort() succeeds. A failure a retry undoes is a flake, and which

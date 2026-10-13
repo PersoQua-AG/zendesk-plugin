@@ -2,8 +2,18 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "rootDir": "..",
-    "noEmit": true
+    "noEmit": true,
+    // tests/ holds one .mjs helper (plugin/executor-guard-property.mjs). `allowJs` is what lets
+    // its CONSUMERS be checked at all — without it the import answers TS7016 and eight errors
+    // follow in executor-guard-properties.test.ts. `checkJs` is what keeps the helper itself from
+    // becoming the one exempted file in a folder whose whole claim is that nothing is exempt:
+    // turning it on surfaced 30 errors, one of which was a real JSDoc drift (`Built` was missing
+    // the `dir` field it has returned all along).
+    "allowJs": true,
+    "checkJs": true
   },
-  // Partial on purpose: the rest of tests/ follows once its type errors are fixed (#11 follow-up).
-  "include": ["../src", "auth", "setup", "skills", "../vitest.config.ts"]
+  // All of tests/, not a curated part of it (#57). While this list was partial, a type error in an
+  // excluded folder was invisible to `npm run build` (which sees src/ only) and to this check
+  // alike, so "the tests type-check" meant "the tests someone remembered to add here do".
+  "include": ["../src", ".", "../vitest.config.ts"]
 }

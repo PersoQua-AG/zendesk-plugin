@@ -1,6 +1,6 @@
 // tests/skills/data-analyst.test.ts
-// Deterministic halves of skills/data-analyst/SKILL.md (S0 rows DA-2..DA-5). DA-1 (no percentages)
-// is deliberately NOT asserted in either direction: it awaits the owner's decision (S0 finding 1).
+// Deterministic halves of skills/data-analyst/SKILL.md (S0 rows DA-1..DA-5). DA-1 (no percentages)
+// became deterministic with #65: the owner confirmed counts, never percentages.
 import { describe, it, expect } from 'vitest';
 import { json, once, probeRequests, read, toolsNamedIn, writesIn, type Call } from './probe.js';
 
@@ -22,6 +22,21 @@ function zendesk(c: Call): Response {
     });
   }
   return json({ satisfaction_ratings: [], meta: { has_more: false, after_cursor: null }, links: { next: null } });
+}
+
+// Same window, but with rated responses: two good, one bad, and one `offered` that is not a rating.
+function rated(c: Call): Response {
+  if (!c.path.endsWith('/satisfaction_ratings.json')) return zendesk(c);
+  return json({
+    satisfaction_ratings: [
+      { id: 1, score: 'good', comment: null },
+      { id: 2, score: 'good', comment: null },
+      { id: 3, score: 'bad', comment: null },
+      { id: 4, score: 'offered', comment: null },
+    ],
+    meta: { has_more: false, after_cursor: null },
+    links: { next: null },
+  });
 }
 
 const reportText = (args: Record<string, unknown>) => once('zendesk_report', args, zendesk);
@@ -47,6 +62,14 @@ describe('data-analyst: composite report (SKILL.md:19-23,29,44)', () => {
     const r = await reportText({ startTime: 0 });
     expect(r.calls).toEqual([]);
     expect(r.isError).toBe(true);
+  });
+
+  // T8 (#65): the shipped report's own text is the DA-1 evidence — counts, and no percent sign.
+  it('DA-1 failcheck: the report states CSAT counts and contains no percentage', async () => {
+    const r = await once('zendesk_report', JULY, rated);
+    expect(r.isError).toBe(false);
+    expect(r.text).toMatch(/^CSAT: 2 good \/ 1 bad \/ 3 rated$/m);
+    expect(r.text).not.toMatch(/%/);
   });
 
   it('DA-4 failcheck: a missing CSAT or duration is reported as missing, not as a measured zero', async () => {

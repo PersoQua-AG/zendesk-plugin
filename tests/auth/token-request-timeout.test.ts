@@ -8,6 +8,7 @@ import { exchangeCodeForTokens, refreshAccessToken } from '../../src/auth/oauth-
 import { runLogin, type LoginDeps } from '../../src/tools/login.js';
 import type { CallbackListener } from '../../src/auth/oauth-flow.js';
 import { authorizationUrl, config, deps, freePort, setupLoginHarness } from './login-harness.js';
+import { rejection } from './rejection.js';
 
 setupLoginHarness('login-timeout-');
 
@@ -85,7 +86,7 @@ describe('token request timeout', () => {
         json: () => Promise.reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError')),
       } as unknown as Response)) as unknown as typeof fetch;
 
-    const err = (await exchangeCodeForTokens(config(PORT), 'c', 'v', REDIRECT, stalling).catch((e: unknown) => e)) as Error;
+    const err = await rejection('exchangeCodeForTokens', exchangeCodeForTokens(config(PORT), 'c', 'v', REDIRECT, stalling));
     expect(err.message).toBe(
       'Token exchange failed: no reply from the Zendesk token endpoint within 30 seconds — check the ' +
         'network connection, and any proxy or VPN between this machine and Zendesk.',

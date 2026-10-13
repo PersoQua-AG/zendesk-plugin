@@ -6,7 +6,7 @@
 //   - first-reply / resolution time: activate→fulfill metric-event intervals, reported BOTH
 //     calendar (raw delta) and business (business-hours calculator).
 //   - SLA breaches: metric events with type === 'breach', grouped by metric (data source stated).
-//   - CSAT: good/bad counts + score% from satisfaction ratings.
+//   - CSAT: good / bad / rated counts from satisfaction ratings (counts only, never a percentage).
 import { z } from 'zod';
 import { businessMinutesBetween, calendarMinutesBetween } from './business-hours.js';
 import { summariseCsat, fetchRatings, DEFAULT_RATINGS_CAP } from './metrics.js';
@@ -137,7 +137,8 @@ export function renderReport(report, startTime, endTime) {
     // server, not requester free text — safe to print raw; `n` is a count.
     const breachLines = Object.entries(report.slaBreaches).map(([m, n]) => `  - ${m}: ${n}`);
     const breaches = breachLines.length > 0 ? breachLines.join('\n') : '  - none';
-    const csat = report.csat.scorePct === null ? 'no rated responses' : `${report.csat.scorePct}% (${report.csat.good} good / ${report.csat.bad} bad)`;
+    // Counts only: an unrated window says so rather than printing 0 good / 0 bad as a measurement.
+    const csat = report.csat.rated === 0 ? 'no rated responses' : `${report.csat.good} good / ${report.csat.bad} bad / ${report.csat.rated} rated`;
     return [
         `Zendesk report — ${new Date(startTime * 1000).toISOString()} → ${new Date(endTime * 1000).toISOString()}`,
         `Ticket volume (created in range): ${report.volume}`,

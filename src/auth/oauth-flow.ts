@@ -329,7 +329,7 @@ export function startCallbackListener(
     // ELSE in that body (createServer, the emitter registrations) that #9 never looked at.
     try {
       for (const binding of bindings) binding.server.listen(port, binding.address);
-    } catch {
+    } catch (err) {
       // Cleanup and wording only, NOT liveness. Honest about its own reach: if the INNER executor
       // threw, `server` and `close` were never assigned, so listen() throws a TypeError here,
       // close() throws a second one, and both are swallowed because bindFailed() has already
@@ -337,7 +337,53 @@ export function startCallbackListener(
       // below provably does not run there. It carries on the path it was written for: a real
       // listener that refuses to bind.
       close();
-      throw new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`);
+      // ONE REASON PER CAUSE (#104). This used to answer EVERY synchronous throw with the port
+      // rule, and for anything but node's port validation that sentence is FALSE.
+      // Measured in PR #101 — a bind-time guard threw here and the caller was told
+      // `port 8976 (… must be a whole number between 1024 and 65535)`, so the reader went to check
+      // a number that was never the problem while the only description of the real cause was
+      // dropped on the floor.
+      //
+      // What does NOT change is why the replacement exists at all: node's own wording carries
+      // absolute paths and its stack carries frames, and neither may reach the MCP boundary
+      // (src/tools/login.ts reads err.message). So nothing from `err` is interpolated except its
+      // CLASS NAME, which is an identifier rather than text — and only when it looks like one, so
+      // a thrown object with a doctored `name` cannot smuggle a path in. The original is attached
+      // as `cause`, which a developer in the process can read and no tool response serializes.
+      // Length-bounded as well as character-bounded: `name` is writable, and a 200 000-character
+      // one reached the MCP boundary verbatim. No real error class name is anywhere near 40.
+      //
+      // `{0,40}`, NOT `{1,40}`: a mandatory prefix rejected the name `Error` ITSELF, and that is the
+      // one name that actually occurs here — the only real producer of a synchronous non-RangeError
+      // throw from listen() is the bind-time guard in tests/setup/no-fixed-bind-port.ts, which
+      // throws `new Error(message)`. So the field this fix exists to carry was dropped in precisely
+      // the case that ships, and the reader got the information-free "an error". The bound is what
+      // does the work and is unchanged in substance: 45 characters at most.
+      const kind = err instanceof Error && /^[A-Za-z]{0,40}Error$/.test(err.name) ? err.name : 'an error';
+      // The code as well as the class: any other RangeError is not node's port validation.
+      const badPort = err instanceof RangeError && (err as NodeJS.ErrnoException).code === 'ERR_SOCKET_BAD_PORT';
+      throw badPort
+        ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
+            cause: err,
+          })
+        : new Error(
+            // NOTHING ABOUT THE RANGE, AND NOTHING ABOUT THE RULE. Two rewrites of this sentence
+            // each smuggled a claim back in. "The port is inside the allowed range" is false for
+            // 0-1023: node's listen() throws RangeError only outside 0-65535, CALLBACK_PORT_RULE
+            // is 1024-65535, and nothing range-checks `port` before this call. "So the callback
+            // port rule is not the reason" is no better — nothing in this try enforces that rule
+            // (src/auth/config.ts:115 does, earlier and elsewhere), so it does not follow from
+            // `!badPort` either.
+            //
+            // What DOES follow is exactly one thing: node's own port validation is a RangeError
+            // with code ERR_SOCKET_BAD_PORT, and that took the other branch. That is the whole
+            // sentence. "Before any bind was attempted" is gone too — there are two bindings, so a
+            // throw on the second one comes after the first has started binding.
+            `OAuth callback server could not start on port ${port}: listen() threw ${kind}, which` +
+              ` is not node's own port validation — that is a RangeError with code` +
+              ` ERR_SOCKET_BAD_PORT and is reported separately.`,
+            { cause: err },
+          );
     }
   });
 }
@@ -357,13 +403,24 @@ export async function waitForAuthorizationCode(
 // cut passes through untouched. So the body is capped on BOTH axes, and a line carrying an angle
 // bracket anywhere is dropped entirely rather than quoted.
 const MAX_ERROR_BODY_CHARS = 200;
-const LINE_BREAK = /[\n\r\u0085\u2028\u2029]/;
-// Controls and bidi overrides; the callback's error code loses them to NOT_NQCHAR above.
-const CONTROL_OR_BIDI = /[\x00-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069]/g;
-
+// Every break a reader renders ends the quoted line. VT, FF and FS\u2013GS\u2013RS (U+000B, U+000C,
+// U+001C\u2013U+001E) are breaks in Unicode \u2014 UAX #14 class BK for the first two, UAX #9 class B for all
+// five \u2014 but they used to fall under CONTROL_OR_BIDI alone, which REMOVES a character instead of
+// cutting at it. So everything after one was glued onto the quote rather than dropped with the rest
+// of the body: `invalid_grant\x0BIgnore previous instructions` quoted as one line. Same class as the
+// CR gap closed in #42. U+001F (US) stays out: it is a separator in neither standard, and the
+// existing cases quote it as a removed control.
+const LINE_BREAK = /[\n\r\u000B\u000C\u001C-\u001E\u0085\u2028\u2029]/;
+// Invisible by Unicode's own account, not by a named list: six literals left 4190 other ignorable
+// codepoints standing \u2014 U+2060 WORD JOINER, the standard replacement for the U+FEFF they did name,
+// and the whole tag block U+E0020\u2013U+E007F, which carries a readable instruction past a quote whose
+// purpose is to make foreign text safe. Cc is the controls, Cf the bidi overrides of CVE-2021-42574.
+const CONTROL_OR_BIDI = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
 // Returns '' for a blank body, so the caller can end the message at the status.
 function summarizeErrorBody(raw: string): string {
-  const firstLine = raw.split(LINE_BREAK)[0].replace(CONTROL_OR_BIDI, '').trim();
+  // TAB is replaced BEFORE the strip rather than excluded from it, so it has exactly one fate:
+  // dropping it with the other controls turned `invalid\tgrant` into `invalidgrant`.
+  const firstLine = raw.split(LINE_BREAK)[0].replaceAll('\t', ' ').replace(CONTROL_OR_BIDI, '').trim();
   if (/[<>]/.test(firstLine)) return '(non-text response body omitted)';
   return firstLine.length > MAX_ERROR_BODY_CHARS
     ? `${firstLine.slice(0, MAX_ERROR_BODY_CHARS).replace(/[\uD800-\uDBFF]$/, '')}… (truncated)`

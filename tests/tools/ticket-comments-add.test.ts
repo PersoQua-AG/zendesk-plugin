@@ -9,7 +9,9 @@ function cacheStub(): ResponseCache {
 }
 
 describe('addComment', () => {
-  it('PUTs an html_body comment (Markdown converted) defaulting to public', async () => {
+  // #64, owner decision: an omitted `public` must NOT reach the customer. Publishing an internal
+  // remark cannot be withdrawn; an internal note that should have been public can be reposted.
+  it('PUTs an html_body comment (Markdown converted) defaulting to an INTERNAL note', async () => {
     const client = { request: vi.fn().mockResolvedValue({ ticket: { id: 5 } }) } as unknown as ZendeskHttpClient;
     // markdown is a resolved boolean supplied by the register layer (no hidden tool default).
     const result = await addComment(client, cacheStub(), { ticketId: 5, body: 'Fixed in *v2*', markdown: true });
@@ -18,8 +20,8 @@ describe('addComment', () => {
     expect(init.method).toBe('PUT');
     const body = JSON.parse(init.body);
     expect(body.ticket.comment.html_body).toBe('<p>Fixed in <em>v2</em></p>');
-    expect(body.ticket.comment.public).toBe(true);
-    expect(result.summary).toBe('Added public comment to ticket #5');
+    expect(body.ticket.comment.public).toBe(false);
+    expect(result.summary).toBe('Added internal comment to ticket #5');
   });
 
   it('supports an internal (private) plain-text note', async () => {
@@ -29,5 +31,13 @@ describe('addComment', () => {
     expect(body.ticket.comment.body).toBe('internal');
     expect(body.ticket.comment.public).toBe(false);
     expect(result.summary).toBe('Added internal comment to ticket #5');
+  });
+
+  it('publishes to the customer only on an explicit public:true', async () => {
+    const client = { request: vi.fn().mockResolvedValue({ ticket: { id: 5 } }) } as unknown as ZendeskHttpClient;
+    const result = await addComment(client, cacheStub(), { ticketId: 5, body: 'shipped', public: true, markdown: false });
+    const body = JSON.parse((client.request as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+    expect(body.ticket.comment.public).toBe(true);
+    expect(result.summary).toBe('Added public comment to ticket #5');
   });
 });

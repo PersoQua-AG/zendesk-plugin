@@ -6,7 +6,7 @@
 // Records are screened at ingest via summariseScreened before caching.
 import { z } from 'zod';
 import type { ZendeskHttpClient } from '../../client/http-client.js';
-import type { ResponseCache } from '../../client/cache.js';
+import type { CacheStore } from '../../client/cache.js';
 import type { SecurityLevel } from '../../security/screen.js';
 import {
   makeDescribe,
@@ -155,7 +155,7 @@ const describeIncTicket = makeDescribe<IncrementalTicket>(
 
 export async function incrementalTickets(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { startTime: number; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -196,7 +196,7 @@ const describeIncUser = makeDescribe<IncrementalUser>('inc-user', (u) => `#${u.i
 
 export async function incrementalUsers(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { startTime: number; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {
@@ -267,7 +267,7 @@ export const MAX_EVENTS_CAP = 50_000;
 
 export async function ticketMetricEvents(
   client: ZendeskHttpClient,
-  cache: ResponseCache,
+  cache: CacheStore,
   params: { startTime: number; maxRecords?: number },
   securityLevel: SecurityLevel = 'standard',
 ): Promise<ReadResult> {

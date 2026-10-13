@@ -28,9 +28,9 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-// A Desktop Extension host starts the server BEFORE the user has filled in the configuration
-// dialog. Crashing there shows the user a dead extension with no explanation, so the server starts
-// and every tool answers with the field to fill in instead.
+// A host starts the server BEFORE anything is configured — Claude Code launches it on install, and
+// the environment may carry only part of what is needed. Crashing there shows a dead server with no
+// explanation, so it starts anyway and every tool answers with the field still to supply.
 function halfConfiguredEnv(): NodeJS.ProcessEnv {
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-unconfigured-'));
   dirs.push(dataDir);
@@ -66,6 +66,14 @@ describe('createServer with incomplete extension configuration', () => {
   // GATE-GAP 13: the remedy names the tool that can fix it. "Settings → Extensions → Zendesk" used to
   // come FIRST, and on the Claude Code plugin that dialog does not exist any more — #68 removed its
   // user_config, because the host bridge dropped the whole server over it.
+  //
+  // Both halves, in the form tests/plugin/security-level-claims.test.ts uses for shipped documents:
+  // the correction is THERE and the withdrawn promise is GONE. A remedy-only check would wave through
+  // an answer that still sent the operator to the retired extension's dialog, and this is the only
+  // gate on that text. It lives here rather than beside the shipped-text claims in
+  // security-level-claims.test.ts because the subject differs: that file reads STATIC files from disk
+  // and is scoped to #59's screening-level promise, while this string is built at RUNTIME by
+  // resolveOrDegrade, which is what this file is about.
   it('answers a Zendesk tool call by naming what is missing and how to supply it, without a stack trace', async () => {
     // A working Keychain, so what is missing really is the subdomain and not access to the Keychain.
     const client = await connect(halfConfiguredEnv(), keychain());
@@ -74,6 +82,11 @@ describe('createServer with incomplete extension configuration', () => {
     expect(text).toMatch(/zendesk_login/);
     expect(text).toMatch(/setup page/i);
     expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
+    // The retired MCPB path (#103) must not come back as a remedy: there is no Desktop Extension and
+    // no settings dialog on any shipped path, so an operator sent there cannot arrive.
+    expect(text).not.toMatch(/desktop extension/i);
+    expect(text).not.toMatch(/configuration dialog/i);
+    expect(text).not.toMatch(/Settings → Extensions/);
     await client.close();
   });
 

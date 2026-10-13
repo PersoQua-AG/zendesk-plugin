@@ -61,13 +61,17 @@ describe('fetchRatings', () => {
   });
 });
 
+// #65: KPIs are counts, never percentages. toEqual is exact, so a re-added scorePct/ratio/score
+// key fails here rather than leaking into the report and the cache.
 describe('summariseCsat', () => {
-  it('counts good/bad and computes score%', () => {
-    expect(summariseCsat([{ score: 'good' }, { score: 'good' }, { score: 'bad' }, { score: 'offered' }])).toEqual({
-      good: 2, bad: 1, rated: 3, scorePct: 67,
-    });
+  it('T1: counts good, bad and rated, and carries no percentage, ratio or score key', () => {
+    const csat = summariseCsat([{ score: 'good' }, { score: 'good' }, { score: 'bad' }, { score: 'offered' }]);
+    expect(csat).toEqual({ good: 2, bad: 1, rated: 3 });
+    expect(Object.keys(csat).filter((k) => /pct|percent|ratio|score/i.test(k))).toEqual([]);
   });
-  it('returns null score for no rated responses', () => {
-    expect(summariseCsat([{ score: 'offered' }, { score: 'unoffered' }])).toEqual({ good: 0, bad: 0, rated: 0, scorePct: null });
+
+  it('T2: offered and unoffered are not rated, and an empty batch rates nothing', () => {
+    expect(summariseCsat([{ score: 'offered' }, { score: 'unoffered' }])).toEqual({ good: 0, bad: 0, rated: 0 });
+    expect(summariseCsat([])).toEqual({ good: 0, bad: 0, rated: 0 });
   });
 });

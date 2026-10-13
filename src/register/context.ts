@@ -1,6 +1,6 @@
 // src/register/context.ts
 import type { ZendeskHttpClient } from '../client/http-client.js';
-import type { ResponseCache } from '../client/cache.js';
+import type { CacheStore } from '../client/cache.js';
 import type { SecurityLevel } from '../security/screen.js';
 import type { BusinessHoursConfig } from '../tools/analytics/business-hours.js';
 
@@ -9,7 +9,7 @@ import type { BusinessHoursConfig } from '../tools/analytics/business-hours.js';
 // server.ts small as later milestones add ~40 more tools.
 export interface ToolContext {
   httpClient: ZendeskHttpClient;
-  cache: ResponseCache;
+  cache: CacheStore;
   securityLevel: SecurityLevel;
   markdownDefault: boolean;
   // Business-hours basis for zendesk_report (PRD §8). Optional — the analytics registrar

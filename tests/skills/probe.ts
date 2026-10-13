@@ -123,8 +123,23 @@ export async function once(name: string, args: Record<string, unknown>, reply?: 
   }
 }
 
+// create_many and update_many are async jobs: the submit hands back a job id and the poll that
+// follows hands back a completed status. `submits` is how many requests precede the poll, which is
+// one for a plain bulk call and two when a show_many pre-read runs first.
+export const jobReply = (n: number, results: { id: number; success: boolean; errors?: string[] }[], submits = 1): Response =>
+  json(n <= submits ? { job_status: { id: 'job-1' } } : { job_status: { id: 'job-1', status: 'completed', results } });
+
 // A macro preview answers in the shape the apply tool accepts, so its confirmed PUT is reached too.
-const probeReply = (c: Call): Response => json(c.path.endsWith('/apply.json') ? { result: { ticket: {} } } : {});
+// A ticket read answers WITH a status, because the lifecycle guard (#61) refuses a status change
+// whose current status it could not read. Before that guard was fail-closed, this reply's empty `{}`
+// was accepted as "not closed" and the probe reached the write by walking through the hole it is
+// supposed to notice. 'open' is what sample() asks for, and every rule accepts it.
+const probeReply = (c: Call): Response => {
+  if (c.path.endsWith('/apply.json')) return json({ result: { ticket: {} } });
+  if (/\/tickets\/\d+\.json$/.test(c.path)) return json({ ticket: { id: 1, status: 'open' } });
+  if (c.path.includes('/tickets/show_many.json')) return json({ tickets: [{ id: 1, status: 'open' }] });
+  return json({});
+};
 
 // "METHOD path" of every request each tool issues on one sampled call (default: every registered tool).
 export async function probeRequests(names?: string[]): Promise<Record<string, string[]>> {

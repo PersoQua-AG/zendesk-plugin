@@ -57,6 +57,8 @@ const arrived = (port: number): NonNullable<LoginDeps['listen']> =>
   async (): Promise<CallbackListener> => ({
     promise: Promise.resolve({ code: 'auth-code', redirectUri: `http://localhost:${port}/callback` }),
     close: () => {},
+    // Never empty, by CallbackListener's own contract: a caller builds its URL from this.
+    addresses: ['127.0.0.1'],
   });
 
 const expectNoCanary = (haystack: string, where: string): void => {
