@@ -2,7 +2,7 @@
   "name": "zendesk",
   "displayName": "Zendesk Support Integration",
   "version": "1.1.0",
-  "description": "Run your Zendesk support desk from Claude Code",
+  "description": "Run your Zendesk support desk from Claude Code: triage and answer tickets, find users and organizations, review triggers, automations, macros and SLAs, and edit Help Center articles.",
   "author": { "name": "Persoqua", "email": "r.pfisterer@persoqua.de" },
   "license": "MIT",
   "homepage": "https://github.com/PersoQua-AG/zendesk-plugin",
