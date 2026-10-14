@@ -87,6 +87,7 @@ describe('the Claude Code plugin manifest', () => {
     });
 
     it('is exactly 182 characters long', () => {
-      expect([...plugin.description].length).toBe(182);    });
+      expect([...plugin.description].length).toBe(182);
+    });
   });
 });
