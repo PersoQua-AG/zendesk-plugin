@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitEnv } from '../setup/git-env.js';
+import { ciSteps } from '../setup/ci-steps.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-attribution.mjs');
@@ -201,12 +202,16 @@ describe('no-Claude-attribution guard (#86)', () => {
     const ci = () => readFileSync(CI, 'utf8');
 
     it('runs as its own CI job on both push and pull_request', () => {
-      expect(ci()).toContain('attribution-guard:');
-      expect(ci()).toContain('scripts/assert-no-attribution.mjs --range');
+      expect(
+        ciSteps('attribution-guard', "node scripts/assert-no-attribution.mjs --range '${{ steps.range.outputs.range }}'"),
+      ).toEqual([{ index: expect.any(Number), conditions: [] }]);
     });
 
     it('checks the pull request description too', () => {
-      expect(ci()).toContain("--stdin 'the pull request description'");
+      const command = `printf '%s' "$PR_BODY" | node scripts/assert-no-attribution.mjs --stdin 'the pull request description'`;
+      expect(ciSteps('attribution-guard', command)).toEqual([
+        { index: expect.any(Number), conditions: ["github.event_name == 'pull_request'"] },
+      ]);
     });
 
     // Both halves of the event coverage, because both revert to green. `edited` is not a
@@ -218,7 +223,8 @@ describe('no-Claude-attribution guard (#86)', () => {
     });
 
     it('computes the push range from the merge base, which no cancelled run can shorten', () => {
-      expect(ci()).toContain('git merge-base FETCH_HEAD "$AFTER"');
+      const command = 'base="$(git merge-base FETCH_HEAD "$AFTER")"';
+      expect(ciSteps('attribution-guard', command)).toEqual([{ index: expect.any(Number), conditions: [] }]);
       expect(ci()).not.toContain('$BEFORE..$AFTER');
     });
 

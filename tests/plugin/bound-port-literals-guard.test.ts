@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitEnv } from '../setup/git-env.js';
+import { ciSteps } from '../setup/ci-steps.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-bound-port-literals.mjs');
@@ -303,9 +304,9 @@ describe('the bound-port guard as a script', () => {
     expect(pkg.scripts['check:ports']).toBe(
       'node scripts/assert-no-bound-port-literals.mjs tests',
     );
-    expect(readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8')).toContain(
-      '- run: npm run check:ports',
-    );
+    expect(ciSteps('build-test', 'npm run check:ports')).toEqual([
+      { index: expect.any(Number), conditions: [] },
+    ]);
   });
 
   // EVERY SPELLING A TEST SOURCE CARRIES, not only .ts. The promise is "every test file", and
