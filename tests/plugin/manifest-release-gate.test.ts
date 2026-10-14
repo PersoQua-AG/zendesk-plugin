@@ -127,19 +127,37 @@ describe('manifest release gate', () => {
 
   // The version fan-out: seven hand-kept declarations, package.json the reference and six sites
   // measured against it. Putting any ONE of them out of step must fail the gate.
-  it.each([
-    'package.json',
+  //
+  // Asserted on WHICH sites are flagged, never on substrings of stderr: every message ends in
+  // ", package.json declares <ref>" and both package-lock sites print the same filename, so a needle
+  // like `package-lock.json` was carried by whichever line existed — a reader whose disagreement was
+  // reported under the wrong label stayed green. A flagged site is the label before the first `:`.
+  const flagged = (stderr: string): string[] =>
+    stderr
+      .split('\n')
+      .filter((l) => l.startsWith('  - '))
+      .map((l) => l.slice(4).split(':')[0]);
+
+  const SITES = [
     'package-lock.json',
     'package-lock.json (packages."")',
     '.claude-plugin/plugin.json',
     '.claude-plugin/marketplace.json',
     'src/server.ts',
     'dist/server.js',
-  ])('rejects a tree where %s disagrees with the others', (site) => {
+  ];
+
+  it.each(SITES)('rejects a tree where %s disagrees with package.json', (site) => {
     const r = runValidatorOn({}, { [site]: '9.9.9' });
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain(`${site.split(' ')[0]}`);
+    expect(flagged(r.stderr)).toEqual([site]);
     expect(r.stderr).toContain('9.9.9');
+  });
+
+  it('rejects every other site when package.json, the reference, moves', () => {
+    const r = runValidatorOn({}, { 'package.json': '9.9.9' });
+    expect(r.status).not.toBe(0);
+    expect(flagged(r.stderr)).toHaveLength(SITES.length);
   });
 
   it.each(['.claude-plugin/marketplace.json', 'src/server.ts', 'dist/server.js'])(
