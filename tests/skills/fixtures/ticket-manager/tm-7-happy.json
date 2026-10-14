@@ -19,6 +19,16 @@
       "file": "skills/ticket-manager/SKILL.md",
       "line": 30,
       "quote": "3. Propose the change; on confirmation call"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 12,
+      "quote": "Fetch the ticket with `zendesk_get_ticket` first."
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 30,
+      "quote": "on confirmation call `zendesk_update_ticket`"
     }
   ],
   "input": {

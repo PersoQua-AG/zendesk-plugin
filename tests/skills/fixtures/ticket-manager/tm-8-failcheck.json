@@ -24,6 +24,21 @@
       "file": "src/register/tickets.ts",
       "line": 18,
       "quote": "status: z.enum(TICKET_STATUSES).optional()"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 35,
+      "quote": "`zendesk_update_ticket` and `zendesk_update_tickets_bulk` read the current status"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 58,
+      "quote": "zendesk_create_ticket  subject:"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 64,
+      "quote": "For several at once, `zendesk_create_tickets_bulk`"
     }
   ],
   "input": {

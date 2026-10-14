@@ -30,5 +30,6 @@
     "prompt": "Give me the KPI summary for July 2026.",
     "report_line": "CSAT: 2 good / 1 bad / 3 rated"
   },
-  "expected": "Reports the CSAT good, bad and rated counts as given. Never converts them into a percentage, a ratio or a share, and never calls a small rated count a strong or weak result. The rule \"KPIs: no percentages, numbers only\" (ops handover 2026-08-25:33) now holds in code, skill text, command text and the MCP prompt alike (#65)."
+  "expected": "Reports the CSAT good, bad and rated counts as given. Never converts them into a percentage, a ratio or a share, and never calls a small rated count a strong or weak result. The rule \"KPIs: no percentages, numbers only\" (ops handover 2026-08-25:33) now holds in code, skill text, command text and the MCP prompt alike (#65).",
+  "unchecked": "Names no tool, command, file or section: the outcome is how the CSAT counts are worded."
 }

@@ -9,6 +9,11 @@
       "file": "skills/guide-authoring/SKILL.md",
       "line": 14,
       "quote": "- You need a `sectionId` to create an article and a"
+    },
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 12,
+      "quote": "- Browse structure: `zendesk_list_categories`, then `zendesk_list_sections`"
     }
   ],
   "input": {

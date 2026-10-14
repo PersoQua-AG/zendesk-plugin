@@ -15,7 +15,7 @@ describe('recorded skill cases', () => {
     expect(['recorded', 'unenforced', 'pending-owner-decision']).toContain(c.status);
     expect(typeof c.input.prompt).toBe('string');
     // `expected` is prose for whoever grades a run; CI cannot judge prose, so only what it names is checked below.
-    expect(typeof c.expected).toBe('string');
+    expect(c.expected).toMatch(/\S/);
     expect(c.source.length).toBeGreaterThan(0);
   });
 
@@ -30,26 +30,30 @@ describe('recorded skill cases', () => {
     expect(drifted).toEqual([]);
   });
 
-  it('every tool, command, file and SKILL.md section an expected names exists', async () => {
+  it('every tool, command, file and section an expected names is cited by its own case; a case naming none says why', async () => {
     const b = await boot();
     const tools = await b.schemas().finally(() => b.close());
-    const refs = cases.flatMap((c) => {
-      const skill = `skills/${c.skill}/SKILL.md`;
+    const wrong = cases.flatMap((c) => {
       const said = c.expected ?? ''; // a missing field is the well-formed case's red, not a TypeError here
-      return [
-        ...toolsNamedIn(said).map((t) => ({ kind: 'tool', ref: t, ok: tools.has(t) })),
-        ...[...said.matchAll(/\/zendesk:([a-z-]+)/g)].map(([, n]) => ({ kind: 'command', ref: `commands/${n}.md`, ok: existsSync(join(root, 'commands', `${n}.md`)) })),
-        ...(said.match(/\b(?:src|tests|skills|commands|agents)\/[\w./-]+\.(?:ts|md)\b/g) ?? []).map((f) => ({ kind: 'file', ref: f, ok: existsSync(join(root, f)) })),
-        ...[...said.matchAll(/SKILL\.md "([^"]+)"/g)].map(([, h]) => ({
-          kind: 'section',
-          ref: `${skill} ## ${h}`,
-          ok: existsSync(join(root, skill)) && read(skill).split('\n').includes(`## ${h}`),
-        })),
-      ].map((r) => ({ ...r, ref: `${c.id}: ${r.ref}` }));
+      const files = c.source.map((s) => s.file);
+      const quotedTools = toolsNamedIn(c.source.map((s) => s.quote).join('\n'));
+      const skill = `skills/${c.skill}/SKILL.md`;
+      const refs: Array<[string, boolean]> = [
+        ...toolsNamedIn(said).map((t): [string, boolean] => [t, tools.has(t) && quotedTools.includes(t)]),
+        ...[...said.matchAll(/\/zendesk:([\w-]+)/gi)].map(([, n]): [string, boolean] => [`commands/${n}.md`, files.includes(`commands/${n}.md`)]),
+        ...(said.match(/(?:\.?[\w-]+\/)+[\w.-]+\.(?:ts|mjs|js|md|json|ya?ml)\b/g) ?? []).map((f): [string, boolean] => [f, files.includes(f)]),
+        ...[...said.matchAll(/SKILL\.md "([^"]+)"/g)].map(([, h]): [string, boolean] => [
+          `${skill} ## ${h}`,
+          c.source.some((s) => s.file === skill && s.quote === `## ${h}`),
+        ]),
+      ];
+      const declared =
+        refs.length === 0
+          ? c.unchecked?.trim() ? [] : ['names nothing checkable and gives no `unchecked` reason']
+          : c.unchecked === undefined ? [] : ['names something yet is marked `unchecked`'];
+      return [...refs.filter(([, ok]) => !ok).map(([r]) => `${r} is not registered or not cited`), ...declared].map((p) => `${c.id}: ${p}`);
     });
-    // Each kind is named by at least one real case, so an extractor that stops matching goes red here, not silent.
-    expect(new Set(refs.map((r) => r.kind))).toEqual(new Set(['tool', 'command', 'file', 'section']));
-    expect(refs.filter((r) => !r.ok).map((r) => r.ref)).toEqual([]);
+    expect(wrong).toEqual([]);
   });
 
   it('every skill has at least one happy and one failcheck instruction-following case', () => {
