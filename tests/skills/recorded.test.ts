@@ -35,11 +35,12 @@ describe('recorded skill cases', () => {
     const tools = await b.schemas().finally(() => b.close());
     const refs = cases.flatMap((c) => {
       const skill = `skills/${c.skill}/SKILL.md`;
+      const said = c.expected ?? ''; // a missing field is the well-formed case's red, not a TypeError here
       return [
-        ...toolsNamedIn(c.expected).map((t) => ({ kind: 'tool', ref: t, ok: tools.has(t) })),
-        ...[...c.expected.matchAll(/\/zendesk:([a-z-]+)/g)].map(([, n]) => ({ kind: 'command', ref: `commands/${n}.md`, ok: existsSync(join(root, 'commands', `${n}.md`)) })),
-        ...(c.expected.match(/\b(?:src|tests|skills|commands|agents)\/[\w./-]+\.(?:ts|md)\b/g) ?? []).map((f) => ({ kind: 'file', ref: f, ok: existsSync(join(root, f)) })),
-        ...[...c.expected.matchAll(/SKILL\.md "([^"]+)"/g)].map(([, h]) => ({
+        ...toolsNamedIn(said).map((t) => ({ kind: 'tool', ref: t, ok: tools.has(t) })),
+        ...[...said.matchAll(/\/zendesk:([a-z-]+)/g)].map(([, n]) => ({ kind: 'command', ref: `commands/${n}.md`, ok: existsSync(join(root, 'commands', `${n}.md`)) })),
+        ...(said.match(/\b(?:src|tests|skills|commands|agents)\/[\w./-]+\.(?:ts|md)\b/g) ?? []).map((f) => ({ kind: 'file', ref: f, ok: existsSync(join(root, f)) })),
+        ...[...said.matchAll(/SKILL\.md "([^"]+)"/g)].map(([, h]) => ({
           kind: 'section',
           ref: `${skill} ## ${h}`,
           ok: existsSync(join(root, skill)) && read(skill).split('\n').includes(`## ${h}`),
