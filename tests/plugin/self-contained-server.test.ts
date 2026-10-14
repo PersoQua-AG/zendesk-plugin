@@ -9,8 +9,25 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../../src/server.js';
-import { keychain } from '../auth/keychain.js';
+import { CONFIG_ACCOUNTS } from '../../src/auth/store-key.js';
+import { TokenStore } from '../../src/auth/token-store.js';
+import { fakeKeychain, keychain, TOKEN_STORE_ACCOUNT } from '../auth/keychain.js';
 import { gitEnv } from '../setup/git-env.js';
+
+// Every execFileSync but git's lands in a fake Keychain: nothing in this file can run the real `security`.
+vi.mock('node:child_process', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:child_process')>();
+  const execFileSync = (bin: string, args: string[], options: { input?: string }) => {
+    if (bin === 'git') return real.execFileSync(bin, args, options as never);
+    execs.push({ bin, args });
+    const { status, output } = fake.run(args, options.input);
+    if (status !== 0) throw Object.assign(new Error(`security exited ${status}`), { status });
+    return output;
+  };
+  return { ...real, execFileSync };
+});
+const fake = fakeKeychain();
+const execs: { bin: string; args: string[] }[] = [];
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // Realpathed so the launch is not through a symlink (macOS tmpdir is /var -> /private/var).
@@ -99,15 +116,40 @@ describe('plugin server from a copy without node_modules', () => {
   }, 60_000);
 
   // What the child used to prove by doing it, and now must not: that the bundler kept the Keychain path.
-  // esbuild tree-shakes, node:child_process is reached from exactly one module, and a bundle that dropped
-  // it would fail at the first login on a real machine rather than here.
-  it('keeps the Keychain path in the bundle the manifest launches', () => {
-    const bundle = readFileSync(join(root, 'dist', 'plugin', 'server.js'), 'utf8');
-    expect(bundle).toContain('node:child_process');
-    expect(bundle).toContain('/usr/bin/security');
-    expect(bundle).toContain('find-generic-password');
-    expect(bundle).toContain('add-generic-password');
-    // And the stdin form, because an argv form would put the customer's client secret in `ps`.
-    expect(bundle).toMatch(/"-U",\s*"-w"/);
+  // So the bundle is driven, not read: its own runSecurity, reached through its only export, with
+  // node:child_process faked above so `/usr/bin/security` is never executed. A first start must write a key
+  // through stdin, and a second start must read that same key back and decrypt tokens with it.
+  it('keeps the Keychain path in the bundle the manifest launches', async () => {
+    const dataDir = mkdtempSync(join(scratch, 'data-bundle-'));
+    const bundle = await import(join(root, 'dist', 'plugin', 'server.js'));
+    bundle.createServer({ ZENDESK_DATA_DIR: dataDir });
+    const key = fake.items.get(TOKEN_STORE_ACCOUNT) as string;
+    expect(Buffer.from(key ?? '', 'base64')).toHaveLength(32);
+
+    for (const account of Object.values(CONFIG_ACCOUNTS)) fake.items.set(account, `stored-${account}`);
+    new TokenStore(join(dataDir, 'tokens.enc'), key).save({ accessToken: 'at-1', refreshToken: 'rt-1', expiresAt: Date.now() + 3_600_000 });
+    const requests: string[] = [];
+    const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
+      requests.push(`${input} ${new Headers(init?.headers).get('authorization')}`);
+      return Response.json({ user: { id: 1, name: 'Agent', email: 'agent@acme.test', role: 'admin' } });
+    }) as unknown as typeof fetch;
+    const { server } = bundle.createServer({ ZENDESK_DATA_DIR: dataDir }, { fetchImpl });
+    const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'bundle', version: '0.0.0' });
+    await Promise.all([server.connect(serverT), client.connect(clientT)]);
+    await client.callTool({ name: 'zendesk_get_me', arguments: {} });
+    await client.close();
+
+    expect(requests).toEqual(['https://stored-oauth-subdomain.zendesk.com/api/v2/users/me.json Bearer at-1']);
+    const find = (account: string) => ['find-generic-password', '-s', 'zendesk-plugin', '-a', account, '-w'];
+    const config = Object.values(CONFIG_ACCOUNTS).map(find);
+    // The stdin form, because an argv form would put the key in `ps`; the fake also demands it twice.
+    const add = ['add-generic-password', '-s', 'zendesk-plugin', '-a', TOKEN_STORE_ACCOUNT, '-U', '-w'];
+    expect(execs).toEqual(
+      [...config, ...config, find(TOKEN_STORE_ACCOUNT), add, ...config, find(TOKEN_STORE_ACCOUNT)].map((args) => ({
+        bin: '/usr/bin/security',
+        args,
+      })),
+    );
   });
 });
