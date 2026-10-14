@@ -1,6 +1,5 @@
 import { describe, it, expect, afterAll, vi } from 'vitest';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { execFileSync, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
@@ -14,20 +13,31 @@ import { TokenStore } from '../../src/auth/token-store.js';
 import { fakeKeychain, keychain, TOKEN_STORE_ACCOUNT } from '../auth/keychain.js';
 import { gitEnv } from '../setup/git-env.js';
 
-// Every execFileSync but git's lands in a fake Keychain: nothing in this file can run the real `security`.
+// Every export of node:child_process refuses and is recorded, except `security` through execFileSync, which
+// lands in a fake Keychain: nothing that imports the module here can start a real process. This file's own
+// git and spawn calls take the real module explicitly.
 vi.mock('node:child_process', async (importOriginal) => {
-  const real = await importOriginal<typeof import('node:child_process')>();
-  const execFileSync = (bin: string, args: string[], options: { input?: string }) => {
-    if (bin === 'git') return real.execFileSync(bin, args, options as never);
-    execs.push({ bin, args });
-    const { status, output } = fake.run(args, options.input);
-    if (status !== 0) throw Object.assign(new Error(`security exited ${status}`), { status });
-    return output;
+  const refuse = (name: string) => (...args: unknown[]) => {
+    unexpected.push(`${name}(${String(args[0])})`);
+    throw new Error(`unexpected child_process call: ${name}(${String(args[0])})`);
   };
-  return { ...real, execFileSync };
+  const fakes: Record<string, unknown> = Object.fromEntries(
+    Object.keys(await importOriginal<object>()).map((name) => [name, refuse(name)]),
+  );
+  fakes.execFileSync = (bin: string, args: string[], options?: { input?: string; encoding?: string }) => {
+    if (bin !== '/usr/bin/security') return refuse('execFileSync')(bin);
+    execs.push(args);
+    const { status, output } = fake.run(args, options?.input);
+    if (status !== 0) throw Object.assign(new Error(`security exited ${status}`), { status });
+    // Node's contract: a Buffer unless a string encoding was asked for.
+    return options?.encoding && options.encoding !== 'buffer' ? output : Buffer.from(output);
+  };
+  return { ...fakes, default: fakes };
 });
+const { execFileSync, spawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process');
 const fake = fakeKeychain();
-const execs: { bin: string; args: string[] }[] = [];
+const execs: string[][] = [];
+const unexpected: string[] = [];
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // Realpathed so the launch is not through a symlink (macOS tmpdir is /var -> /private/var).
@@ -123,6 +133,7 @@ describe('plugin server from a copy without node_modules', () => {
     const dataDir = mkdtempSync(join(scratch, 'data-bundle-'));
     const bundle = await import(join(root, 'dist', 'plugin', 'server.js'));
     bundle.createServer({ ZENDESK_DATA_DIR: dataDir });
+    expect(unexpected).toEqual([]);
     const key = fake.items.get(TOKEN_STORE_ACCOUNT) as string;
     expect(Buffer.from(key ?? '', 'base64')).toHaveLength(32);
 
@@ -145,11 +156,7 @@ describe('plugin server from a copy without node_modules', () => {
     const config = Object.values(CONFIG_ACCOUNTS).map(find);
     // The stdin form, because an argv form would put the key in `ps`; the fake also demands it twice.
     const add = ['add-generic-password', '-s', 'zendesk-plugin', '-a', TOKEN_STORE_ACCOUNT, '-U', '-w'];
-    expect(execs).toEqual(
-      [...config, ...config, find(TOKEN_STORE_ACCOUNT), add, ...config, find(TOKEN_STORE_ACCOUNT)].map((args) => ({
-        bin: '/usr/bin/security',
-        args,
-      })),
-    );
+    expect(execs).toEqual([...config, ...config, find(TOKEN_STORE_ACCOUNT), add, ...config, find(TOKEN_STORE_ACCOUNT)]);
+    expect(unexpected).toEqual([]);
   });
 });
