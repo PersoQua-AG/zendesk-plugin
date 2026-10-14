@@ -9,7 +9,6 @@ import { ciSteps, ciTriggers, ciUses, ciWorkflow } from '../setup/ci-steps.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-attribution.mjs');
-const CI = join(root, '.github', 'workflows', 'ci.yml');
 
 const temps: string[] = [];
 afterEach(() => {
@@ -199,8 +198,6 @@ describe('no-Claude-attribution guard (#86)', () => {
   // The guard that is not wired into CI is a script nobody runs — the exact failure #86 was filed
   // about, one level up. Both events, because only one of them runs against the target branch.
   describe('wiring', () => {
-    const ci = () => readFileSync(CI, 'utf8');
-
     it('runs as its own CI job on both push and pull_request', () => {
       expect(Object.keys(ciTriggers() ?? {})).toEqual(['push', 'pull_request']);
       expect(
@@ -213,6 +210,8 @@ describe('no-Claude-attribution guard (#86)', () => {
       expect(ciSteps('attribution-guard', command)).toEqual([
         { index: expect.any(Number), conditions: ["github.event_name == 'pull_request'"] },
       ]);
+      const [{ index }] = ciSteps('attribution-guard', command);
+      expect(ciWorkflow().jobs?.['attribution-guard']?.steps?.[index]?.env).toEqual({ PR_BODY: '${{ github.event.pull_request.body }}' });
     });
 
     // Both halves of the event coverage, because both revert to green. `edited` is not a
@@ -225,12 +224,31 @@ describe('no-Claude-attribution guard (#86)', () => {
       expect(ciTriggers()).toEqual({ push: null, pull_request: { types: ['opened', 'synchronize', 'reopened', 'edited'] } });
     });
 
+    // The whole step, env and script, because any other start for the push range is one more line:
+    // `${{ github.event.before }}`, a `BEFORE` env, a `base=` reassigned after the merge base. Shell
+    // comments and indentation are not the script.
     it('computes the push range from the merge base, which no cancelled run can shorten', () => {
-      // A line of the range script, not a step of its own. An `exit 0` above it is not seen here; it
-      // leaves the range output empty, and `--range ''` exits 1 (case 'refuses a range git cannot resolve').
       const range = ciWorkflow().jobs?.['attribution-guard']?.steps?.find((s) => s.id === 'range');
-      expect(String(range?.run).split('\n').map((l) => l.trim())).toContain('base="$(git merge-base FETCH_HEAD "$AFTER")"');
-      expect(ci()).not.toContain('$BEFORE..$AFTER');
+      expect(range?.env).toEqual({
+        EVENT: '${{ github.event_name }}',
+        BASE_SHA: '${{ github.event.pull_request.base.sha }}',
+        HEAD_SHA: '${{ github.event.pull_request.head.sha }}',
+        AFTER: '${{ github.sha }}',
+        DEFAULT_BRANCH: '${{ github.event.repository.default_branch }}',
+      });
+      expect(String(range?.run).split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))).toEqual([
+        'set -euo pipefail',
+        'if [ "$EVENT" = "pull_request" ]; then',
+        'range="$BASE_SHA..$HEAD_SHA"',
+        'else',
+        'git fetch --no-tags origin "$DEFAULT_BRANCH"',
+        'base="$(git merge-base FETCH_HEAD "$AFTER")"',
+        'if [ "$base" = "$AFTER" ]; then base="$AFTER^"; fi',
+        'range="$base..$AFTER"',
+        'fi',
+        'echo "range=$range" >> "$GITHUB_OUTPUT"',
+        'echo "Checking $range"',
+      ]);
     });
 
     // A shallow clone has no base commit, so the range would not resolve and the job would be

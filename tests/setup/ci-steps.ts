@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 type Gate = { if?: unknown; 'continue-on-error'?: unknown };
-type Step = Gate & { id?: string; run?: unknown; uses?: unknown; with?: Record<string, unknown> };
+type Step = Gate & { id?: string; env?: Record<string, unknown>; run?: unknown; uses?: unknown; with?: Record<string, unknown> };
 type Workflow = { on?: unknown; true?: unknown; jobs?: Record<string, Gate & { steps?: Step[] }> };
 
 const CI_WORKFLOW = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'ci.yml');
