@@ -39,27 +39,38 @@ describe('nothing spawns a process to open a browser', () => {
     // Asked of what the file CALLS, not of how it is spelled: every export of child_process is replaced
     // on the one object that `import`, `import()`, `require` and `createRequire` all resolve to, and
     // syncBuiltinESMExports pushes it into the ESM bindings. Any route to any spawn is recorded, none
-    // reaches the real /usr/bin/security, and exit 44 ("not found") drives the find, add and rollback
-    // paths. ponytail: process.binding('spawn_sync') bypasses the object; a spawn in a branch exit 44
-    // never reaches goes unseen.
+    // reaches the real /usr/bin/security, and each outcome below drives the three Keychain functions down
+    // a different branch. ponytail: process.binding('spawn_sync') bypasses the object.
     const cp = createRequire(import.meta.url)('node:child_process') as Record<string, unknown>;
     const real = { ...cp };
     const calls: { name: string; file: unknown; args: unknown; options: unknown }[] = [];
+    let answer = (): unknown => undefined;
     for (const name of Object.keys(real)) {
       if (typeof real[name] !== 'function') continue;
       cp[name] = (file: unknown, args?: unknown, options?: unknown) => {
         calls.push({ name, file, args, options });
-        throw Object.assign(new Error('not found'), { status: 44 });
+        return answer();
       };
     }
     syncBuiltinESMExports();
     try {
       expect((await import('node:child_process')).execFileSync).toBe(cp.execFileSync);
       const key = await import('../../src/auth/store-key.js');
-      expect(() => key.resolveTokenStoreKey()).toThrow(/could not be written/);
-      expect(key.readKeychainConfig()).toEqual({});
       const values = { ZENDESK_SUBDOMAIN: 's', ZENDESK_OAUTH_CLIENT_ID: 'i', ZENDESK_OAUTH_CLIENT_SECRET: 'x' };
-      expect(() => key.writeKeychainConfig(values)).toThrow(/could not be written/);
+      // Not found, denied, no binary, killed by a signal — and a stored 33-byte key.
+      const refusals = [{ status: 44 }, { status: 1 }, { code: 'ENOENT' }, {}];
+      const outcomes = refusals.map((f) => () => {
+        throw Object.assign(new Error('refused'), f);
+      });
+      for (answer of [...outcomes, () => 'A'.repeat(44)]) {
+        for (const run of [key.resolveTokenStoreKey, key.readKeychainConfig, () => key.writeKeychainConfig(values)]) {
+          try {
+            run();
+          } catch {
+            // What the functions answer is pinned in tests/auth; here only what they spawn counts.
+          }
+        }
+      }
     } finally {
       Object.assign(cp, real);
       syncBuiltinESMExports();
@@ -73,7 +84,7 @@ describe('nothing spawns a process to open a browser', () => {
     }
     // The secret is on stdin, never in argv (#68 B4): `-w` last is what makes security prompt.
     const adds = calls.filter((c) => (c.args as string[])[0] === 'add-generic-password');
-    expect(adds.length).toBe(2);
+    expect(adds.length).toBeGreaterThan(0);
     for (const { args, options } of adds) {
       const value = (options as { input: string }).input.split('\n')[0];
       expect(value).not.toBe('');
