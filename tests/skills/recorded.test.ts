@@ -15,7 +15,7 @@ describe('recorded skill cases', () => {
     expect(['recorded', 'unenforced', 'pending-owner-decision']).toContain(c.status);
     expect(typeof c.input.prompt).toBe('string');
     // `expected` is prose for whoever grades a run; CI cannot judge prose, so only what it names is checked below.
-    expect(c.expected).toMatch(/\S/);
+    expect(c.expected?.trim(), `${c.id}: expected is missing or blank`).toBeTruthy();
     expect(c.source.length).toBeGreaterThan(0);
   });
 
