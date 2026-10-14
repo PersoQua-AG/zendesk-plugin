@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitEnv } from '../setup/git-env.js';
-import { ciSteps, ciTriggers, ciUses, ciWorkflow } from '../setup/ci-steps.js';
+import { ciRunSteps, ciSteps, ciTriggers, ciUses } from '../setup/ci-steps.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-attribution.mjs');
@@ -24,11 +24,14 @@ const run = (args: string[], { input, cwd = root, guard = GUARD }: { input?: str
 
 // A real repository with real commits, because the guard reads commit bodies through git. Asserting
 // against a string in a file would not notice the day `git log --format` stops producing records.
+const isolated = () => ({ ...gitEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' });
+const gitIn = (dir: string, ...args: string[]) =>
+  spawnSync('git', args, { cwd: dir, encoding: 'utf8', env: isolated() }).stdout.trim();
+
 function repoWith(bodies: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'attribution-guard-'));
   temps.push(dir);
-  const git = (...args: string[]) =>
-    spawnSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...gitEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } });
+  const git = (...args: string[]) => gitIn(dir, ...args);
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 't@example.com');
   git('config', 'user.name', 'T');
@@ -42,6 +45,12 @@ function repoWith(bodies: string[]): string {
   });
   return dir;
 }
+
+// GitHub substitutes `${{ expr }}` before the shell starts; what the event does not carry is ''.
+const expand = (text: string, ctx: Record<string, string>) =>
+  text.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_, e: string) => ctx[e] ?? '');
+const expandAll = (env: Record<string, unknown> | undefined, ctx: Record<string, string>) =>
+  Object.fromEntries(Object.entries(env ?? {}).map(([k, v]) => [k, expand(String(v), ctx)]));
 
 const inRepo = (dir: string, args: string[]): Run => run(args, { cwd: dir });
 
@@ -210,8 +219,8 @@ describe('no-Claude-attribution guard (#86)', () => {
       expect(ciSteps('attribution-guard', command)).toEqual([
         { index: expect.any(Number), conditions: ["github.event_name == 'pull_request'"] },
       ]);
-      const [{ index }] = ciSteps('attribution-guard', command);
-      expect(ciWorkflow().jobs?.['attribution-guard']?.steps?.[index]?.env).toEqual({ PR_BODY: '${{ github.event.pull_request.body }}' });
+      const step = ciRunSteps('attribution-guard').find((s) => s.step.run === command)?.step;
+      expect(expandAll(step?.env, { 'github.event.pull_request.body': 'the body' })).toEqual({ PR_BODY: 'the body' });
     });
 
     // Both halves of the event coverage, because both revert to green. `edited` is not a
@@ -224,31 +233,51 @@ describe('no-Claude-attribution guard (#86)', () => {
       expect(ciTriggers()).toEqual({ push: null, pull_request: { types: ['opened', 'synchronize', 'reopened', 'edited'] } });
     });
 
-    // The whole step, env and script, because any other start for the push range is one more line:
-    // `${{ github.event.before }}`, a `BEFORE` env, a `base=` reassigned after the merge base. Shell
-    // comments and indentation are not the script.
-    it('computes the push range from the merge base, which no cancelled run can shorten', () => {
-      const range = ciWorkflow().jobs?.['attribution-guard']?.steps?.find((s) => s.id === 'range');
-      expect(range?.env).toEqual({
-        EVENT: '${{ github.event_name }}',
-        BASE_SHA: '${{ github.event.pull_request.base.sha }}',
-        HEAD_SHA: '${{ github.event.pull_request.head.sha }}',
-        AFTER: '${{ github.sha }}',
-        DEFAULT_BRANCH: '${{ github.event.repository.default_branch }}',
+    // The range step RUN, as GitHub would run it, in a repository where the push before this one
+    // was cancelled: main is base, m; the branch is base, f1, f2 (before), f3 (this push).
+    function rangeFor(event: (fx: Record<string, string>) => Record<string, string>) {
+      const dir = repoWith(['m']);
+      const git = (...args: string[]) => gitIn(dir, ...args);
+      const fx: Record<string, string> = { base: git('rev-parse', 'HEAD~1'), m: git('rev-parse', 'HEAD') };
+      git('checkout', '-q', '-b', 'feature', fx.base);
+      for (const c of ['f1', 'f2', 'f3']) {
+        writeFileSync(join(dir, 'f'), `${c}\n`);
+        git('commit', '-q', '-am', c);
+        fx[c] = git('rev-parse', 'HEAD');
+      }
+      git('remote', 'add', 'origin', dir);
+      const { step, conditions } = ciRunSteps('attribution-guard').find((s) => s.step.id === 'range') ?? {};
+      const output = join(dir, 'github-output');
+      writeFileSync(output, '');
+      const ctx = event(fx);
+      // `bash -e`, the shell GitHub uses for a `run` that declares none; `conditions` pins that it doesn't.
+      spawnSync('bash', ['-e', '-c', expand(String(step?.run), ctx)], {
+        cwd: dir,
+        env: { ...isolated(), ...expandAll(step?.env, ctx), GITHUB_OUTPUT: output },
       });
-      expect(String(range?.run).split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))).toEqual([
-        'set -euo pipefail',
-        'if [ "$EVENT" = "pull_request" ]; then',
-        'range="$BASE_SHA..$HEAD_SHA"',
-        'else',
-        'git fetch --no-tags origin "$DEFAULT_BRANCH"',
-        'base="$(git merge-base FETCH_HEAD "$AFTER")"',
-        'if [ "$base" = "$AFTER" ]; then base="$AFTER^"; fi',
-        'range="$base..$AFTER"',
-        'fi',
-        'echo "range=$range" >> "$GITHUB_OUTPUT"',
-        'echo "Checking $range"',
-      ]);
+      return { conditions, output: readFileSync(output, 'utf8'), fx };
+    }
+
+    it('computes the push range from the merge base, which no cancelled run can shorten', () => {
+      const { conditions, output, fx } = rangeFor((fx) => ({
+        'github.event_name': 'push',
+        'github.event.before': fx.f2,
+        'github.sha': fx.f3,
+        'github.event.repository.default_branch': 'main',
+      }));
+      expect(conditions).toEqual([]);
+      expect(output).toBe(`range=${fx.base}..${fx.f3}\n`);
+    });
+
+    it('takes the pull request range from base to head', () => {
+      const { output, fx } = rangeFor((fx) => ({
+        'github.event_name': 'pull_request',
+        'github.event.pull_request.base.sha': fx.m,
+        'github.event.pull_request.head.sha': fx.f3,
+        'github.sha': fx.f2,
+        'github.event.repository.default_branch': 'main',
+      }));
+      expect(output).toBe(`range=${fx.m}..${fx.f3}\n`);
     });
 
     // A shallow clone has no base commit, so the range would not resolve and the job would be

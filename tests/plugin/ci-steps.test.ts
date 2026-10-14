@@ -35,12 +35,17 @@ jobs:
           npm run dead
       - &shared
         run: npm run anchored
+      - run: npm run reshelled
+        shell: bash -c 'true' {0}
   skipped:
     if: github.event_name == 'push'
     steps:
       - run: npm run gated
   soft:
     continue-on-error: true
+    defaults:
+      run:
+        shell: sh
     steps:
       - run: npm run soft
       - *shared
@@ -56,7 +61,7 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
   it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`', () => {
     expect(at('build-test', 'npm ci')).toEqual([{ index: 0, conditions: [] }]);
     expect(at('build-test', 'npm run spelled-out')).toEqual([{ index: 4, conditions: [] }]);
-    expect(at('soft', 'npm run anchored')).toEqual([{ index: 1, conditions: ['continue-on-error'] }]);
+    expect(at('soft', 'npm run anchored')).toEqual([{ index: 1, conditions: ['continue-on-error', 'shell: sh'] }]);
   });
 
   it('finds no step for a comment, an echo, a line of a script, or another job', () => {
@@ -70,7 +75,8 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
     expect(at('build-test', 'npm run never')).toEqual([{ index: 2, conditions: [false] }]);
     expect(at('build-test', 'npm run tolerated')).toEqual([{ index: 3, conditions: ['continue-on-error'] }]);
     expect(at('skipped', 'npm run gated')).toEqual([{ index: 0, conditions: ["github.event_name == 'push'"] }]);
-    expect(at('soft', 'npm run soft')).toEqual([{ index: 0, conditions: ['continue-on-error'] }]);
+    expect(at('soft', 'npm run soft')).toEqual([{ index: 0, conditions: ['continue-on-error', 'shell: sh'] }]);
+    expect(at('build-test', 'npm run reshelled')).toEqual([{ index: 7, conditions: ["shell: bash -c 'true' {0}"] }]);
   });
 
   it('reads the bare `on:` key that YAML 1.1 turns into true', () => {

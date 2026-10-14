@@ -7,9 +7,9 @@ import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-type Gate = { if?: unknown; 'continue-on-error'?: unknown };
+type Gate = { if?: unknown; 'continue-on-error'?: unknown; shell?: unknown; defaults?: { run?: { shell?: unknown } } };
 type Step = Gate & { id?: string; env?: Record<string, unknown>; run?: unknown; uses?: unknown; with?: Record<string, unknown> };
-type Workflow = { on?: unknown; true?: unknown; jobs?: Record<string, Gate & { steps?: Step[] }> };
+type Workflow = Gate & { on?: unknown; true?: unknown; jobs?: Record<string, Gate & { steps?: Step[] }> };
 
 const CI_WORKFLOW = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'ci.yml');
 
@@ -35,18 +35,29 @@ const conditions = (g: Gate | undefined) => [
   ...(g?.['continue-on-error'] ? ['continue-on-error'] : []),
 ];
 
-// Every step of `job` whose whole `run` is `command`, with its position and whatever could stop it
-// from gating: an `if` (`false` included) or continue-on-error, on the job or on the step.
+// A declared shell decides what `run` means: `shell: bash -c 'true' {0}` never reads the script.
+const shells = (...gs: Array<Gate | undefined>) =>
+  gs.flatMap((g) => g?.shell ?? g?.defaults?.run?.shell ?? []).map((s) => `shell: ${String(s)}`);
+
+// Every `run` step of `job` with its position and whatever could stop its script from gating: an
+// `if` (`false` included), continue-on-error, or a shell, on the workflow, the job or the step.
+export function ciRunSteps(job: string, path = CI_WORKFLOW) {
+  const wf = ciWorkflow(path);
+  const j = wf.jobs?.[job];
+  return (j?.steps ?? []).map((step, index) => ({
+    step,
+    index,
+    conditions: [...conditions(j), ...conditions(step), ...shells(wf, j, step)],
+  }));
+}
+
+// Every step of `job` whose whole `run` is `command`.
 // ponytail: whole run, not a line of it — a line after `exit 0` in a script is text, not a step,
 // and telling which lines execute would take a shell interpreter.
-export function ciSteps(job: string, command: string, path = CI_WORKFLOW) {
-  const j = ciWorkflow(path).jobs?.[job];
-  return (j?.steps ?? []).flatMap((step, index) =>
-    typeof step.run === 'string' && step.run.trim() === command
-      ? [{ index, conditions: [...conditions(j), ...conditions(step)] }]
-      : [],
+export const ciSteps = (job: string, command: string, path = CI_WORKFLOW) =>
+  ciRunSteps(job, path).flatMap(({ step, index, conditions }) =>
+    typeof step.run === 'string' && step.run.trim() === command ? [{ index, conditions }] : [],
   );
-}
 
 // Every step of `job` that uses `action` at any version, with its `with` inputs and the same gates.
 export function ciUses(job: string, action: string, path = CI_WORKFLOW) {
