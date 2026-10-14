@@ -131,12 +131,16 @@ describe('manifest release gate', () => {
   // Asserted on WHICH sites are flagged, never on substrings of stderr: every message ends in
   // ", package.json declares <ref>" and both package-lock sites print the same filename, so a needle
   // like `package-lock.json` was carried by whichever line existed — a reader whose disagreement was
-  // reported under the wrong label stayed green. A flagged site is the label before the first `:`.
+  // reported under the wrong label stayed green. A flagged site is the label before the first `:`;
+  // that stderr list is the script's only output (it exports nothing), so it is the contract.
   const flagged = (stderr: string): string[] =>
     stderr
       .split('\n')
       .filter((l) => l.startsWith('  - '))
       .map((l) => l.slice(4).split(':')[0]);
+
+  // Patch-only drift from VERSION: a comparison looser than exact (parseFloat, major-only) lets it pass.
+  const DRIFT = '0.1.1';
 
   const SITES = [
     'package-lock.json',
@@ -148,14 +152,14 @@ describe('manifest release gate', () => {
   ];
 
   it.each(SITES)('rejects a tree where %s disagrees with package.json', (site) => {
-    const r = runValidatorOn({}, { [site]: '9.9.9' });
+    const r = runValidatorOn({}, { [site]: DRIFT });
     expect(r.status).not.toBe(0);
     expect(flagged(r.stderr)).toEqual([site]);
-    expect(r.stderr).toContain('9.9.9');
+    expect(r.stderr).toContain(DRIFT);
   });
 
   it('rejects every other site when package.json, the reference, moves', () => {
-    const r = runValidatorOn({}, { 'package.json': '9.9.9' });
+    const r = runValidatorOn({}, { 'package.json': DRIFT });
     expect(r.status).not.toBe(0);
     expect(flagged(r.stderr)).toHaveLength(SITES.length);
   });
