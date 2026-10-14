@@ -56,6 +56,16 @@ function textOf(result: unknown): string {
   return ((result as { content: { text?: string }[] }).content ?? []).map((c) => c.text ?? '').join('\n');
 }
 
+// What the resolver itself says is wrong with this env: the truth the answers are checked against.
+function diagnosisOf(env: NodeJS.ProcessEnv, security: ReturnType<typeof keychain>): string {
+  try {
+    resolveAuthConfig(env, security);
+  } catch (err) {
+    return (err as Error).message;
+  }
+  throw new Error('this env resolves, so nothing is missing');
+}
+
 describe('createServer with incomplete extension configuration', () => {
   it('still registers the full tool surface so the host lists the extension normally', async () => {
     const client = await connect(halfConfiguredEnv());
@@ -81,13 +91,7 @@ describe('createServer with incomplete extension configuration', () => {
     const security = keychain();
     const client = await connect(env, security);
     const text = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
-    const diagnosis = (() => {
-      try {
-        resolveAuthConfig(env, security);
-      } catch (err) {
-        return (err as Error).message;
-      }
-    })() as string;
+    const diagnosis = diagnosisOf(env, security);
     expect(diagnosis).toContain('ZENDESK_SUBDOMAIN');
     expect(text).toContain(diagnosis);
     expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
@@ -158,7 +162,8 @@ describe('createServer with incomplete extension configuration', () => {
         ZENDESK_OAUTH_CLIENT_SECRET: 'canary-client-secret',
       };
       delete env[missing];
-      const client = await connect(env, keychain());
+      const security = keychain();
+      const client = await connect(env, security);
       const text = textOf(await client.callTool({ name: 'zendesk_login', arguments: {} }));
       const url = new URL(text.split(/\s+/).find((word) => word.startsWith('http://')) as string);
       expect(url.hostname).toBe('127.0.0.1');
@@ -174,6 +179,8 @@ describe('createServer with incomplete extension configuration', () => {
       for (const [name, value] of Object.entries(env)) {
         if (name !== 'ZENDESK_OAUTH_CALLBACK_PORT') expect(text, name).not.toContain(value);
       }
+      // Nor the diagnosis: it names a configuration field the plugin install does not have.
+      expect(text).not.toContain(diagnosisOf(env, security));
       expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
       expect(text).not.toMatch(/\/(Users|home|var|tmp)\//);
       await client.close();
