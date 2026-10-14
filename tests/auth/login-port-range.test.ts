@@ -28,7 +28,7 @@ describe('zendesk_login with an unusable callback port', () => {
     // — the first-line truncation in failureText (src/tools/login.ts) — because that truncation is
     // what keeps a multi-line rule from reaching the boundary today. No line numbers here on
     // purpose: this comment has already outlived one renumbering of the file (#89).
-    expect(text).toContain('oauth_callback_port');
+    expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT');
     // MCP presentation rules: one line, no path, no secret.
     expect(text.split('\n')).toHaveLength(1);
     expect(text).not.toContain('secret-xyz');

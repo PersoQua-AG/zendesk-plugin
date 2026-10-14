@@ -116,7 +116,7 @@ describe('createServer with a data directory the cache cannot be created in', ()
     const dataDir = unwritableDataDir();
     const client = await connect({ ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_DATA_DIR: dataDir });
     const text = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
-    expect(text).toContain('zendesk_subdomain');
+    expect(text).toContain('ZENDESK_SUBDOMAIN');
     expectCacheProblem(text, dataDir);
     expect(text.match(/reload the extension/g)).toHaveLength(1);
     await client.close();

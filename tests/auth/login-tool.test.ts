@@ -176,7 +176,7 @@ describe('zendesk_login negative paths', () => {
     expect(text.length).toBeLessThan(500);
   });
 
-  it('names the port and the oauth_callback_port field when the callback port is taken', async () => {
+  it('names the port and the ZENDESK_OAUTH_CALLBACK_PORT variable when the callback port is taken', async () => {
     const port = freePort();
     const release = await occupyPort(port);
     try {
@@ -184,7 +184,7 @@ describe('zendesk_login negative paths', () => {
       // never land — it waits for the bind result, which is immediate.
       const text = await runLogin(deps(port));
       expect(text).toContain(String(port));
-      expect(text).toContain('oauth_callback_port');
+      expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT');
       expect(text).not.toMatch(/EADDRINUSE/);
       expect(text).not.toContain('https://');
     } finally {
@@ -198,7 +198,7 @@ describe('zendesk_login negative paths', () => {
     const port = freePort();
     const release = await occupyPort(port);
     try {
-      expect(await runLogin(deps(port))).toContain('oauth_callback_port');
+      expect(await runLogin(deps(port))).toContain('ZENDESK_OAUTH_CALLBACK_PORT');
     } finally {
       await release();
     }
@@ -254,12 +254,12 @@ describe('zendesk_login with incomplete extension configuration', () => {
     const listen = vi.fn();
     const text = await runLogin(
       deps(port, {
-        configError: 'Missing required environment variable: ZENDESK_SUBDOMAIN (extension configuration field "zendesk_subdomain" is empty).',
+        configError: 'Missing required environment variable: ZENDESK_SUBDOMAIN.',
         setup: undefined,
         listen: listen as unknown as LoginDeps['listen'],
       }),
     );
-    expect(text).toContain('zendesk_subdomain');
+    expect(text).toContain('ZENDESK_SUBDOMAIN');
     expect(listen).not.toHaveBeenCalled();
     expect(existsSync(tokensPath)).toBe(false);
   });

@@ -19,21 +19,6 @@ export function defaultDataDir(env = process.env, platform = process.platform) {
     }
     return join(env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), DATA_DIR_NAME);
 }
-// Every env var the extension/plugin manifests feed from a user_config field, so an error can name
-// the field the user must fill in rather than an env var they never see. Also the sync source the
-// manifest test checks both manifests against.
-const USER_CONFIG_FIELDS = {
-    ZENDESK_SUBDOMAIN: 'zendesk_subdomain',
-    ZENDESK_OAUTH_CLIENT_ID: 'oauth_client_id',
-    ZENDESK_OAUTH_CLIENT_SECRET: 'oauth_client_secret',
-    ZENDESK_OAUTH_CALLBACK_PORT: 'oauth_callback_port',
-    ZENDESK_SECURITY_LEVEL: 'security_level',
-    ZENDESK_MARKDOWN_CONVERSION: 'markdown_conversion',
-    ZENDESK_TIMEZONE: 'timezone',
-    ZENDESK_WORK_HOURS: 'work_hours',
-    ZENDESK_WORKDAYS: 'workdays',
-};
-export const USER_CONFIG_FIELD_BY_ENV = USER_CONFIG_FIELDS;
 // A host that substitutes ${...} does so only for variables it has a value for; a declared value
 // the user left blank then arrives as the LITERAL placeholder string. That was the MCPB host's
 // documented behaviour (@anthropic-ai/mcpb@2.1.2 dist/shared/config.js:16-27) and the reason this
@@ -74,14 +59,12 @@ export function dataDirOf(env) {
 }
 // A port a non-root process can actually be handed: below 1024 is privileged, above 65535 does not
 // exist. The upper end matters most — server.listen() rejects it with a SYNCHRONOUS RangeError that
-// no 'error' handler ever sees. Both manifests declare the same range as min/max on the
-// oauth_callback_port field, so a compliant host refuses the value before the server is even started.
+// no 'error' handler ever sees.
 export const MIN_CALLBACK_PORT = 1024;
 export const MAX_CALLBACK_PORT = 65535;
 // One rule, one wording: stated here, reused verbatim by the callback listener in oauth-flow.ts for
 // a port that reached it from somewhere other than this resolver.
-export const CALLBACK_PORT_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_OAUTH_CALLBACK_PORT}" must be a whole ` +
-    `number between ${MIN_CALLBACK_PORT} and ${MAX_CALLBACK_PORT}`;
+export const CALLBACK_PORT_RULE = `ZENDESK_OAUTH_CALLBACK_PORT must be a whole number between ${MIN_CALLBACK_PORT} and ${MAX_CALLBACK_PORT}`;
 // Rejected, never clamped. The port is half of the redirect_uri the user registered with Zendesk, so
 // substituting a different one trades a loud startup error for an authorization that dies at
 // Zendesk's redirect-mismatch check with nothing naming the cause. Port 0 is the sharpest case: it
@@ -136,13 +119,11 @@ export function callbackPortOrDefault(env) {
 export const MAX_SUBDOMAIN_LENGTH = 63;
 const SUBDOMAIN_PATTERN = /^[a-z0-9-]+$/i;
 // One rule, one wording — stated once here, the way CALLBACK_PORT_RULE is.
-export const SUBDOMAIN_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" must be the subdomain by ` +
-    `itself \u2014 letters, digits and dashes, at most ${MAX_SUBDOMAIN_LENGTH} characters; for ` +
-    `acme.zendesk.com the value is "acme"`;
+export const SUBDOMAIN_RULE = `ZENDESK_SUBDOMAIN must be the subdomain by itself \u2014 letters, digits and dashes, at most ` +
+    `${MAX_SUBDOMAIN_LENGTH} characters; for acme.zendesk.com the value is "acme"`;
 // The second wording, for a value that satisfies the rule above and still is not a host name.
-const SUBDOMAIN_NOT_A_HOST_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" is not a usable host ` +
-    `name \u2014 a value starting with "xn--" is an internationalized-domain prefix and this one does ` +
-    `not decode; for acme.zendesk.com the value is "acme"`;
+const SUBDOMAIN_NOT_A_HOST_RULE = `ZENDESK_SUBDOMAIN is not a usable host name \u2014 a value starting with "xn--" is an ` +
+    `internationalized-domain prefix and this one does not decode; for acme.zendesk.com the value is "acme"`;
 // Surrounding whitespace is a copy-paste artifact, not an opinion: trimmed, not rejected, because
 // "acme " and "acme" are indistinguishable in the settings dialog that produced them.
 function subdomain(env) {
@@ -209,14 +190,11 @@ function isUsableSubdomain(value) {
         return false;
     }
 }
-// Only an env var that HAS a user_config field may be required: the error names that field, and a
-// name without one is a compile error here rather than a fallback that names the raw env var.
+// The env var by name and nothing else: the user_config fields it used to name went with #68 (#83).
 function required(env, name) {
     const value = env[name];
-    if (!value) {
-        throw new Error(`Missing required environment variable: ${name} (extension configuration field ` +
-            `"${USER_CONFIG_FIELDS[name]}" is empty).`);
-    }
+    if (!value)
+        throw new Error(`Missing required environment variable: ${name}.`);
     return value;
 }
 // Single source of env resolution shared by server + authorize bin, so identical env yields an

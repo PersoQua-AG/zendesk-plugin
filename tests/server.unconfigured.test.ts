@@ -79,12 +79,13 @@ describe('createServer with incomplete extension configuration', () => {
   // user_config, because the host bridge dropped the whole server over it.
   //
   // Checked against what exists, not against wordings: a list of forbidden phrases is beaten by the next
-  // phrasing of the same dialog (#103). The diagnosis is the resolver's own; every sentence of the
-  // remedy after it must name a registered tool or a variable the configuration is read from, and the
-  // tool it names is CALLED and has to answer with the setup page. A sentence pointing at a settings
-  // pane, a tool that is not registered, or a remedy without the setup path all go red. It lives here
-  // rather than in security-level-claims.test.ts because this string is built at RUNTIME by
-  // resolveOrDegrade, which is what this file is about.
+  // phrasing of the same dialog (#103). The whole answer, diagnosis included, is held to two rules.
+  // Every sentence must name a registered tool or a variable the configuration is read from. And every
+  // clause may name, besides its opening word, only those or a surface on the short list below: a
+  // capitalised word is how a text names a place (Settings, Extensions, Desktop), so any other one is a
+  // surface the plugin does not have. Then the tool it names is CALLED and has to answer with the
+  // setup page. It lives here rather than in security-level-claims.test.ts because this string is built
+  // at RUNTIME by resolveOrDegrade, which is what this file is about.
   it('answers a Zendesk tool call by naming what is missing and how to supply it, without a stack trace', async () => {
     // A working Keychain, so what is missing really is the subdomain and not access to the Keychain.
     const env = halfConfiguredEnv();
@@ -96,15 +97,20 @@ describe('createServer with incomplete extension configuration', () => {
     expect(text).toContain(diagnosis);
     expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
 
-    const remedy = text.replace(diagnosis, '').trim();
     const registered = (await client.listTools()).tools.map((t) => t.name);
     const sources = Object.keys(CONFIG_ACCOUNTS);
-    for (const sentence of remedy.split(/(?<=\.)\s+/)) {
+    // ponytail: the surfaces that exist besides tools and variables; a new one is added here on purpose.
+    const known = new Set([...registered, ...sources, 'Zendesk', 'Keychain']);
+    for (const sentence of text.split(/(?<=[.;])\s+|\n/)) {
       expect([...registered, ...sources].some((way) => sentence.includes(way)), `names no way in: ${sentence}`).toBe(true);
+      for (const clause of sentence.split(/[:;]\s*/)) {
+        const names = (clause.match(/[A-Za-z][\w'’]*/g) ?? []).slice(1).filter((w) => /^[A-Z]/.test(w));
+        expect(names.filter((w) => !known.has(w)), `names a surface that does not exist: ${clause}`).toEqual([]);
+      }
     }
     // On a platform without a Keychain the environment is the only way in (#69).
-    for (const name of sources) expect(remedy).toContain(name);
-    const named = [...new Set(remedy.match(/\bzendesk_\w+/g) ?? [])];
+    for (const name of sources) expect(text).toContain(name);
+    const named = [...new Set(text.match(/\bzendesk_\w+/g) ?? [])];
     expect(registered).toEqual(expect.arrayContaining(named));
     const answers = await Promise.all(named.map(async (name) => textOf(await client.callTool({ name, arguments: {} }))));
     expect(answers.join('\n'), `no tool the remedy names offers the setup page: ${named}`).toMatch(/\/setup\?t=/);
@@ -133,7 +139,7 @@ describe('createServer with incomplete extension configuration', () => {
 
     expect(text).toContain('ZENDESK_SUBDOMAIN');
     expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT="70000"');
-    expect(text).toContain('oauth_callback_port');
+    expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT must');
     expect(text).toContain('8976');
     await client.close();
   });
@@ -165,7 +171,9 @@ describe('createServer with incomplete extension configuration', () => {
       const security = keychain();
       const client = await connect(env, security);
       const text = textOf(await client.callTool({ name: 'zendesk_login', arguments: {} }));
-      const url = new URL(text.split(/\s+/).find((word) => word.startsWith('http://')) as string);
+      const link = text.split(/\s+/).find((word) => word.startsWith('http://'));
+      expect(link, 'the answer carries no URL').toBeTypeOf('string');
+      const url = new URL(link as string);
       expect(url.hostname).toBe('127.0.0.1');
       expect(url.pathname).toBe('/setup');
       // The PORT this install was configured with, not the shipped default. resolveAuthConfig validates the
@@ -179,7 +187,7 @@ describe('createServer with incomplete extension configuration', () => {
       for (const [name, value] of Object.entries(env)) {
         if (name !== 'ZENDESK_OAUTH_CALLBACK_PORT') expect(text, name).not.toContain(value);
       }
-      // Nor the diagnosis: it names a configuration field the plugin install does not have.
+      // Nor the diagnosis: the page is the answer, and what is missing is what the page collects.
       expect(text).not.toContain(diagnosisOf(env, security));
       expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
       expect(text).not.toMatch(/\/(Users|home|var|tmp)\//);

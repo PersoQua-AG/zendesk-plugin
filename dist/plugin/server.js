@@ -21235,17 +21235,6 @@ function defaultDataDir(env = process.env, platform = process.platform) {
   }
   return join(env.XDG_DATA_HOME || join(homedir(), ".local", "share"), DATA_DIR_NAME);
 }
-var USER_CONFIG_FIELDS = {
-  ZENDESK_SUBDOMAIN: "zendesk_subdomain",
-  ZENDESK_OAUTH_CLIENT_ID: "oauth_client_id",
-  ZENDESK_OAUTH_CLIENT_SECRET: "oauth_client_secret",
-  ZENDESK_OAUTH_CALLBACK_PORT: "oauth_callback_port",
-  ZENDESK_SECURITY_LEVEL: "security_level",
-  ZENDESK_MARKDOWN_CONVERSION: "markdown_conversion",
-  ZENDESK_TIMEZONE: "timezone",
-  ZENDESK_WORK_HOURS: "work_hours",
-  ZENDESK_WORKDAYS: "workdays"
-};
 var PLACEHOLDER = /^\$\{[^}]*\}$/;
 function isPlaceholder(value) {
   return typeof value === "string" && PLACEHOLDER.test(value);
@@ -21263,7 +21252,7 @@ function dataDirOf(env) {
 }
 var MIN_CALLBACK_PORT = 1024;
 var MAX_CALLBACK_PORT = 65535;
-var CALLBACK_PORT_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_OAUTH_CALLBACK_PORT}" must be a whole number between ${MIN_CALLBACK_PORT} and ${MAX_CALLBACK_PORT}`;
+var CALLBACK_PORT_RULE = `ZENDESK_OAUTH_CALLBACK_PORT must be a whole number between ${MIN_CALLBACK_PORT} and ${MAX_CALLBACK_PORT}`;
 function callbackPort(env) {
   const raw = env.ZENDESK_OAUTH_CALLBACK_PORT;
   if (!raw) return DEFAULT_CALLBACK_PORT;
@@ -21286,8 +21275,8 @@ function callbackPortOrDefault(env) {
 }
 var MAX_SUBDOMAIN_LENGTH = 63;
 var SUBDOMAIN_PATTERN = /^[a-z0-9-]+$/i;
-var SUBDOMAIN_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" must be the subdomain by itself \u2014 letters, digits and dashes, at most ${MAX_SUBDOMAIN_LENGTH} characters; for acme.zendesk.com the value is "acme"`;
-var SUBDOMAIN_NOT_A_HOST_RULE = `extension configuration field "${USER_CONFIG_FIELDS.ZENDESK_SUBDOMAIN}" is not a usable host name \u2014 a value starting with "xn--" is an internationalized-domain prefix and this one does not decode; for acme.zendesk.com the value is "acme"`;
+var SUBDOMAIN_RULE = `ZENDESK_SUBDOMAIN must be the subdomain by itself \u2014 letters, digits and dashes, at most ${MAX_SUBDOMAIN_LENGTH} characters; for acme.zendesk.com the value is "acme"`;
+var SUBDOMAIN_NOT_A_HOST_RULE = `ZENDESK_SUBDOMAIN is not a usable host name \u2014 a value starting with "xn--" is an internationalized-domain prefix and this one does not decode; for acme.zendesk.com the value is "acme"`;
 function subdomain(env) {
   return validateSubdomain(required2(env, "ZENDESK_SUBDOMAIN"));
 }
@@ -21325,11 +21314,7 @@ function isUsableSubdomain(value) {
 }
 function required2(env, name) {
   const value = env[name];
-  if (!value) {
-    throw new Error(
-      `Missing required environment variable: ${name} (extension configuration field "${USER_CONFIG_FIELDS[name]}" is empty).`
-    );
-  }
+  if (!value) throw new Error(`Missing required environment variable: ${name}.`);
   return value;
 }
 function resolveAuthConfig(rawEnv, security = runSecurity) {
@@ -22186,7 +22171,7 @@ function failureText(err, deps) {
   const raw = err instanceof Error ? err.message : String(err);
   const message = raw.split("\n")[0].split(deps.tokensPath).join("the token store").split(dirname2(deps.tokensPath)).join("the data directory");
   const port = deps.config.callbackPort;
-  return /EADDRINUSE|address already in use/i.test(message) ? `Zendesk login could not start: local port ${port} is already in use, so the OAuth callback cannot be received. Close whatever is listening on port ${port}, or set a different port in the "oauth_callback_port" configuration field and restart the extension.` : `Zendesk login failed: ${message}`;
+  return /EADDRINUSE|address already in use/i.test(message) ? `Zendesk login could not start: local port ${port} is already in use, so the OAuth callback cannot be received. Close whatever is listening on port ${port}, or set ZENDESK_OAUTH_CALLBACK_PORT to a different port and restart the extension.` : `Zendesk login failed: ${message}`;
 }
 async function beginFlow(deps, listen, timeoutMs) {
   const verifier = generateCodeVerifier();

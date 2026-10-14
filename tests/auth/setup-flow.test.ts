@@ -27,7 +27,7 @@ function unconfiguredDeps(port: number, writeConfig: (values: SetupValues) => vo
     config: { subdomain: '', clientId: '', callbackPort: port, scopes: DEFAULT_SCOPES },
     tokensPath,
     tokenStoreKey: SECRET,
-    configError: 'Missing required environment variable: ZENDESK_SUBDOMAIN (extension configuration field "zendesk_subdomain" is empty).',
+    configError: 'Missing required environment variable: ZENDESK_SUBDOMAIN.',
     setup: { writeConfig, timeoutMs: 60_000 },
   };
 }
@@ -59,7 +59,7 @@ describe('the first run, end to end', () => {
     expect(first).toMatch(/not set up/i);
     const setupPageUrl = urlIn(first);
     expect(setupPageUrl.pathname).toBe('/setup');
-    expect(first).not.toContain('zendesk_subdomain');
+    expect(first).not.toContain('ZENDESK_SUBDOMAIN');
     expect(first.match(/https?:\/\//g)).toHaveLength(1);
 
     // The page itself, then the form.
@@ -142,7 +142,7 @@ describe('the first run, end to end', () => {
 
     expect(answer).toContain(deps.configError as string);
     expect(answer).toContain(String(port));
-    expect(answer).toContain('oauth_callback_port');
+    expect(answer).toContain('ZENDESK_OAUTH_CALLBACK_PORT');
     expect(answer).not.toContain('/setup');
   });
 
@@ -168,7 +168,7 @@ describe('the first run, end to end', () => {
     const answer = await runLogin(noSetup);
 
     expect(answer).toBe(noSetup.configError);
-    expect(answer).toContain('zendesk_subdomain');
+    expect(answer).toContain('ZENDESK_SUBDOMAIN');
   });
 
   it('leaves a configured install alone: no page, the ordinary login', async () => {
@@ -235,7 +235,7 @@ describe('the first run, end to end', () => {
     const answer = await runLogin(configured, { setup: true });
 
     expect(answer).toContain(String(port));
-    expect(answer).toContain('oauth_callback_port');
+    expect(answer).toContain('ZENDESK_OAUTH_CALLBACK_PORT');
     expect(answer).not.toContain('/setup');
   });
 

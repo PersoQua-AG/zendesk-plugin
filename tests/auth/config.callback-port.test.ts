@@ -24,8 +24,7 @@ describe('callback port validation', () => {
     ['not a number at all', 'eight-thousand'],
   ])('rejects a port that is %s', (_label, value) => {
     expect(() => resolveAuthConfig(withPort(value), keychain())).toThrow(
-      `Invalid environment variable: ZENDESK_OAUTH_CALLBACK_PORT="${value}" (extension configuration field ` +
-        '"oauth_callback_port" must be a whole number between 1024 and 65535).',
+      `Invalid environment variable: ZENDESK_OAUTH_CALLBACK_PORT="${value}" (ZENDESK_OAUTH_CALLBACK_PORT must be a whole number between 1024 and 65535).`,
     );
   });
 
@@ -70,7 +69,7 @@ describe('the callback port when nothing else resolves', () => {
       const { port, problem } = callbackPortOrDefault({ ZENDESK_OAUTH_CALLBACK_PORT: value });
       expect(port, value).toBe(8976);
       expect(problem, value).toContain(`ZENDESK_OAUTH_CALLBACK_PORT="${value}"`);
-      expect(problem, value).toContain('oauth_callback_port');
+      expect(problem, value).toContain('ZENDESK_OAUTH_CALLBACK_PORT=');
       expect(problem, value).toContain('8976');
     }
   });

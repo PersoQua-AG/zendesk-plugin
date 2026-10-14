@@ -32,7 +32,7 @@ describe('an incompletely configured server never reaches the network', () => {
   it('rejects a JSON request at the token boundary, naming the empty field, without fetching', async () => {
     const fetchImpl = spyFetch();
     const { ctx } = createServer(degradedEnv(), { fetchImpl, security: keychain() });
-    await expect(ctx.httpClient.request('/users/me.json')).rejects.toThrow(/zendesk_subdomain/);
+    await expect(ctx.httpClient.request('/users/me.json')).rejects.toThrow(/ZENDESK_SUBDOMAIN/);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -41,7 +41,7 @@ describe('an incompletely configured server never reaches the network', () => {
     const { ctx } = createServer(degradedEnv(), { fetchImpl, security: keychain() });
     await expect(
       ctx.httpClient.requestUpload('/uploads.json', new Uint8Array([1, 2, 3]), 'text/plain'),
-    ).rejects.toThrow(/zendesk_subdomain/);
+    ).rejects.toThrow(/ZENDESK_SUBDOMAIN/);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
