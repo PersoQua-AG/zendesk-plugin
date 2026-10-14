@@ -1,11 +1,12 @@
 // tests/plugin/security-level-claims.test.ts
-// #59 acceptance test 2, re-aimed by the owner decision of 2026-10-06: no shipped text may promise
-// a selectable screening level, because the shipped plugin offers none.
+// #59 acceptance test 2, re-aimed by the owner decision of 2026-10-06: the installed plugin offers no
+// way to choose the screening level, and no shipped text may say it does.
 //
-// The truth is asked of the server, not of a sentence: createServer is started with the env the
-// installed plugin's manifest hands it, every operator answer set to `off`, and the level it runs at
-// is what the README may name. Each text is then read only for which of SECURITY_LEVELS it offers —
-// a wording that says "fixed" or not is neither here nor there (text oracle T2, 2026-10-14).
+// The fact is asked of the manifest and the server: no settings dialog, and no server env through
+// which an operator answer reaches the level createServer runs at. The README is where the claim is
+// made in words, so there the words ARE the contract: the two passages that speak about the level are
+// pinned whole (whitespace-normalised, so a rewrap is free), with the level taken from the server, and
+// no other README text may speak about it (text oracle T2, round 2, 2026-10-14).
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,9 +18,16 @@ import { keychain } from '../auth/keychain.js';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
 const readme = read('README.md');
-const securitySection = readme.slice(readme.indexOf('- **Prompt-injection screening.**')).split('\n- **')[0];
+const manifest = JSON.parse(read('.claude-plugin/plugin.json'));
+const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
 
-const levelsNamed = (text: string) => SECURITY_LEVELS.filter((l) => new RegExp(`\\b${l}\\b`).test(text));
+const row = readme.split('\n').find((l) => l.startsWith('|') && l.split('|')[1].replace(/[^a-z]/gi, '').toLowerCase() === 'securitylevel');
+const bullet = readme.slice(readme.indexOf('- **Prompt-injection screening.**')).split('\n- **')[0];
+
+const contractRow = (level: string) =>
+  `| \`security_level\` | \`${level}\` | no | Prompt-injection screening. Fixed at \`${level}\` in the installed plugin — only a hand-started server or a remote-connector deployment reads \`ZENDESK_SECURITY_LEVEL\`, see [Security](#security) |`;
+const contractBullet = (level: string) =>
+  `- **Prompt-injection screening.** Ticket/comment/user content is attacker-controllable; all inbound Zendesk content is screened and wrapped in session-scoped delimiters so the model treats it as data, not instructions. The level is **not selectable in the installed plugin**: it is fixed at \`${level}\`. \`ZENDESK_SECURITY_LEVEL\` (${SECURITY_LEVELS.map((l) => `\`${l}\``).join(' | ')}) is read only when the server is started by hand from a shell, or by a remote-connector deployment (deprioritised since 2026-09-23). At \`security_level=off\` the fence is dropped but forged delimiters are still stripped, patterns are still detected, and every tool result says screening is off.`;
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -35,37 +43,34 @@ function runsAt(extra: Record<string, string>) {
   return createServer(env, { security: keychain() }).ctx.securityLevel;
 }
 
-// Whatever dialog the manifest declares, under whatever key spelling, the operator picks `off`.
-const installedLevel = () => {
-  const env: Record<string, unknown> = JSON.parse(read('.claude-plugin/plugin.json')).mcpServers.zendesk.env ?? {};
-  return runsAt(Object.fromEntries(Object.entries(env).map(([k, v]) => [k, String(v).replace(/\$\{user_config\.[^}]+\}/g, 'off')])));
-};
-
-describe('no shipped text promises a security level the plugin does not offer (#59)', () => {
+describe('the installed plugin offers no way to choose the security level, and no shipped text says it does (#59)', () => {
   it('the probe reads the level the server really runs at, not a constant', () => {
     expect(runsAt({ ZENDESK_SECURITY_LEVEL: 'off' })).toBe('off');
     expect(runsAt({})).toBe('standard');
   });
 
-  it('the installed plugin gives the operator no way to change the level', () => {
-    expect(installedLevel(), '.claude-plugin/plugin.json lets an operator answer reach the level').toBe(runsAt({}));
+  // Every server, under whatever key, with every operator answer set to `off`: a server env that
+  // only carries the subdomain stays green, one that reaches the level does not.
+  it('the plugin manifest declares no settings dialog and no server env that reaches the level', () => {
+    expect(manifest.userConfig, '.claude-plugin/plugin.json declares a settings dialog').toBeUndefined();
+    expect(manifest.mcpServers, '.claude-plugin/plugin.json declares no inline mcpServers').toBeTypeOf('object');
+    const servers = Object.entries(manifest.mcpServers as Record<string, { env?: Record<string, string> }>);
+    expect(servers, '.claude-plugin/plugin.json declares no server').not.toHaveLength(0);
+    for (const [name, server] of servers) {
+      const answered = Object.fromEntries(Object.entries(server?.env ?? {}).map(([k, v]) => [k, String(v).replace(/\$\{user_config\.[^}]+\}/g, 'off')]));
+      expect(runsAt(answered), `mcpServers.${name}: an operator answer reaches the level`).toBe(runsAt({}));
+    }
   });
 
-  it('the README configuration table offers only the level the installed plugin runs at', () => {
-    const row = readme.split('\n').find((l) => l.startsWith('|') && l.split('|')[1].replace(/[^a-z]/gi, '').toLowerCase() === 'securitylevel');
-    expect(row, 'README configuration table has no security_level row').toBeDefined();
-    expect(levelsNamed(row ?? '')).toEqual([runsAt({})]);
+  it('the README configuration-table row is the contract row', () => {
+    expect(flat(row ?? '')).toBe(flat(contractRow(runsAt({}))));
   });
 
-  it('the README Security section, before it names the hand-started variable, offers only the installed level', () => {
-    expect(levelsNamed(securitySection.split('ZENDESK_SECURITY_LEVEL')[0])).toEqual([runsAt({})]);
+  it('the README Security bullet is the contract bullet', () => {
+    expect(flat(bullet)).toBe(flat(contractBullet(runsAt({}))));
   });
 
-  // The two paths that CAN set it, named where the operator reads about it, so the withdrawal is a
-  // correction and not just a deletion.
-  it('the Security section names the only two paths that can still set a level', () => {
-    expect(securitySection).toContain('ZENDESK_SECURITY_LEVEL');
-    expect(securitySection).toContain('started by hand');
-    expect(securitySection).toContain('remote-connector');
+  it('no other README text speaks about the security level', () => {
+    expect(readme.replace(row ?? '', '').replace(bullet, '')).not.toMatch(/security[\s_-]?level/i);
   });
 });
