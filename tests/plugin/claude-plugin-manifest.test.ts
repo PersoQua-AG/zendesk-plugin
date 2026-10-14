@@ -76,19 +76,17 @@ describe('the Claude Code plugin manifest', () => {
   // entries of the reference catalog, so a listing neither truncates nor reads thin next to its
   // neighbours. Counted in code points, as a catalog renders them — `[...s]`, not `s.length`, which
   // counts UTF-16 units. `metadata.description` in marketplace.json is a different, longer sentence
-  // on purpose and is not held to either rule. The plugin entry is found by name, not by index.
+  // on purpose and is not held to either rule.
   describe('the plugin description', () => {
     const marketplace = JSON.parse(readFileSync(join(root, '.claude-plugin/marketplace.json'), 'utf8'));
     const entry = marketplace.plugins.find((p: { name: string }) => p.name === 'zendesk');
 
     it('is byte-identical in plugin.json and in the marketplace entry', () => {
       expect(entry, 'marketplace.json has no plugin named "zendesk"').toBeDefined();
-      expect(Buffer.from(entry.description, 'utf8').equals(Buffer.from(plugin.description, 'utf8'))).toBe(true);
+      expect(entry.description).toBe(plugin.description);
     });
 
     it('is exactly 182 characters long', () => {
-      expect([...plugin.description].length).toBe(182);
-      expect([...entry.description].length).toBe(182);
-    });
+      expect([...plugin.description].length).toBe(182);    });
   });
 });
