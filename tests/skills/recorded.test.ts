@@ -3,7 +3,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { read, recordedCases, root, skillNames } from './probe.js';
+import { boot, read, recordedCases, root, skillNames, toolsNamedIn } from './probe.js';
 
 const cases = recordedCases();
 
@@ -14,7 +14,8 @@ describe('recorded skill cases', () => {
     expect(['happy', 'failcheck']).toContain(c.role);
     expect(['recorded', 'unenforced', 'pending-owner-decision']).toContain(c.status);
     expect(typeof c.input.prompt).toBe('string');
-    expect(c.expected.length).toBeGreaterThan(20);
+    // `expected` is prose for whoever grades a run; CI cannot judge prose, so only what it names is checked below.
+    expect(typeof c.expected).toBe('string');
     expect(c.source.length).toBeGreaterThan(0);
   });
 
@@ -27,6 +28,27 @@ describe('recorded skill cases', () => {
       }
     }
     expect(drifted).toEqual([]);
+  });
+
+  it('every tool, command, file and SKILL.md section an expected names exists', async () => {
+    const b = await boot();
+    const tools = await b.schemas().finally(() => b.close());
+    const refs = cases.flatMap((c) => {
+      const skill = `skills/${c.skill}/SKILL.md`;
+      return [
+        ...toolsNamedIn(c.expected).map((t) => ({ kind: 'tool', ref: t, ok: tools.has(t) })),
+        ...[...c.expected.matchAll(/\/zendesk:([a-z-]+)/g)].map(([, n]) => ({ kind: 'command', ref: `commands/${n}.md`, ok: existsSync(join(root, 'commands', `${n}.md`)) })),
+        ...(c.expected.match(/\b(?:src|tests|skills|commands|agents)\/[\w./-]+\.(?:ts|md)\b/g) ?? []).map((f) => ({ kind: 'file', ref: f, ok: existsSync(join(root, f)) })),
+        ...[...c.expected.matchAll(/SKILL\.md "([^"]+)"/g)].map(([, h]) => ({
+          kind: 'section',
+          ref: `${skill} ## ${h}`,
+          ok: existsSync(join(root, skill)) && read(skill).split('\n').includes(`## ${h}`),
+        })),
+      ].map((r) => ({ ...r, ref: `${c.id}: ${r.ref}` }));
+    });
+    // Each kind is named by at least one real case, so an extractor that stops matching goes red here, not silent.
+    expect(new Set(refs.map((r) => r.kind))).toEqual(new Set(['tool', 'command', 'file', 'section']));
+    expect(refs.filter((r) => !r.ok).map((r) => r.ref)).toEqual([]);
   });
 
   it('every skill has at least one happy and one failcheck instruction-following case', () => {
