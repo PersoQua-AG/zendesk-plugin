@@ -5,9 +5,12 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ciSteps } from '../setup/ci-steps.js';
+import { ciSteps, ciTriggers } from '../setup/ci-steps.js';
 
 const WORKFLOW = `
+on:
+  pull_request:
+    types: [edited]
 jobs:
   other:
     steps:
@@ -25,10 +28,22 @@ jobs:
         if: false
       - run: npm run tolerated
         continue-on-error: true
+      - run: npm run spelled-out
+        if: \${{ success() }}
+      - run: |
+          exit 0
+          npm run dead
+      - &shared
+        run: npm run anchored
   skipped:
     if: github.event_name == 'push'
     steps:
       - run: npm run gated
+  soft:
+    continue-on-error: true
+    steps:
+      - run: npm run soft
+      - *shared
 `;
 
 describe('ciSteps reads the workflow as GitHub does, not as text', () => {
@@ -38,19 +53,27 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const at = (job: string, command: string) => ciSteps(job, command, path);
 
-  it('finds a live step, in a `run: |` block too, at its position', () => {
+  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`', () => {
     expect(at('build-test', 'npm ci')).toEqual([{ index: 0, conditions: [] }]);
-    expect(at('build-test', 'npm run block')).toEqual([{ index: 1, conditions: [] }]);
+    expect(at('build-test', 'npm run spelled-out')).toEqual([{ index: 4, conditions: [] }]);
+    expect(at('soft', 'npm run anchored')).toEqual([{ index: 1, conditions: ['continue-on-error'] }]);
   });
 
-  it('finds no step for a YAML comment, a shell comment, an echo, or another job', () => {
+  it('finds no step for a comment, an echo, a line of a script, or another job', () => {
     expect(at('build-test', 'npm run commented')).toEqual([]);
+    expect(at('build-test', 'npm run block')).toEqual([]);
+    expect(at('build-test', 'npm run dead')).toEqual([]);
     expect(at('build-test', 'npm run moved')).toEqual([]);
   });
 
-  it('names every condition that can keep a step from gating', () => {
+  it('names every condition that can keep a step from gating, on the step or its job', () => {
     expect(at('build-test', 'npm run never')).toEqual([{ index: 2, conditions: [false] }]);
     expect(at('build-test', 'npm run tolerated')).toEqual([{ index: 3, conditions: ['continue-on-error'] }]);
     expect(at('skipped', 'npm run gated')).toEqual([{ index: 0, conditions: ["github.event_name == 'push'"] }]);
+    expect(at('soft', 'npm run soft')).toEqual([{ index: 0, conditions: ['continue-on-error'] }]);
+  });
+
+  it('reads the bare `on:` key that YAML 1.1 turns into true', () => {
+    expect(ciTriggers(path)).toEqual({ pull_request: { types: ['edited'] } });
   });
 });

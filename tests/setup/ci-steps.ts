@@ -1,33 +1,49 @@
-// The CI workflow as GitHub reads it: jobs → steps → `run`, parsed by a real YAML implementation
-// rather than searched as text. ci.yml is mostly comment prose that quotes these very commands, so
-// a text search finds a `#`-commented step, or one moved to another job, as readily as a live one.
-// Ruby's Psych is the parser because it is a standard library on every runner and macOS and no
-// YAML package is installed here; YAML 1.1, so the `on:` key reads back as `true` (not used here).
+// The CI workflow as GitHub reads it: triggers, jobs → steps → `run`, parsed by a real YAML
+// implementation rather than searched as text. ci.yml is mostly comment prose that quotes these very
+// commands, so a text search finds a `#`-commented step, or one moved to another job, as readily as
+// a live one. Ruby's Psych is the parser because it is a standard library on every runner and macOS
+// and no YAML package is installed here.
 import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-type Step = { run?: unknown; if?: unknown; 'continue-on-error'?: unknown };
-type Workflow = { jobs?: Record<string, { if?: unknown; steps?: Step[] }> };
+type Gate = { if?: unknown; 'continue-on-error'?: unknown };
+type Step = Gate & { id?: string; run?: unknown };
+type Workflow = { on?: unknown; true?: unknown; jobs?: Record<string, Gate & { steps?: Step[] }> };
 
 const CI_WORKFLOW = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'ci.yml');
 
-function parseWorkflow(path: string): Workflow {
-  const ruby = spawnSync('ruby', ['-ryaml', '-rjson', '-e', 'print JSON.generate(YAML.load_file(ARGV[0]))', path], {
-    encoding: 'utf8',
-  });
+// safe_load with aliases, because GitHub accepts anchors and Psych 4+ `load_file` refuses them.
+// A thrown error, not a skip, when Ruby is missing: a skipped wiring case is a green one.
+export function ciWorkflow(path = CI_WORKFLOW): Workflow {
+  const script = 'print JSON.generate(YAML.safe_load(File.read(ARGV[0]), aliases: true))';
+  const ruby = spawnSync('ruby', ['-ryaml', '-rjson', '-e', script, path], { encoding: 'utf8' });
   if (ruby.status !== 0) throw new Error(`ruby could not parse ${path}: ${ruby.error?.message ?? ruby.stderr}`);
   return JSON.parse(ruby.stdout) as Workflow;
 }
 
-// Every step of `job` that has `command` as one whole line of its `run`, with its position and
-// whatever could stop it from gating: a job or step `if` (`false` included), or continue-on-error.
-// A whole line, so a shell comment or an `echo` naming the command in a `run: |` block is not it.
+// YAML 1.1 reads a bare `on:` key as the boolean true; a quoted "on" stays a string. Neither present
+// answers undefined, which no trigger assertion accepts.
+export const ciTriggers = (path = CI_WORKFLOW) => {
+  const wf = ciWorkflow(path);
+  return wf.on ?? wf.true;
+};
+
+// `success()` is what GitHub evaluates when `if` is absent, so spelling it out changes nothing.
+const conditions = (g: Gate | undefined) => [
+  ...(g?.if === undefined || String(g.if).replace(/^\$\{\{\s*|\s*\}\}$/g, '') === 'success()' ? [] : [g.if]),
+  ...(g?.['continue-on-error'] ? ['continue-on-error'] : []),
+];
+
+// Every step of `job` whose whole `run` is `command`, with its position and whatever could stop it
+// from gating: an `if` (`false` included) or continue-on-error, on the job or on the step.
+// ponytail: whole run, not a line of it — a line after `exit 0` in a script is text, not a step,
+// and telling which lines execute would take a shell interpreter.
 export function ciSteps(job: string, command: string, path = CI_WORKFLOW) {
-  const j = parseWorkflow(path).jobs?.[job];
-  return (j?.steps ?? []).flatMap((step, index) => {
-    if (typeof step.run !== 'string' || !step.run.split('\n').some((line) => line.trim() === command)) return [];
-    const conditions = [j?.if, step.if, step['continue-on-error'] ? 'continue-on-error' : undefined];
-    return [{ index, conditions: conditions.filter((c) => c !== undefined) }];
-  });
+  const j = ciWorkflow(path).jobs?.[job];
+  return (j?.steps ?? []).flatMap((step, index) =>
+    typeof step.run === 'string' && step.run.trim() === command
+      ? [{ index, conditions: [...conditions(j), ...conditions(step)] }]
+      : [],
+  );
 }
