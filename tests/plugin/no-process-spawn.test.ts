@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 
 const SRC = join(process.cwd(), 'src');
 const KEY_SOURCE = 'auth/store-key.ts';
@@ -34,19 +35,52 @@ describe('nothing spawns a process to open a browser', () => {
     expect(mentions).toEqual([KEY_SOURCE]);
   });
 
-  it('runs only /usr/bin/security there, with an argument ARRAY and no shell', () => {
-    const source = readFileSync(join(SRC, KEY_SOURCE), 'utf8');
-    // One call, one binary. execFileSync takes (file, args[]) and starts no shell; exec/execSync
-    // would take a command STRING, which is how an argument becomes a command.
-    expect(source.match(/execFile(Sync)?\(/g)).toHaveLength(1);
-    expect(source).not.toMatch(/\bexec(Sync)?\(|\bspawn(Sync)?\(|\bfork\(|shell:\s*true/);
-    expect(source).toContain("const SECURITY_BIN = '/usr/bin/security';");
+  it('runs only /usr/bin/security there, with an argument ARRAY, no shell, and the secret on stdin', async () => {
+    // Asked of what the file CALLS, not of how it is spelled: every export of child_process is replaced
+    // on the one object that `import`, `import()`, `require` and `createRequire` all resolve to, and
+    // syncBuiltinESMExports pushes it into the ESM bindings. Any route to any spawn is recorded, none
+    // reaches the real /usr/bin/security, and exit 44 ("not found") drives the find, add and rollback
+    // paths. ponytail: process.binding('spawn_sync') bypasses the object; a spawn in a branch exit 44
+    // never reaches goes unseen.
+    const cp = createRequire(import.meta.url)('node:child_process') as Record<string, unknown>;
+    const real = { ...cp };
+    const calls: { name: string; file: unknown; args: unknown; options: unknown }[] = [];
+    for (const name of Object.keys(real)) {
+      if (typeof real[name] !== 'function') continue;
+      cp[name] = (file: unknown, args?: unknown, options?: unknown) => {
+        calls.push({ name, file, args, options });
+        throw Object.assign(new Error('not found'), { status: 44 });
+      };
+    }
+    syncBuiltinESMExports();
+    try {
+      expect((await import('node:child_process')).execFileSync).toBe(cp.execFileSync);
+      const key = await import('../../src/auth/store-key.js');
+      expect(() => key.resolveTokenStoreKey()).toThrow(/could not be written/);
+      expect(key.readKeychainConfig()).toEqual({});
+      const values = { ZENDESK_SUBDOMAIN: 's', ZENDESK_OAUTH_CLIENT_ID: 'i', ZENDESK_OAUTH_CLIENT_SECRET: 'x' };
+      expect(() => key.writeKeychainConfig(values)).toThrow(/could not be written/);
+    } finally {
+      Object.assign(cp, real);
+      syncBuiltinESMExports();
+    }
+
+    for (const call of calls) {
+      expect(call.name).toBe('execFileSync');
+      expect(call.file).toBe('/usr/bin/security');
+      expect(Array.isArray(call.args)).toBe(true);
+      expect((call.options as { shell?: unknown }).shell).toBeFalsy();
+    }
     // The secret is on stdin, never in argv (#68 B4): `-w` last is what makes security prompt.
-    expect(source).toContain("'-U', '-w'], `${value}\\n${value}\\n`");
-    expect(source).toMatch(/execFileSync\(bin, args, \{/);
-    // …where `bin` defaults to the one binary and is a parameter only so the runner's own outcomes can
-    // be measured against /bin/echo and a missing path. No caller in src/ passes it.
-    expect(source).toMatch(/bin: string = SECURITY_BIN/);
+    const adds = calls.filter((c) => (c.args as string[])[0] === 'add-generic-password');
+    expect(adds.length).toBe(2);
+    for (const { args, options } of adds) {
+      const value = (options as { input: string }).input.split('\n')[0];
+      expect(value).not.toBe('');
+      expect((options as { input: string }).input).toBe(`${value}\n${value}\n`);
+      expect(args).not.toContain(value);
+      expect((args as string[]).at(-1)).toBe('-w');
+    }
   });
 
   it('carries no browser launcher anywhere', () => {
