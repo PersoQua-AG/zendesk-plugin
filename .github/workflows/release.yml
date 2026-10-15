@@ -1,7 +1,7 @@
 name: Release
 
-# Publishes the Claude Code plugin archive once a state reaches `main`: own manifest, build and
-# dist-drift gates, then the packaging and the GitHub release.
+# Attaches the Claude Code plugin archive to a GitHub release once a state reaches `main`: own
+# manifest, build and dist-drift gates, then the packaging.
 on:
   push:
     branches: [main]
@@ -10,8 +10,6 @@ on:
 # RUNNING run alive: GitHub holds a single pending run per group and cancels the waiting one when a
 # newer push arrives, and a cancelled run is not a red run — so if that waiting run carried the only
 # version bump, that version is never released and nothing turns red. Not configurable away.
-# Operator rule: release to `main` one push at a time, and after a burst check `gh release list`
-# against .claude-plugin/plugin.json.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -29,10 +27,10 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci
-      # Before the build: the version this workflow publishes is read out of a manifest.
+      # Before the build: the version this workflow releases is read out of a manifest.
       - run: node scripts/validate-manifests.mjs
       - run: npm run build
-      # `ci.yml` is parallel with no `needs:`: it cannot block a publish out of unverified `main`.
+      # `ci.yml` is parallel with no `needs:`: it cannot block a release out of unverified `main`.
       - run: git diff --exit-code dist/
       # Its own step so tag and archive read one value and cannot disagree.
       - id: version
@@ -61,5 +59,5 @@ jobs:
           else
             gh release create "v$VERSION" zendesk-plugin.zip \
               --title "v$VERSION" \
-              --notes "Zendesk plugin v$VERSION. Kept for internal traceability, not a customer install path: customers get the plugin through the PersoQua marketplace."
+              --notes "Zendesk plugin v$VERSION. Kept for internal traceability. The plugin is distributed to the team through the PersoQua marketplace (private repo persoqua-marketplace, Claude Desktop Org-Sync)."
           fi
