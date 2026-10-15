@@ -265,7 +265,7 @@ inventory.
   nothing else, so it is not reachable from the network while it is open.
 
 ### Known limitation — rich Guide articles
-The Markdown→HTML converter handles standard comment/article formatting. For
+The Markdown→HTML converter handles common comment/article formatting. For
 Help Center articles with complex layout (nested tables, embedded media, custom
 classes), pass raw HTML directly rather than relying on Markdown conversion.
 

@@ -6,13 +6,14 @@
 // which an operator answer reaches the level createServer runs at. The README is where the claim is
 // made in words, so there the words ARE the contract: the two passages that speak about the level are
 // pinned whole (whitespace-normalised, so a rewrap is free), with the level taken from the server, and
-// no other README text may speak about it (text oracle T2, round 2, 2026-10-14).
+// no other README text may speak about it or name a level (text oracle T2, round 3, 2026-10-15).
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer, SECURITY_LEVELS } from '../../src/server.js';
+import { CONFIG_ACCOUNTS } from '../../src/auth/store-key.js';
 import { keychain } from '../auth/keychain.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -21,7 +22,7 @@ const readme = read('README.md');
 const manifest = JSON.parse(read('.claude-plugin/plugin.json'));
 const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
 
-const row = readme.split('\n').find((l) => l.startsWith('|') && l.split('|')[1].replace(/[^a-z]/gi, '').toLowerCase() === 'securitylevel');
+const row = readme.split('\n').find((l) => l.startsWith('| `security_level` |'));
 const bullet = readme.slice(readme.indexOf('- **Prompt-injection screening.**')).split('\n- **')[0];
 
 const contractRow = (level: string) =>
@@ -35,12 +36,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function runsAt(extra: Record<string, string>) {
+function runsAt(extra: Record<string, string>, stored: Record<string, string> = {}) {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-level-claims-'));
   dirs.push(dataDir);
   const env = { ZENDESK_SUBDOMAIN: 'acme', ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz', ZENDESK_DATA_DIR: dataDir, ...extra };
-  return createServer(env, { security: keychain() }).ctx.securityLevel;
+  return createServer(env, { security: keychain(stored) }).ctx.securityLevel;
 }
 
 describe('the installed plugin offers no way to choose the security level, and no shipped text says it does (#59)', () => {
@@ -49,12 +50,16 @@ describe('the installed plugin offers no way to choose the security level, and n
     expect(runsAt({})).toBe('standard');
   });
 
+  it('no account the setup page stores in the Keychain reaches the level', () => {
+    expect(runsAt({}, Object.fromEntries(Object.values(CONFIG_ACCOUNTS).map((a) => [a, 'off'])))).toBe(runsAt({}));
+  });
+
   // Every server, under whatever key, with every operator answer set to `off`: a server env that
   // only carries the subdomain stays green, one that reaches the level does not.
   it('the plugin manifest declares no settings dialog and no server env that reaches the level', () => {
     expect(manifest.userConfig, '.claude-plugin/plugin.json declares a settings dialog').toBeUndefined();
-    expect(manifest.mcpServers, '.claude-plugin/plugin.json declares no inline mcpServers').toBeTypeOf('object');
-    const servers = Object.entries(manifest.mcpServers as Record<string, { env?: Record<string, string> }>);
+    expect(existsSync(join(root, '.mcp.json')), 'a root .mcp.json is a second server source').toBe(false);
+    const servers = Object.entries((manifest.mcpServers ?? {}) as Record<string, { env?: Record<string, string> }>);
     expect(servers, '.claude-plugin/plugin.json declares no server').not.toHaveLength(0);
     for (const [name, server] of servers) {
       const answered = Object.fromEntries(Object.entries(server?.env ?? {}).map(([k, v]) => [k, String(v).replace(/\$\{user_config\.[^}]+\}/g, 'off')]));
@@ -70,7 +75,8 @@ describe('the installed plugin offers no way to choose the security level, and n
     expect(flat(bullet)).toBe(flat(contractBullet(runsAt({}))));
   });
 
-  it('no other README text speaks about the security level', () => {
-    expect(readme.replace(row ?? '', '').replace(bullet, '')).not.toMatch(/security[\s_-]?level/i);
+  // (?<!-) spares the `--strict` flag of `claude plugin validate`.
+  it('no other README text speaks about the security level or names a level', () => {
+    expect(readme.replace(row ?? '', '').replace(bullet, '')).not.toMatch(new RegExp(`security[\\s_-]?level|(?<!-)\\b(${SECURITY_LEVELS.join('|')})\\b`, 'i'));
   });
 });
