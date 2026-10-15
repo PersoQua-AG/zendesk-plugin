@@ -29,6 +29,8 @@ From Claude Code, add the marketplace and install the plugin:
 /plugin install zendesk@zendesk
 ```
 
+The team receives the plugin through the private PersoQua marketplace via Claude Desktop Org-Sync; a direct `marketplace add` needs GitHub access to this repo.
+
 `marketplace add` / `plugin install` clone only committed files and do **not**
 run a build, so the compiled `dist/` is committed to the repo (see note below).
 
