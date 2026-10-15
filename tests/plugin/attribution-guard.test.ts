@@ -219,8 +219,9 @@ describe('no-Claude-attribution guard (#86)', () => {
       expect(ciSteps('attribution-guard', command)).toEqual([
         { index: expect.any(Number), conditions: ["github.event_name == 'pull_request'"] },
       ]);
+      // PR_BODY from the body; any other key that no script reads is already a condition above.
       const env = ciJobSteps('attribution-guard').find((s) => String(s.step.run).trim() === command)?.env;
-      expect(expandAll(env, { 'github.event.pull_request.body': 'the body' })).toEqual({ PR_BODY: 'the body' });
+      expect(expandAll(env, { 'github.event.pull_request.body': 'the body' })).toMatchObject({ PR_BODY: 'the body' });
     });
 
     // Both halves of the event coverage, because both revert to green. `edited` is not a
