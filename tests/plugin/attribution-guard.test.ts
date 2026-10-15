@@ -202,7 +202,6 @@ describe('no-Claude-attribution guard (#86)', () => {
     const ci = () => readFileSync(CI, 'utf8');
 
     it('runs as its own CI job on both push and pull_request', () => {
-      expect(Object.keys(ciTriggers() ?? {})).toEqual(['push', 'pull_request']);
       expect(
         ciSteps('attribution-guard', "node scripts/assert-no-attribution.mjs --range '${{ steps.range.outputs.range }}'"),
       ).toEqual([{ index: expect.any(Number), conditions: [] }]);
@@ -222,7 +221,8 @@ describe('no-Claude-attribution guard (#86)', () => {
     it('covers a pull request description edited after the green run', () => {
       // Named in full: naming the list replaces the defaults, so dropping `synchronize` would leave
       // a pushed commit on an open PR unchecked.
-      expect(ciTriggers()).toEqual({ push: null, pull_request: { types: ['opened', 'synchronize', 'reopened', 'edited'] } });
+      // These four in any order; the order means nothing to GitHub, and an extra type only adds a run.
+      expect(ciTriggers()).toEqual({ push: null, pull_request: { types: expect.arrayContaining(['opened', 'synchronize', 'reopened', 'edited']) } });
     });
 
     it('computes the push range from the merge base, which no cancelled run can shorten', () => {
