@@ -1,4 +1,5 @@
 import { describe, it, expect, afterAll, vi } from 'vitest';
+import { execFileSync, spawn } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -11,33 +12,8 @@ import { createServer } from '../../src/server.js';
 import { CONFIG_ACCOUNTS } from '../../src/auth/store-key.js';
 import { TokenStore } from '../../src/auth/token-store.js';
 import { fakeKeychain, keychain, TOKEN_STORE_ACCOUNT } from '../auth/keychain.js';
+import { fenceProcesses } from './process-fence.js';
 import { gitEnv } from '../setup/git-env.js';
-
-// Every export of node:child_process refuses and is recorded, except `security` through execFileSync, which
-// lands in a fake Keychain: nothing that imports the module here can start a real process. This file's own
-// git and spawn calls take the real module explicitly.
-vi.mock('node:child_process', async (importOriginal) => {
-  const refuse = (name: string) => (...args: unknown[]) => {
-    unexpected.push(`${name}(${String(args[0])})`);
-    throw new Error(`unexpected child_process call: ${name}(${String(args[0])})`);
-  };
-  const fakes: Record<string, unknown> = Object.fromEntries(
-    Object.keys(await importOriginal<object>()).map((name) => [name, refuse(name)]),
-  );
-  fakes.execFileSync = (bin: string, args: string[], options?: { input?: string; encoding?: string }) => {
-    if (bin !== '/usr/bin/security') return refuse('execFileSync')(bin);
-    execs.push(args);
-    const { status, output } = fake.run(args, options?.input);
-    if (status !== 0) throw Object.assign(new Error(`security exited ${status}`), { status });
-    // Node's contract: a Buffer unless a string encoding was asked for.
-    return options?.encoding && options.encoding !== 'buffer' ? output : Buffer.from(output);
-  };
-  return { ...fakes, default: fakes };
-});
-const { execFileSync, spawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process');
-const fake = fakeKeychain();
-const execs: string[][] = [];
-const unexpected: string[] = [];
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // Realpathed so the launch is not through a symlink (macOS tmpdir is /var -> /private/var).
@@ -64,7 +40,7 @@ function copyPluginPayload(dest: string): void {
 // the first-run setup gate is skipped too. The subject of this test is unaffected — whether the bundle the
 // manifest launches runs at all, and whether it registers the same tools as this process — because the tool
 // surface is registered whatever the configuration says. What the child can no longer prove, that the
-// bundler kept the Keychain path, is asserted on the artifact in the case below.
+// bundler kept the Keychain path, the case below drives in this process.
 function keylessEnv(dataDirAsFile: string): Record<string, string> {
   return { ZENDESK_DATA_DIR: dataDirAsFile };
 }
@@ -126,37 +102,62 @@ describe('plugin server from a copy without node_modules', () => {
   }, 60_000);
 
   // What the child used to prove by doing it, and now must not: that the bundler kept the Keychain path.
-  // So the bundle is driven, not read: its own runSecurity, reached through its only export, with
-  // node:child_process faked above so `/usr/bin/security` is never executed. A first start must write a key
-  // through stdin, and a second start must read that same key back and decrypt tokens with it.
+  // So the bundle is driven, not read: its createServer runs its own runSecurity inside the process fence,
+  // where execFileSync of `/usr/bin/security` lands in the fake Keychain and every other route to a process
+  // is refused, checked before the bundle loads. A first start must write a key through stdin, and a second
+  // start must read that same key back and decrypt tokens with it.
   it('keeps the Keychain path in the bundle the manifest launches', async () => {
-    const dataDir = mkdtempSync(join(scratch, 'data-bundle-'));
-    const bundle = await import(join(root, 'dist', 'plugin', 'server.js'));
-    bundle.createServer({ ZENDESK_DATA_DIR: dataDir });
-    expect(unexpected).toEqual([]);
-    const key = fake.items.get(TOKEN_STORE_ACCOUNT) as string;
-    expect(Buffer.from(key ?? '', 'base64')).toHaveLength(32);
-
-    for (const account of Object.values(CONFIG_ACCOUNTS)) fake.items.set(account, `stored-${account}`);
-    new TokenStore(join(dataDir, 'tokens.enc'), key).save({ accessToken: 'at-1', refreshToken: 'rt-1', expiresAt: Date.now() + 3_600_000 });
+    const fake = fakeKeychain();
+    const unexpected: string[] = [];
+    const { opened, restore } = await fenceProcesses((name, bin, args, options) => {
+      const o = (options ?? {}) as { input?: unknown; encoding?: string; stdio?: unknown };
+      if (name !== 'execFileSync' || bin !== '/usr/bin/security') {
+        unexpected.push(`${name}(${String(bin)})`);
+        throw new Error(`unexpected child_process call: ${name}(${String(bin)})`);
+      }
+      const { status, output } = fake.run(args as string[], String(o.input ?? ''));
+      if (status !== 0) throw Object.assign(new Error(`security exited ${status}`), { status });
+      // Node's contract: no stdout unless it is piped, and a Buffer unless a string encoding was asked for.
+      if (((Array.isArray(o.stdio) ? o.stdio[1] : o.stdio) ?? 'pipe') !== 'pipe') return null;
+      return o.encoding && o.encoding !== 'buffer' ? output : Buffer.from(output);
+    });
     const requests: string[] = [];
-    const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
-      requests.push(`${input} ${new Headers(init?.headers).get('authorization')}`);
-      return Response.json({ user: { id: 1, name: 'Agent', email: 'agent@acme.test', role: 'admin' } });
-    }) as unknown as typeof fetch;
-    const { server } = bundle.createServer({ ZENDESK_DATA_DIR: dataDir }, { fetchImpl });
-    const [clientT, serverT] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: 'bundle', version: '0.0.0' });
-    await Promise.all([server.connect(serverT), client.connect(clientT)]);
-    await client.callTool({ name: 'zendesk_get_me', arguments: {} });
-    await client.close();
+    try {
+      const dataDir = mkdtempSync(join(scratch, 'data-bundle-'));
+      const bundle = await import(join(root, 'dist', 'plugin', 'server.js'));
+      bundle.createServer({ ZENDESK_DATA_DIR: dataDir });
+      expect(unexpected).toEqual([]);
+      const key = fake.items.get(TOKEN_STORE_ACCOUNT) as string;
+      expect(Buffer.from(key ?? '', 'base64')).toHaveLength(32);
 
+      for (const account of Object.values(CONFIG_ACCOUNTS)) fake.items.set(account, `stored-${account}`);
+      new TokenStore(join(dataDir, 'tokens.enc'), key).save({ accessToken: 'at-1', refreshToken: 'rt-1', expiresAt: Date.now() + 3_600_000 });
+      const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
+        requests.push(`${input} ${new Headers(init?.headers).get('authorization')}`);
+        return Response.json({ user: { id: 1, name: 'Agent', email: 'agent@acme.test', role: 'admin' } });
+      }) as unknown as typeof fetch;
+      const { server } = bundle.createServer({ ZENDESK_DATA_DIR: dataDir }, { fetchImpl });
+      const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: 'bundle', version: '0.0.0' });
+      await Promise.all([server.connect(serverT), client.connect(clientT)]);
+      await client.callTool({ name: 'zendesk_get_me', arguments: {} });
+      await client.close();
+    } finally {
+      restore();
+    }
+
+    expect(opened).toEqual([]);
     expect(requests).toEqual(['https://stored-oauth-subdomain.zendesk.com/api/v2/users/me.json Bearer at-1']);
     const find = (account: string) => ['find-generic-password', '-s', 'zendesk-plugin', '-a', account, '-w'];
     const config = Object.values(CONFIG_ACCOUNTS).map(find);
     // The stdin form, because an argv form would put the key in `ps`; the fake also demands it twice.
     const add = ['add-generic-password', '-s', 'zendesk-plugin', '-a', TOKEN_STORE_ACCOUNT, '-U', '-w'];
-    expect(execs).toEqual([...config, ...config, find(TOKEN_STORE_ACCOUNT), add, ...config, find(TOKEN_STORE_ACCOUNT)]);
+    // The order and arguments of what touches the key, and a read of each config item; not how often the
+    // config is read, which a cache may change.
+    const argv = fake.calls.map((c) => c.args);
+    expect(argv.filter((a) => a.includes(TOKEN_STORE_ACCOUNT))).toEqual([find(TOKEN_STORE_ACCOUNT), add, find(TOKEN_STORE_ACCOUNT)]);
+    expect(argv).toEqual(expect.arrayContaining(config));
+    for (const a of argv) expect([...config, find(TOKEN_STORE_ACCOUNT), add]).toContainEqual(a);
     expect(unexpected).toEqual([]);
   });
 });
