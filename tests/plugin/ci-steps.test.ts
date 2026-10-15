@@ -38,11 +38,16 @@ jobs:
         run: npm run anchored
       - run: npm run reshelled
         shell: bash -c 'true' {0}
+      - run: echo "$READ"
+        env:
+          READ: an input
+          NODE_OPTIONS: --import=./exit0.mjs
   skipped:
     if: github.event_name == 'push'
     steps:
       - run: npm run gated
   soft:
+    needs: skipped
     continue-on-error: true
     defaults:
       run:
@@ -62,7 +67,7 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
   it('finds a live step, as a `run: |` block, through an alias, or with `if: success()` and `continue-on-error: ${{ false }}`', () => {
     expect(at('build-test', 'npm ci')).toEqual([{ index: 0, conditions: [] }]);
     expect(at('build-test', 'npm run spelled-out')).toEqual([{ index: 4, conditions: [] }]);
-    expect(at('soft', 'npm run anchored')).toEqual([{ index: 1, conditions: ['continue-on-error', 'shell: sh'] }]);
+    expect(at('soft', 'npm run anchored')).toEqual([{ index: 1, conditions: ['continue-on-error', 'shell: sh', 'needs: skipped'] }]);
   });
 
   it('finds no step for a comment, an echo, a line of a script, or another job', () => {
@@ -72,11 +77,12 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
     expect(at('build-test', 'npm run moved')).toEqual([]);
   });
 
-  it('names every condition that can keep a step from gating, on the step or its job', () => {
+  it('names every condition it reads that can keep a step from gating: if, continue-on-error, shell, needs, unread env', () => {
     expect(at('build-test', 'npm run never')).toEqual([{ index: 2, conditions: [false] }]);
     expect(at('build-test', 'npm run tolerated')).toEqual([{ index: 3, conditions: ['continue-on-error'] }]);
     expect(at('skipped', 'npm run gated')).toEqual([{ index: 0, conditions: ["github.event_name == 'push'"] }]);
-    expect(at('soft', 'npm run soft')).toEqual([{ index: 0, conditions: ['continue-on-error', 'shell: sh'] }]);
+    expect(at('soft', 'npm run soft')).toEqual([{ index: 0, conditions: ['continue-on-error', 'shell: sh', 'needs: skipped'] }]);
+    expect(at('build-test', 'echo "$READ"')).toEqual([{ index: 8, conditions: ['env: NODE_OPTIONS'] }]);
     expect(at('build-test', 'npm run reshelled')).toEqual([{ index: 7, conditions: ["shell: bash -c 'true' {0}"] }]);
   });
 

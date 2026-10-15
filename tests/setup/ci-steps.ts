@@ -7,15 +7,15 @@ import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-type Gate = { if?: unknown; 'continue-on-error'?: unknown; shell?: unknown; defaults?: { run?: { shell?: unknown } } };
-type Step = Gate & { id?: string; env?: Record<string, unknown>; run?: unknown; uses?: unknown; with?: Record<string, unknown> };
-type Workflow = Gate & { on?: unknown; true?: unknown; jobs?: Record<string, Gate & { steps?: Step[] }> };
+type Gate = { if?: unknown; 'continue-on-error'?: unknown; shell?: unknown; defaults?: { run?: { shell?: unknown } }; env?: Record<string, unknown> };
+type Step = Gate & { id?: string; run?: unknown; uses?: unknown; with?: Record<string, unknown> };
+type Workflow = Gate & { on?: unknown; true?: unknown; jobs?: Record<string, Gate & { needs?: unknown; steps?: Step[] }> };
 
 const CI_WORKFLOW = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'ci.yml');
 
 // safe_load with aliases, because GitHub accepts anchors and Psych 4+ `load_file` refuses them.
 // A thrown error, not a skip, when Ruby is missing: a skipped wiring case is a green one.
-export function ciWorkflow(path = CI_WORKFLOW): Workflow {
+function ciWorkflow(path = CI_WORKFLOW): Workflow {
   const script = 'print JSON.generate(YAML.safe_load(File.read(ARGV[0]), aliases: true))';
   const ruby = spawnSync('ruby', ['-ryaml', '-rjson', '-e', script, path], { encoding: 'utf8' });
   if (ruby.status !== 0) throw new Error(`ruby could not parse ${path}: ${ruby.error?.message ?? ruby.stderr}`);
@@ -42,33 +42,33 @@ const conditions = (g: Gate | undefined) => [
 const shells = (...gs: Array<Gate | undefined>) =>
   gs.flatMap((g) => g?.shell ?? g?.defaults?.run?.shell ?? []).map((s) => `shell: ${String(s)}`);
 
-// Every `run` step of `job` with its position and whatever could stop its script from gating: an
-// `if` (`false` included), continue-on-error, or a shell, on the workflow, the job or the step.
-export function ciRunSteps(job: string, path = CI_WORKFLOW) {
+// Every step of `job` with its position, its env (workflow, then job, then step) and whatever stops
+// its script from gating: an `if` (`false` included), continue-on-error or a shell on the workflow,
+// job or step; any `needs`, since a skipped needed job skips this one; and an env key no script here
+// reads, which can only change how the tools run (`npm_config_script_shell`, `NODE_OPTIONS`).
+// ponytail: a script that names such a key by hand hides it. NOT read: an earlier step that rewrites
+// the command; a required status check is the boundary for that.
+export function ciJobSteps(job: string, path = CI_WORKFLOW) {
   const wf = ciWorkflow(path);
   const j = wf.jobs?.[job];
-  return (j?.steps ?? []).map((step, index) => ({
-    step,
-    index,
-    conditions: [...conditions(j), ...conditions(step), ...shells(wf, j, step)],
-  }));
+  const scripts = Object.values(wf.jobs ?? {}).flatMap((x) => x.steps ?? []).map((x) => String(x.run ?? '')).join('\n');
+  return (j?.steps ?? []).map((step, index) => {
+    const env = { ...wf.env, ...j?.env, ...step.env };
+    const unread = Object.keys(env).filter((k) => !new RegExp(`\\$\\{?${k}\\b`).test(scripts));
+    const needs = [j?.needs ?? []].flat().map((n) => `needs: ${String(n)}`);
+    return { step, index, env, conditions: [...conditions(j), ...conditions(step), ...shells(wf, j, step), ...needs, ...unread.map((k) => `env: ${k}`)] };
+  });
 }
 
 // Every step of `job` whose whole `run` is `command`.
 // ponytail: whole run, not a line of it — a line after `exit 0` in a script is text, not a step,
 // and telling which lines execute would take a shell interpreter.
 export const ciSteps = (job: string, command: string, path = CI_WORKFLOW) =>
-  ciRunSteps(job, path).flatMap(({ step, index, conditions }) =>
+  ciJobSteps(job, path).flatMap(({ step, index, conditions }) =>
     typeof step.run === 'string' && step.run.trim() === command ? [{ index, conditions }] : [],
   );
 
-// Every step of `job` that uses `action` at any version, with its `with` inputs and the same gates.
-// Lowercased, because GitHub resolves `Actions/checkout` to the same repository.
-export function ciUses(job: string, action: string, path = CI_WORKFLOW) {
-  const j = ciWorkflow(path).jobs?.[job];
-  return (j?.steps ?? []).flatMap((step, index) =>
-    typeof step.uses === 'string' && step.uses.split('@')[0].toLowerCase() === action
-      ? [{ index, with: step.with, conditions: [...conditions(j), ...conditions(step)] }]
-      : [],
-  );
-}
+// Every step of `job` that uses `action` at any version, lowercased because GitHub resolves
+// `Actions/checkout` to the same repository.
+export const ciUses = (job: string, action: string, path = CI_WORKFLOW) =>
+  ciJobSteps(job, path).filter(({ step }) => String(step.uses).split('@')[0].toLowerCase() === action);
