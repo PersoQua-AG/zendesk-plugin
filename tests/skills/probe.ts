@@ -202,8 +202,8 @@ export interface RecordedCase {
   source: Array<{ file: string; line: number; quote: string }>;
   input: Record<string, unknown>;
   expected: string;
-  // Why a case whose `expected` names no tool, command, file or section is left to the grader.
-  unchecked?: string;
+  // Set when `expected` names nothing CI can check, so the whole text is left to the grader.
+  unchecked?: true;
 }
 
 // Recorded cases for model behaviour: CI checks their structure and citations, never the behaviour.

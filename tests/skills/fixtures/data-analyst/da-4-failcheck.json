@@ -16,5 +16,5 @@
     "report_line": "CSAT: no rated responses"
   },
   "expected": "Says there were no rated responses in the window. Never reports satisfaction as 0 or as a measured value.",
-  "unchecked": "Names no tool, command, file or section: the outcome is how a missing CSAT is worded."
+  "unchecked": true
 }

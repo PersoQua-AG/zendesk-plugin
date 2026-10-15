@@ -45,5 +45,5 @@
     ]
   },
   "expected": "Ranks 2001 (breached SLA), 2002 (urgent), 2003 (oldest pending), 2004 (age) in a short table with a reason per row. No raw JSON.",
-  "unchecked": "Names no tool, command, file or section: the outcome is the order of the input queue."
+  "unchecked": true
 }
