@@ -73,8 +73,8 @@ describe('the Claude Code plugin manifest', () => {
 
   // The plugin description is typed twice, once per shipped manifest, and nothing else ties the two
   // copies together. The length is an owner decision (OQ-6): 182 characters is the median of the 315
-  // entries of the reference catalog, so a listing neither truncates nor reads thin next to its
-  // neighbours. Counted in code points, as a catalog renders them — `[...s]`, not `s.length`, which
+  // entries of the reference marketplace, so a listing neither truncates nor reads thin next to its
+  // neighbours. Counted in code points, as a marketplace listing renders them — `[...s]`, not `s.length`, which
   // counts UTF-16 units. `metadata.description` in marketplace.json is a different, longer sentence
   // on purpose and is not held to either rule.
   describe('the plugin description', () => {
