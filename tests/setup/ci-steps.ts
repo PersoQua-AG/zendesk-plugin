@@ -29,10 +29,13 @@ export const ciTriggers = (path = CI_WORKFLOW) => {
   return wf.on ?? wf.true;
 };
 
-// `success()` is what GitHub evaluates when `if` is absent, so spelling it out changes nothing.
+// A value without its `${{ }}`: GitHub evaluates `${{ false }}` to what `false` says.
+export const bare = (v: unknown) => String(v).replace(/^\$\{\{\s*|\s*\}\}$/g, '');
+
+// `success()` and `false` are what GitHub uses when `if` and continue-on-error are absent.
 const conditions = (g: Gate | undefined) => [
-  ...(g?.if === undefined || String(g.if).replace(/^\$\{\{\s*|\s*\}\}$/g, '') === 'success()' ? [] : [g.if]),
-  ...(g?.['continue-on-error'] ? ['continue-on-error'] : []),
+  ...(g?.if === undefined || bare(g.if) === 'success()' ? [] : [g.if]),
+  ...(g?.['continue-on-error'] === undefined || bare(g['continue-on-error']) === 'false' ? [] : ['continue-on-error']),
 ];
 
 // A declared shell decides what `run` means: `shell: bash -c 'true' {0}` never reads the script.
@@ -60,10 +63,11 @@ export const ciSteps = (job: string, command: string, path = CI_WORKFLOW) =>
   );
 
 // Every step of `job` that uses `action` at any version, with its `with` inputs and the same gates.
+// Lowercased, because GitHub resolves `Actions/checkout` to the same repository.
 export function ciUses(job: string, action: string, path = CI_WORKFLOW) {
   const j = ciWorkflow(path).jobs?.[job];
   return (j?.steps ?? []).flatMap((step, index) =>
-    typeof step.uses === 'string' && step.uses.split('@')[0] === action
+    typeof step.uses === 'string' && step.uses.split('@')[0].toLowerCase() === action
       ? [{ index, with: step.with, conditions: [...conditions(j), ...conditions(step)] }]
       : [],
   );

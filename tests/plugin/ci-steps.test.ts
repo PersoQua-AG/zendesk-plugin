@@ -30,6 +30,7 @@ jobs:
         continue-on-error: true
       - run: npm run spelled-out
         if: \${{ success() }}
+        continue-on-error: \${{ false }}
       - run: |
           exit 0
           npm run dead
@@ -58,7 +59,7 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const at = (job: string, command: string) => ciSteps(job, command, path);
 
-  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`', () => {
+  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()` and `continue-on-error: ${{ false }}`', () => {
     expect(at('build-test', 'npm ci')).toEqual([{ index: 0, conditions: [] }]);
     expect(at('build-test', 'npm run spelled-out')).toEqual([{ index: 4, conditions: [] }]);
     expect(at('soft', 'npm run anchored')).toEqual([{ index: 1, conditions: ['continue-on-error', 'shell: sh'] }]);
@@ -79,7 +80,9 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
     expect(at('build-test', 'npm run reshelled')).toEqual([{ index: 7, conditions: ["shell: bash -c 'true' {0}"] }]);
   });
 
-  it('reads the bare `on:` key that YAML 1.1 turns into true', () => {
+  it('reads the bare `on:` key that YAML 1.1 turns into true, and a quoted one', () => {
     expect(ciTriggers(path)).toEqual({ pull_request: { types: ['edited'] } });
+    writeFileSync(join(dir, 'quoted.yml'), '"on": push\n');
+    expect(ciTriggers(join(dir, 'quoted.yml'))).toBe('push');
   });
 });
