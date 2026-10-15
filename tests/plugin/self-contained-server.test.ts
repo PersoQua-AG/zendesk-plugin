@@ -126,7 +126,7 @@ describe('plugin server from a copy without node_modules', () => {
       const dataDir = mkdtempSync(join(scratch, 'data-bundle-'));
       const bundle = await import(join(root, 'dist', 'plugin', 'server.js'));
       bundle.createServer({ ZENDESK_DATA_DIR: dataDir });
-      expect(unexpected).toEqual([]);
+      expect([...unexpected, ...opened]).toEqual([]);
       const key = fake.items.get(TOKEN_STORE_ACCOUNT) as string;
       expect(Buffer.from(key ?? '', 'base64')).toHaveLength(32);
 
@@ -146,7 +146,6 @@ describe('plugin server from a copy without node_modules', () => {
       restore();
     }
 
-    expect(opened).toEqual([]);
     expect(requests).toEqual(['https://stored-oauth-subdomain.zendesk.com/api/v2/users/me.json Bearer at-1']);
     const find = (account: string) => ['find-generic-password', '-s', 'zendesk-plugin', '-a', account, '-w'];
     const config = Object.values(CONFIG_ACCOUNTS).map(find);
@@ -158,6 +157,6 @@ describe('plugin server from a copy without node_modules', () => {
     expect(argv.filter((a) => a.includes(TOKEN_STORE_ACCOUNT))).toEqual([find(TOKEN_STORE_ACCOUNT), add, find(TOKEN_STORE_ACCOUNT)]);
     expect(argv).toEqual(expect.arrayContaining(config));
     for (const a of argv) expect([...config, find(TOKEN_STORE_ACCOUNT), add]).toContainEqual(a);
-    expect(unexpected).toEqual([]);
+    expect([...unexpected, ...opened]).toEqual([]);
   });
 });
