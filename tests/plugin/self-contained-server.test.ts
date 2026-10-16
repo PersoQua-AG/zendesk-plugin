@@ -156,6 +156,9 @@ describe('plugin server from a copy without node_modules', () => {
       const bundle = await import(join(root, 'dist', 'plugin', 'server.js'));
       bundle.createServer({ ZENDESK_DATA_DIR: dataDir });
       expect([...unexpected, ...opened]).toEqual([]);
+      // Inside the window a call that does not name `security` is still refused, not passed through.
+      expect(() => execFileSync(process.execPath, ['-e', ''])).toThrow(`unexpected child_process call: execFileSync(${process.execPath})`);
+      expect(unexpected.splice(0)).toEqual([`execFileSync(${process.execPath})`]);
       const key = fake.items.get(TOKEN_STORE_ACCOUNT) as string;
       expect(Buffer.from(key ?? '', 'base64')).toHaveLength(32);
 
