@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitEnv } from '../setup/git-env.js';
-import { ciSteps, ciTriggers, ciWorkflow } from '../setup/ci-steps.js';
+import { bare, ciSteps, ciTriggers, ciUses, ciWorkflow } from '../setup/ci-steps.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-attribution.mjs');
@@ -238,7 +238,15 @@ describe('no-Claude-attribution guard (#86)', () => {
     // A shallow clone has no base commit, so the range would not resolve and the job would be
     // green-by-error. This is the one wiring detail whose absence is silent.
     it('checks out full history, or the range cannot be resolved', () => {
-      expect(ci()).toMatch(/attribution-guard:[\s\S]*?fetch-depth: 0/);
+      // bare(), because the runner hands every input to the action as text: 0, '0' and ${{ 0 }} are the
+      // same input, and an absent or empty one is the action's default depth of 1. This repository, at
+      // its root (no `repository`, no `path`), before the range step reads it.
+      const rangeAt = ciWorkflow().jobs?.['attribution-guard']?.steps?.findIndex((s) => s.id === 'range') ?? -1;
+      expect(
+        ciUses('attribution-guard', 'actions/checkout').map(({ index, with: w = {}, conditions }) => ({
+          depth: bare(w['fetch-depth']), repository: w.repository, path: w.path, beforeRange: index < rangeAt, conditions,
+        })),
+      ).toEqual([{ depth: '0', beforeRange: true, conditions: [] }]);
     });
   });
 });

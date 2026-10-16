@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 type Gate = { if?: unknown; 'continue-on-error'?: unknown };
-type Step = Gate & { id?: string; run?: unknown };
+type Step = Gate & { id?: string; run?: unknown; uses?: unknown; with?: Record<string, unknown> };
 type Workflow = { on?: unknown; true?: unknown; jobs?: Record<string, Gate & { steps?: Step[] }> };
 
 const CI_WORKFLOW = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'ci.yml');
@@ -30,7 +30,7 @@ export const ciTriggers = (path = CI_WORKFLOW) => {
 };
 
 // A value without its `${{ }}`: GitHub evaluates `${{ false }}` to what `false` says.
-const bare = (v: unknown) => String(v).replace(/^\$\{\{\s*|\s*\}\}$/g, '');
+export const bare = (v: unknown) => String(v).replace(/^\$\{\{\s*|\s*\}\}$/g, '');
 
 // `success()` and `false` are what GitHub uses when `if` and continue-on-error are absent; `if: true`
 // is the same default, because success() is implied when no status function is named.
@@ -52,6 +52,17 @@ export function ciSteps(job: string, command: string, path = CI_WORKFLOW) {
   return (j?.steps ?? []).flatMap((step, index) =>
     typeof step.run === 'string' && step.run.trim() === command
       ? [{ index, conditions: [...conditions(j), ...conditions(step)] }]
+      : [],
+  );
+}
+
+// Every step of `job` that uses `action` at any version, with its `with` inputs and the same gates.
+// Lowercased, because GitHub resolves `Actions/checkout` to the same repository.
+export function ciUses(job: string, action: string, path = CI_WORKFLOW) {
+  const j = ciWorkflow(path).jobs?.[job];
+  return (j?.steps ?? []).flatMap((step, index) =>
+    typeof step.uses === 'string' && step.uses.split('@')[0].toLowerCase() === action
+      ? [{ index, with: step.with, conditions: [...conditions(j), ...conditions(step)] }]
       : [],
   );
 }

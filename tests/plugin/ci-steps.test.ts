@@ -5,7 +5,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ciSteps, ciTriggers } from '../setup/ci-steps.js';
+import { ciSteps, ciTriggers, ciUses } from '../setup/ci-steps.js';
 
 const WORKFLOW = `
 on:
@@ -38,6 +38,12 @@ jobs:
         run: npm run anchored
       - run: npm run always
         if: \${{ true }}
+      - uses: Actions/Checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: false
+      - uses: [actions/checkout@v4]
   skipped:
     if: github.event_name == 'push'
     steps:
@@ -47,6 +53,7 @@ jobs:
     steps:
       - run: npm run soft
       - *shared
+      - uses: actions/checkout@v4
 `;
 
 describe('ciSteps reads the workflow as GitHub does, not as text', () => {
@@ -75,6 +82,14 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
     expect(at('build-test', 'npm run tolerated')).toEqual([{ index: 3, conditions: ['continue-on-error'] }]);
     expect(at('skipped', 'npm run gated')).toEqual([{ index: 0, conditions: ["github.event_name == 'push'"] }]);
     expect(at('soft', 'npm run soft')).toEqual([{ index: 0, conditions: ['continue-on-error'] }]);
+  });
+
+  it('finds an action at any version and in any case, with its inputs and gates, and no `uses` that is not a string', () => {
+    expect(ciUses('build-test', 'actions/checkout', path)).toEqual([
+      { index: 8, with: { 'fetch-depth': 0 }, conditions: [] },
+      { index: 9, with: undefined, conditions: [false] },
+    ]);
+    expect(ciUses('soft', 'actions/checkout', path)).toEqual([{ index: 2, with: undefined, conditions: ['continue-on-error'] }]);
   });
 
   it('reads the bare `on:` key that YAML 1.1 turns into true, and a quoted one', () => {
