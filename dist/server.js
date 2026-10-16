@@ -107,7 +107,8 @@ function resolveOrDegrade(env, security) {
             // bridge does not support one), and the MCPB extension, whose dialog used to be named here
             // last, is retired (#103). On a platform without a Keychain the environment is the only way in
             // (#69). Naming a dialog the product does not have would send a half-configured operator into a
-            // path that cannot be reached, so the clause is pinned shut in tests/server.unconfigured.test.ts.
+            // path that cannot be reached, so tests/server.unconfigured.test.ts holds every sentence to a
+            // registered tool or a variable and keeps the retired dialog's wordings out.
             reason: `${reason}${problem ? ` ${problem}` : ''} Call the zendesk_login tool: on macOS it answers with a local setup page that ` +
                 'collects the subdomain, client id and client secret. Otherwise pass them in the environment ' +
                 '(ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET).',
@@ -124,9 +125,9 @@ function openCacheOrDegrade(auth) {
     }
     catch (err) {
         const code = errorCode(err);
-        const problem = `The extension's data directory cannot be used (${code}), so responses cannot be cached and ` +
-            `tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;
-        const reason = auth.ok ? problem : `${auth.reason.replace(/,? then reload the extension\.$/, '.')} ${problem}`;
+        const problem = `The data directory cannot be used (${code}), so responses cannot be cached and ` +
+            `tokens cannot be stored. Make sure it is a writable directory with free space, then restart Claude Code.`;
+        const reason = auth.ok ? problem : `${auth.reason} ${problem}`;
         const fail = () => {
             throw new Error(reason);
         };

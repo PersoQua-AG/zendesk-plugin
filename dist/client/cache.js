@@ -47,8 +47,8 @@ export class ResponseCache {
             catch {
                 /* the original failure is the one worth reporting */
             }
-            throw new Error(`Caching the response failed (${errorCode(err)}). Make sure the extension's data ` +
-                'directory is a writable directory with free space, then reload the extension.', { cause: err });
+            throw new Error(`Caching the response failed (${errorCode(err)}). Make sure the data directory ` +
+                'is a writable directory with free space, then restart Claude Code.', { cause: err });
         }
         // Housekeeping, outside the write contract: the entry is on disk, so the caller must get its
         // handle even if the sweep fails. Announce it on stderr; the next save() sweeps again.

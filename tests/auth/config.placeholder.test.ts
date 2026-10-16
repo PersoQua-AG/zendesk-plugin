@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveAuthConfig, USER_CONFIG_FIELD_BY_ENV } from '../../src/auth/config.js';
+import { resolveAuthConfig } from '../../src/auth/config.js';
 import { keychain } from './keychain.js';
 import { createServer } from '../../src/server.js';
 
@@ -49,10 +49,10 @@ describe('unsubstituted ${user_config.*} placeholders', () => {
   });
 
   it.each(['ZENDESK_SUBDOMAIN', 'ZENDESK_OAUTH_CLIENT_ID'])(
-    'a required %s left as a placeholder fails loudly and names the config field',
+    'a required %s left as a placeholder fails loudly and names the variable',
     (name) => {
-      const env = { ...fullEnv(), [name]: `\${user_config.${USER_CONFIG_FIELD_BY_ENV[name]}}` };
-      expect(() => resolveAuthConfig(env, keychain())).toThrow(USER_CONFIG_FIELD_BY_ENV[name]);
+      const env = { ...fullEnv(), [name]: `\${user_config.${name.toLowerCase()}}` };
+      expect(() => resolveAuthConfig(env, keychain())).toThrow(`Missing required environment variable: ${name}.`);
     },
   );
 

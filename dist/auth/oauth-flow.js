@@ -288,7 +288,7 @@ export function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_C
             // The code as well as the class: any other RangeError is not node's port validation.
             const badPort = err instanceof RangeError && err.code === 'ERR_SOCKET_BAD_PORT';
             throw badPort
-                ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
+                ? new Error(`OAuth callback server could not start on port ${port} (ZENDESK_OAUTH_CALLBACK_PORT ${CALLBACK_PORT_RULE}).`, {
                     cause: err,
                 })
                 : new Error(

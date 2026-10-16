@@ -16,7 +16,7 @@ describe('zendesk_login with an unusable callback port', () => {
     // oauth-flow.bind-liveness.test.ts. Handwriting it a second time here pins a sentence; what
     // this case is about is that the sentence reaches the MCP boundary intact.
     expect(text).toBe(
-      `Zendesk login failed: OAuth callback server could not start on port 70000 (${CALLBACK_PORT_RULE}). ` +
+      `Zendesk login failed: OAuth callback server could not start on port 70000 (ZENDESK_OAUTH_CALLBACK_PORT ${CALLBACK_PORT_RULE}). ` +
         'Run zendesk_login again once that is resolved.',
     );
     // NOT subsumed by the toBe() above, measured rather than assumed (#94). That assertion
@@ -28,7 +28,7 @@ describe('zendesk_login with an unusable callback port', () => {
     // — the first-line truncation in failureText (src/tools/login.ts) — because that truncation is
     // what keeps a multi-line rule from reaching the boundary today. No line numbers here on
     // purpose: this comment has already outlived one renumbering of the file (#89).
-    expect(text).toContain('oauth_callback_port');
+    expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT');
     // MCP presentation rules: one line, no path, no secret.
     expect(text.split('\n')).toHaveLength(1);
     expect(text).not.toContain('secret-xyz');
