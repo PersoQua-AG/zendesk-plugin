@@ -93,7 +93,8 @@ describe('the installed plugin offers no way to choose the security level, and n
 
   // The members are read from release.yml's one-line `- run: zip -MM -r <archive> <members>` step, so a
   // newly shipped path is scanned without an edit here; any other form of that step (folded, continued,
-  // commented, extra flags) fails at the parse instead of shrinking the scan. README.md has the cases
+  // commented, extra flags) fails at an assertion (the zip-line parse or the member check) instead of
+  // shrinking the scan. README.md has the cases
   // above, dist/plugin is the server itself. A bare level name stays free ("hand off"), a backticked one does not.
   it('no other shipped text speaks about the security level or names a level in backticks', () => {
     const zip = (read('.github/workflows/release.yml').match(/^ *- run: zip -MM -r \S+ (.+)$/m)?.[1] ?? '').trim().split(/\s+/);
