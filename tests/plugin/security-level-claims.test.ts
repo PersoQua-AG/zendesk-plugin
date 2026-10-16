@@ -7,7 +7,8 @@
 // made in words, so there the words ARE the contract: the two passages that speak about the level are
 // pinned whole (whitespace-normalised, so a rewrap is free), with the level taken from the server, and
 // no other README text may speak about it or name a level (text oracle T2, round 3, 2026-10-15). The
-// other texts the release ships (every member of release.yml's `zip -MM -r` line) may not speak about it either.
+// other texts the release ships (every member of release.yml's one-line `- run: zip -MM -r <archive> <members>`
+// step) may not speak about it either.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -90,12 +91,14 @@ describe('the installed plugin offers no way to choose the security level, and n
     expect(rest.match(re)?.[0], 'README outside the two pinned passages').toBeUndefined();
   });
 
-  // The members are read from release.yml, so a newly shipped path is scanned without an edit here;
-  // README.md has the cases above, dist/plugin is the server itself. A bare level name stays free
-  // ("hand off"), a backticked one does not.
+  // The members are read from release.yml's one-line `- run: zip -MM -r <archive> <members>` step, so a
+  // newly shipped path is scanned without an edit here; any other form of that step (folded, continued,
+  // commented, extra flags) fails at the parse instead of shrinking the scan. README.md has the cases
+  // above, dist/plugin is the server itself. A bare level name stays free ("hand off"), a backticked one does not.
   it('no other shipped text speaks about the security level or names a level in backticks', () => {
-    const zip = read('.github/workflows/release.yml').match(/zip -MM -r \S+ (.+)/)?.[1].trim().split(/\s+/) ?? [];
+    const zip = (read('.github/workflows/release.yml').match(/^ *- run: zip -MM -r \S+ (.+)$/m)?.[1] ?? '').trim().split(/\s+/);
     expect(zip, 'release.yml zip line').toContain('.claude-plugin');
+    for (const m of zip) expect(existsSync(join(root, m)), `release.yml zip member ${m}`).toBe(true);
     const re = new RegExp(`security[\\s_-]?level|\`(${SECURITY_LEVELS.join('|')})\``, 'i');
     for (const member of zip.filter((m) => m !== 'README.md' && m !== 'dist/plugin')) {
       const files = statSync(join(root, member)).isFile()
