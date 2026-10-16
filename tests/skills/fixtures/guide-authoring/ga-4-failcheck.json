@@ -9,6 +9,11 @@
       "file": "skills/guide-authoring/SKILL.md",
       "line": 21,
       "quote": "Ask the user for the German text; if they only supply"
+    },
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 20,
+      "quote": "2. Add the German translation: `zendesk_create_article_translation`"
     }
   ],
   "input": {

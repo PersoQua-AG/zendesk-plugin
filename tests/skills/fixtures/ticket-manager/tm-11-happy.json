@@ -19,6 +19,11 @@
       "file": "agents/support-agent.md",
       "line": 26,
       "quote": "- You never send, post, escalate, or change ticket state."
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 81,
+      "quote": "- Public reply to the customer: `zendesk_add_comment`"
     }
   ],
   "input": {

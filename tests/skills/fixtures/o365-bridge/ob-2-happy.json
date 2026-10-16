@@ -19,6 +19,16 @@
       "file": "skills/o365-bridge/SKILL.md",
       "line": 33,
       "quote": "**Email via Outlook.** Send a ticket summary to a colleague"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 22,
+      "quote": "- `zendesk_get_ticket` (`ticketId`)"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 23,
+      "quote": "- `zendesk_list_comments` (`ticketId`)"
     }
   ],
   "input": {
