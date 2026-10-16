@@ -38,6 +38,7 @@ describe('recorded skill cases', () => {
       const said = String(c.expected ?? ''); // a missing or non-string field is the well-formed case's red, not a TypeError here
       const files = c.source.map((s) => s.file);
       const cited = [...new Set(files)].filter((f) => existsSync(join(root, f))).map(read).join('\n');
+      const citedLines = c.source.filter((s) => existsSync(join(root, s.file))).map((s) => read(s.file).split('\n')[s.line - 1]).join('\n');
       const quotedTools = toolsNamedIn(c.source.map((s) => s.quote).join('\n'));
       const skill = `skills/${c.skill}/SKILL.md`;
       const refs = [
@@ -45,11 +46,12 @@ describe('recorded skill cases', () => {
         ...[...said.matchAll(/\/zendesk:([\w-]+)/gi)].map(([, n]) => ref(`commands/${n}.md`, files.includes(`commands/${n}.md`))),
         ...(said.match(/(?:\.?[\w-]+\/)+[\w.-]+\.(?:ts|mjs|js|md|json|ya?ml)\b/g) ?? []).map((f) => ref(f, files.includes(f))),
         ...[...said.matchAll(/SKILL\.md "([^"]+)"/g)].map(([, h]) => ref(`${skill} ## ${h}`, c.source.some((s) => s.file === skill && s.quote === `## ${h}`))),
-        ...[...said.matchAll(/\b`?([a-z0-9]+(?:-[a-z0-9]+)+)`? (skill|subagent)s?\b/gi)].map(([, n, k]) =>
+        // a hyphenated adjective before skill/subagent ("this read-only skill") is read as a name and goes red; reword it.
+        ...[...said.matchAll(/\b([a-z0-9]+(?:-[a-z0-9]+)+)`? (skill|subagent)s?\b/gi)].map(([, n, k]) =>
           ref(`${k} ${n}`, cited.includes(n) && (k.toLowerCase() === 'skill' ? skillNames().includes(n) : filesIn('agents', '.md').includes(`agents/${n}.md`))),
         ),
         // ponytail: camelCase only; a lowercase or PascalCase identifier stays prose for the grader.
-        ...[...new Set(said.match(/\b[a-z]+[A-Z]\w*/g))].map((id) => ref(`identifier ${id}`, new RegExp(`\\b${id}\\b`).test(cited))),
+        ...[...new Set(said.match(/\b[a-z]+[A-Z]\w*/g))].map((id) => ref(`identifier ${id}`, new RegExp(`\\b${id}\\b`).test(citedLines))),
       ];
       const declared =
         refs.length === 0

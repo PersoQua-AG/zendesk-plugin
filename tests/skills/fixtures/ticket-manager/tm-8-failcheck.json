@@ -37,6 +37,11 @@
     },
     {
       "file": "skills/ticket-manager/SKILL.md",
+      "line": 61,
+      "quote": "followupSourceId:<closed ticket id>"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
       "line": 64,
       "quote": "For several at once, `zendesk_create_tickets_bulk`"
     }
