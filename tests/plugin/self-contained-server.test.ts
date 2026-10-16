@@ -133,8 +133,10 @@ describe('plugin server from a copy without node_modules', () => {
     const fake = fakeKeychain();
     let closed = false;
     const { opened } = (fence = await fenceProcesses((name, bin, args, options, pass) => {
-      // Any spelling that can start the Keychain tool stays shut: a PATH lookup, a shell string, a shell's argument.
-      const namesSecurity = /(^|[\s/'"])security(?=[\s'"]|$)/.test([bin, ...(Array.isArray(args) ? args : [])].map(String).join(' '));
+      // Any call that names the Keychain tool, in any case, stays shut: a PATH lookup, a shell string, a shell's
+      // argument. A name assembled at runtime, a script on stdin or a copy of the binary passes this check; only
+      // the sandbox stops those.
+      const namesSecurity = /\bsecurity\b/i.test([bin, ...(Array.isArray(args) ? args : [])].map(String).join(' '));
       if (closed && !namesSecurity) return pass();
       const o = (options ?? {}) as { input?: unknown; encoding?: string; stdio?: unknown };
       if (closed || name !== 'execFileSync' || bin !== '/usr/bin/security') {
@@ -182,10 +184,12 @@ describe('plugin server from a copy without node_modules', () => {
     expect(() => execFileSync('/usr/bin/security', ['help'])).toThrow('unexpected child_process call: execFileSync(/usr/bin/security)');
     expect(() => execFileSync('security', ['help'])).toThrow('unexpected child_process call: execFileSync(security)');
     expect(() => execSync('/usr/bin/security help')).toThrow('unexpected child_process call: execSync(/usr/bin/security help)');
+    expect(() => execSync('cd /;SECURITY help')).toThrow('unexpected child_process call: execSync(cd /;SECURITY help)');
     expect(unexpected.splice(0)).toEqual([
       'after the window: execFileSync(/usr/bin/security)',
       'after the window: execFileSync(security)',
       'after the window: execSync(/usr/bin/security help)',
+      'after the window: execSync(cd /;SECURITY help)',
     ]);
     let ran: unknown;
     expect(() => (ran = execFileSync(process.execPath, ['-e', 'process.stdout.write("passed")'], { encoding: 'utf8' }))).not.toThrow();
