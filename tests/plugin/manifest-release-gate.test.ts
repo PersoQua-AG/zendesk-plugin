@@ -127,19 +127,42 @@ describe('manifest release gate', () => {
 
   // The version fan-out: seven hand-kept declarations, package.json the reference and six sites
   // measured against it. Putting any ONE of them out of step must fail the gate.
-  it.each([
-    'package.json',
+  //
+  // Asserted on WHICH sites are flagged plus the whole drift line, never on a bare needle: both
+  // package-lock sites print the same filename and DRIFT may appear in any line, so a needle was
+  // carried by whichever line existed (a mislabelled reader, a swapped or dropped operand stayed green).
+  // The `  - <label>: …` stderr list is the script's only failure output besides the exit code (it
+  // exports nothing), so it is the contract; rewording the drift line goes red on purpose.
+  const flagged = (stderr: string): string[] =>
+    stderr
+      .split('\n')
+      .filter((l) => l.startsWith('  - '))
+      .map((l) => l.slice(4).split(':')[0]);
+
+  // Patch-only drift from VERSION: a comparison looser than exact (parseFloat, major-only) lets it pass.
+  const DRIFT = '0.1.1';
+
+  const SITES = [
     'package-lock.json',
     'package-lock.json (packages."")',
     '.claude-plugin/plugin.json',
     '.claude-plugin/marketplace.json',
     'src/server.ts',
     'dist/server.js',
-  ])('rejects a tree where %s disagrees with the others', (site) => {
-    const r = runValidatorOn({}, { [site]: '9.9.9' });
+  ];
+
+  it.each(SITES)('rejects a tree where %s disagrees with package.json', (site) => {
+    const r = runValidatorOn({}, { [site]: DRIFT });
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain(`${site.split(' ')[0]}`);
-    expect(r.stderr).toContain('9.9.9');
+    expect(flagged(r.stderr)).toEqual([site]);
+    expect(r.stderr).toContain(`  - ${site}: declares ${DRIFT}, package.json declares ${VERSION}`);
+  });
+
+  it('rejects every other site when package.json, the reference, moves', () => {
+    const r = runValidatorOn({}, { 'package.json': DRIFT });
+    expect(r.status).not.toBe(0);
+    expect(flagged(r.stderr)).toEqual(SITES);
+    for (const s of SITES) expect(r.stderr).toContain(`  - ${s}: declares ${VERSION}, package.json declares ${DRIFT}`);
   });
 
   it.each(['.claude-plugin/marketplace.json', 'src/server.ts', 'dist/server.js'])(
