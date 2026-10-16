@@ -3,9 +3,6 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
-    // One worker per test file, ended with the file. tests/plugin/self-contained-server.test.ts never
-    // lowers its process fence and relies on this; it is vitest's default, pinned so nobody turns it off.
-    isolate: true,
     include: ['tests/**/*.test.ts'],
     // A suite that can reach the internet does not fail, it lies: three of the two-step login cases
     // run without an `exchange` stub, and on a regression they would POST to the real

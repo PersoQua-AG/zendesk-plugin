@@ -113,12 +113,12 @@ describe('plugin server from a copy without node_modules', () => {
     expect(names).toEqual(expected);
   }, 60_000);
 
-  // The bundle's timers and servers outlive the case, so the fence is never lowered: after the window it
-  // refuses every call, the real `/usr/bin/security` included, until the worker ends with this file.
-  // A call after afterAll is refused but not asserted. This relies on `isolate: true` (pinned in
-  // vitest.config.ts): under --no-isolate the fence would refuse every later file in the same worker.
+  // The bundle's timers and servers outlive the case, so child_process is never lowered: after the window it
+  // refuses `/usr/bin/security` and passes every other call to the original, and the doors around it reopen,
+  // so a later file sharing this worker (singleFork, singleThread, --no-isolate) runs unfenced. A call after
+  // afterAll is refused but not asserted.
   const unexpected: string[] = [];
-  let fence: { opened: string[] } | undefined;
+  let fence: { opened: string[]; reopen: () => void } | undefined;
   afterAll(async () => {
     await settle(() => unexpected.length);
     expect([...unexpected, ...(fence?.opened ?? [])]).toEqual([]);
@@ -132,7 +132,8 @@ describe('plugin server from a copy without node_modules', () => {
   it('keeps the Keychain path in the bundle the manifest launches', async () => {
     const fake = fakeKeychain();
     let closed = false;
-    const { opened } = (fence = await fenceProcesses((name, bin, args, options) => {
+    const { opened } = (fence = await fenceProcesses((name, bin, args, options, pass) => {
+      if (closed && bin !== '/usr/bin/security') return pass();
       const o = (options ?? {}) as { input?: unknown; encoding?: string; stdio?: unknown };
       if (closed || name !== 'execFileSync' || bin !== '/usr/bin/security') {
         unexpected.push(`${closed ? 'after the window: ' : ''}${name}(${String(bin)})`);
@@ -170,6 +171,7 @@ describe('plugin server from a copy without node_modules', () => {
       // Deferred work lands in the fake, where the transcript below sees it.
       drained = await settle(() => fake.calls.length);
       closed = true;
+      fence.reopen();
     }
 
     expect(drained, 'the bundle keeps calling the Keychain after the case').toBe(true);
