@@ -45,15 +45,15 @@ describe('recorded skill cases', () => {
         ...[...said.matchAll(/\/zendesk:([\w-]+)/gi)].map(([, n]) => ref(`commands/${n}.md`, files.includes(`commands/${n}.md`))),
         ...(said.match(/(?:\.?[\w-]+\/)+[\w.-]+\.(?:ts|mjs|js|md|json|ya?ml)\b/g) ?? []).map((f) => ref(f, files.includes(f))),
         ...[...said.matchAll(/SKILL\.md "([^"]+)"/g)].map(([, h]) => ref(`${skill} ## ${h}`, c.source.some((s) => s.file === skill && s.quote === `## ${h}`))),
-        ...[...said.matchAll(/\b([a-z0-9]+(?:-[a-z0-9]+)+) (skill|subagent)\b/g)].map(([, n, k]) =>
-          ref(`${k} ${n}`, k === 'skill' ? skillNames().includes(n) : filesIn('agents', '.md').includes(`agents/${n}.md`)),
+        ...[...said.matchAll(/\b`?([a-z0-9]+(?:-[a-z0-9]+)+)`? (skill|subagent)s?\b/gi)].map(([, n, k]) =>
+          ref(`${k} ${n}`, cited.includes(n) && (k.toLowerCase() === 'skill' ? skillNames().includes(n) : filesIn('agents', '.md').includes(`agents/${n}.md`))),
         ),
         // ponytail: camelCase only; a lowercase or PascalCase identifier stays prose for the grader.
-        ...[...new Set(said.match(/\b[a-z]+[A-Z]\w*/g))].map((id) => ref(`identifier ${id}`, cited.includes(id))),
+        ...[...new Set(said.match(/\b[a-z]+[A-Z]\w*/g))].map((id) => ref(`identifier ${id}`, new RegExp(`\\b${id}\\b`).test(cited))),
       ];
       const declared =
         refs.length === 0
-          ? c.unchecked !== true ? ['names nothing checkable and is not marked `unchecked: true`'] : said.length > 20 ? [] : ['is `unchecked` and has under 21 characters of expected']
+          ? c.unchecked !== true ? ['names nothing checkable and is not marked `unchecked: true`'] : said.trim().length > 20 ? [] : ['is `unchecked` and has under 21 characters of expected']
           : c.unchecked === undefined ? [] : ['names something yet is marked `unchecked`'];
       return [...refs.filter(([, ok]) => !ok).map(([r]) => `${r} does not exist or is not cited`), ...declared].map((p) => `${c.id}: ${p}`);
     });
