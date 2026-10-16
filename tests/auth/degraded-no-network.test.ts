@@ -40,18 +40,20 @@ describe('an incompletely configured server never reaches the network', () => {
   it('rejects a JSON request at the token boundary, naming the empty field, without fetching', async () => {
     const fetchImpl = spyFetch();
     const env = degradedEnv();
+    const diagnosis = emptyFieldDiagnosis(env);
     const { ctx } = createServer(env, { fetchImpl, security: keychain() });
-    await expect(ctx.httpClient.request('/users/me.json')).rejects.toThrow(emptyFieldDiagnosis(env));
+    await expect(ctx.httpClient.request('/users/me.json')).rejects.toThrow(diagnosis);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('rejects the binary upload path the same way, without fetching', async () => {
     const fetchImpl = spyFetch();
     const env = degradedEnv();
+    const diagnosis = emptyFieldDiagnosis(env);
     const { ctx } = createServer(env, { fetchImpl, security: keychain() });
     await expect(
       ctx.httpClient.requestUpload('/uploads.json', new Uint8Array([1, 2, 3]), 'text/plain'),
-    ).rejects.toThrow(emptyFieldDiagnosis(env));
+    ).rejects.toThrow(diagnosis);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
