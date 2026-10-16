@@ -7,9 +7,9 @@
 // made in words, so there the words ARE the contract: the two passages that speak about the level are
 // pinned whole (whitespace-normalised, so a rewrap is free), with the level taken from the server, and
 // no other README text may speak about it or name a level (text oracle T2, round 3, 2026-10-15). The
-// other texts the release ships (agents/ commands/ skills/, see release.yml) may not speak about it either.
+// other texts the release ships (every member of release.yml's `zip -MM -r` line) may not speak about it either.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,10 +51,13 @@ describe('the installed plugin offers no way to choose the security level, and n
     expect(runsAt({})).toBe('standard');
   });
 
+  // Every level, not just `off`: a store that may only tighten the level is a choice too.
   it('no Keychain account the server reads reaches the level', () => {
-    const everyAccountOff: RunSecurity = (args, input) =>
-      args[0] === 'find-generic-password' && args[args.indexOf('-a') + 1] !== TOKEN_STORE_ACCOUNT ? { status: 0, output: 'off\n' } : keychain()(args, input);
-    expect(runsAt({}, everyAccountOff)).toBe(runsAt({}));
+    for (const level of SECURITY_LEVELS) {
+      const everyAccount: RunSecurity = (args, input) =>
+        args[0] === 'find-generic-password' && args[args.indexOf('-a') + 1] !== TOKEN_STORE_ACCOUNT ? { status: 0, output: `${level}\n` } : keychain()(args, input);
+      expect(runsAt({}, everyAccount), `every account answers ${level}`).toBe(runsAt({}));
+    }
   });
 
   // Every server, under whatever key, with every operator answer set to `off`: a server env that
@@ -87,12 +90,20 @@ describe('the installed plugin offers no way to choose the security level, and n
     expect(rest.match(re)?.[0], 'README outside the two pinned passages').toBeUndefined();
   });
 
-  // The level names stay free here: commands/ and skills/ already say "hand off".
-  it('no shipped agent, command or skill speaks about the security level', () => {
-    for (const dir of ['agents', 'commands', 'skills'])
-      for (const f of readdirSync(join(root, dir), { recursive: true, withFileTypes: true }).filter((f) => f.isFile())) {
-        const rel = relative(root, join(f.parentPath, f.name));
-        expect(read(rel).match(/security[\s_-]?level/i)?.[0], rel).toBeUndefined();
-      }
+  // The members are read from release.yml, so a newly shipped path is scanned without an edit here;
+  // README.md has the cases above, dist/plugin is the server itself. A bare level name stays free
+  // ("hand off"), a backticked one does not.
+  it('no other shipped text speaks about the security level or names a level in backticks', () => {
+    const zip = read('.github/workflows/release.yml').match(/zip -MM -r \S+ (.+)/)?.[1].trim().split(/\s+/) ?? [];
+    expect(zip, 'release.yml zip line').toContain('.claude-plugin');
+    const re = new RegExp(`security[\\s_-]?level|\`(${SECURITY_LEVELS.join('|')})\``, 'i');
+    for (const member of zip.filter((m) => m !== 'README.md' && m !== 'dist/plugin')) {
+      const files = statSync(join(root, member)).isFile()
+        ? [member]
+        : readdirSync(join(root, member), { recursive: true, withFileTypes: true })
+            .filter((f) => f.isFile())
+            .map((f) => relative(root, join(f.parentPath ?? (f as unknown as { path: string }).path, f.name)));
+      for (const rel of files) expect(read(rel).match(re)?.[0], rel).toBeUndefined();
+    }
   });
 });
