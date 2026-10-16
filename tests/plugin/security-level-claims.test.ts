@@ -6,15 +6,16 @@
 // which an operator answer reaches the level createServer runs at. The README is where the claim is
 // made in words, so there the words ARE the contract: the two passages that speak about the level are
 // pinned whole (whitespace-normalised, so a rewrap is free), with the level taken from the server, and
-// no other README text may speak about it or name a level (text oracle T2, round 3, 2026-10-15).
+// no other README text may speak about it or name a level (text oracle T2, round 3, 2026-10-15). The
+// other texts the release ships (agents/ commands/ skills/, see release.yml) may not speak about it either.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer, SECURITY_LEVELS } from '../../src/server.js';
-import { CONFIG_ACCOUNTS } from '../../src/auth/store-key.js';
-import { keychain } from '../auth/keychain.js';
+import type { RunSecurity } from '../../src/auth/store-key.js';
+import { keychain, TOKEN_STORE_ACCOUNT } from '../auth/keychain.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
@@ -36,12 +37,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function runsAt(extra: Record<string, string>, stored: Record<string, string> = {}) {
+function runsAt(extra: Record<string, string>, security: RunSecurity = keychain()) {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   const dataDir = mkdtempSync(join(tmpdir(), 'zd-level-claims-'));
   dirs.push(dataDir);
   const env = { ZENDESK_SUBDOMAIN: 'acme', ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_OAUTH_CLIENT_SECRET: 'secret-xyz', ZENDESK_DATA_DIR: dataDir, ...extra };
-  return createServer(env, { security: keychain(stored) }).ctx.securityLevel;
+  return createServer(env, { security }).ctx.securityLevel;
 }
 
 describe('the installed plugin offers no way to choose the security level, and no shipped text says it does (#59)', () => {
@@ -50,8 +51,10 @@ describe('the installed plugin offers no way to choose the security level, and n
     expect(runsAt({})).toBe('standard');
   });
 
-  it('no account the setup page stores in the Keychain reaches the level', () => {
-    expect(runsAt({}, Object.fromEntries(Object.values(CONFIG_ACCOUNTS).map((a) => [a, 'off'])))).toBe(runsAt({}));
+  it('no Keychain account the server reads reaches the level', () => {
+    const everyAccountOff: RunSecurity = (args, input) =>
+      args[0] === 'find-generic-password' && args[args.indexOf('-a') + 1] !== TOKEN_STORE_ACCOUNT ? { status: 0, output: 'off\n' } : keychain()(args, input);
+    expect(runsAt({}, everyAccountOff)).toBe(runsAt({}));
   });
 
   // Every server, under whatever key, with every operator answer set to `off`: a server env that
@@ -59,7 +62,8 @@ describe('the installed plugin offers no way to choose the security level, and n
   it('the plugin manifest declares no settings dialog and no server env that reaches the level', () => {
     expect(manifest.userConfig, '.claude-plugin/plugin.json declares a settings dialog').toBeUndefined();
     expect(existsSync(join(root, '.mcp.json')), 'a root .mcp.json is a second server source').toBe(false);
-    const servers = Object.entries((manifest.mcpServers ?? {}) as Record<string, { env?: Record<string, string> }>);
+    expect(manifest.mcpServers?.constructor, 'mcpServers is inline in .claude-plugin/plugin.json').toBe(Object);
+    const servers = Object.entries(manifest.mcpServers as Record<string, { env?: Record<string, string> }>);
     expect(servers, '.claude-plugin/plugin.json declares no server').not.toHaveLength(0);
     for (const [name, server] of servers) {
       const answered = Object.fromEntries(Object.entries(server?.env ?? {}).map(([k, v]) => [k, String(v).replace(/\$\{user_config\.[^}]+\}/g, 'off')]));
@@ -75,8 +79,20 @@ describe('the installed plugin offers no way to choose the security level, and n
     expect(flat(bullet)).toBe(flat(contractBullet(runsAt({}))));
   });
 
-  // (?<!-) spares the `--strict` flag of `claude plugin validate`.
+  // Every level name is reserved in README prose, even as a plain English word ("hand off"); (?<!-)
+  // spares only the `--strict` flag of `claude plugin validate`.
   it('no other README text speaks about the security level or names a level', () => {
-    expect(readme.replace(row ?? '', '').replace(bullet, '')).not.toMatch(new RegExp(`security[\\s_-]?level|(?<!-)\\b(${SECURITY_LEVELS.join('|')})\\b`, 'i'));
+    const rest = readme.replace(row ?? '', '').replace(bullet, '');
+    const re = new RegExp(`security[\\s_-]?level|(?<!-)\\b(${SECURITY_LEVELS.join('|')})\\b`, 'i');
+    expect(rest.match(re)?.[0], 'README outside the two pinned passages').toBeUndefined();
+  });
+
+  // The level names stay free here: commands/ and skills/ already say "hand off".
+  it('no shipped agent, command or skill speaks about the security level', () => {
+    for (const dir of ['agents', 'commands', 'skills'])
+      for (const f of readdirSync(join(root, dir), { recursive: true, withFileTypes: true }).filter((f) => f.isFile())) {
+        const rel = relative(root, join(f.parentPath, f.name));
+        expect(read(rel).match(/security[\s_-]?level/i)?.[0], rel).toBeUndefined();
+      }
   });
 });
