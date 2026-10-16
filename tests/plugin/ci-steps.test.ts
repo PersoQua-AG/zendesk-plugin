@@ -5,7 +5,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ciSteps, ciTriggers } from '../setup/ci-steps.js';
+import { ciSteps, ciTriggers, ciUses } from '../setup/ci-steps.js';
 
 const WORKFLOW = `
 on:
@@ -42,6 +42,14 @@ jobs:
         env:
           READ: an input
           NODE_OPTIONS: --import=./exit0.mjs
+      - run: npm run always
+        if: true
+      - uses: Actions/Checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        if: false
+      - uses: [actions/checkout@v4]
   skipped:
     if: github.event_name == 'push'
     steps:
@@ -55,6 +63,7 @@ jobs:
     steps:
       - run: npm run soft
       - *shared
+      - uses: actions/checkout@v4
 `;
 
 describe('ciSteps reads the workflow as GitHub does, not as text', () => {
@@ -64,10 +73,11 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const at = (job: string, command: string) => ciSteps(job, command, path);
 
-  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()` and `continue-on-error: ${{ false }}`', () => {
+  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`, `if: true` and `continue-on-error: ${{ false }}`', () => {
     expect(at('build-test', 'npm ci')).toEqual([{ index: 0, conditions: [] }]);
     expect(at('build-test', 'npm run spelled-out')).toEqual([{ index: 4, conditions: [] }]);
     expect(at('soft', 'npm run anchored')).toEqual([{ index: 1, conditions: ['continue-on-error', 'shell: sh', 'needs: skipped'] }]);
+    expect(at('build-test', 'npm run always')).toEqual([{ index: 9, conditions: [] }]);
   });
 
   it('finds no step for a comment, an echo, a line of a script, or another job', () => {
@@ -84,6 +94,16 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
     expect(at('soft', 'npm run soft')).toEqual([{ index: 0, conditions: ['continue-on-error', 'shell: sh', 'needs: skipped'] }]);
     expect(at('build-test', 'echo "$READ"')).toEqual([{ index: 8, conditions: ['env: NODE_OPTIONS'] }]);
     expect(at('build-test', 'npm run reshelled')).toEqual([{ index: 7, conditions: ["shell: bash -c 'true' {0}"] }]);
+  });
+
+  it('finds an action at any version and in any case, with its inputs and gates, and no `uses` that is not a string', () => {
+    const uses = (job: string) =>
+      ciUses(job, 'actions/checkout', path).map(({ index, step, conditions }) => ({ index, with: step.with, conditions }));
+    expect(uses('build-test')).toEqual([
+      { index: 10, with: { 'fetch-depth': 0 }, conditions: [] },
+      { index: 11, with: undefined, conditions: [false] },
+    ]);
+    expect(uses('soft')).toEqual([{ index: 2, with: undefined, conditions: ['continue-on-error', 'shell: sh', 'needs: skipped'] }]);
   });
 
   it('reads the bare `on:` key that YAML 1.1 turns into true, and a quoted one', () => {

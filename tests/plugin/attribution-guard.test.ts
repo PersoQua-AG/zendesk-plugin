@@ -208,7 +208,7 @@ describe('no-Claude-attribution guard (#86)', () => {
   // The guard that is not wired into CI is a script nobody runs — the exact failure #86 was filed
   // about, one level up. Both events, because only one of them runs against the target branch.
   describe('wiring', () => {
-    it('runs as its own CI job on both push and pull_request', () => {
+    it('runs as its own CI job', () => {
       expect(
         ciSteps('attribution-guard', "node scripts/assert-no-attribution.mjs --range '${{ steps.range.outputs.range }}'"),
       ).toEqual([{ index: expect.any(Number), conditions: [] }]);
@@ -232,7 +232,9 @@ describe('no-Claude-attribution guard (#86)', () => {
       // Named in full: naming the list replaces the defaults, so dropping `synchronize` would leave
       // a pushed commit on an open PR unchecked.
       // These four in any order; the order means nothing to GitHub, and an extra type only adds a run.
-      expect(ciTriggers()).toEqual({ push: null, pull_request: { types: expect.arrayContaining(['opened', 'synchronize', 'reopened', 'edited']) } });
+      // A bare `push:` parses as null and means the same as `push: {}`; a missing push stays undefined.
+      const t = ciTriggers() as Record<string, unknown>;
+      expect({ ...t, push: t.push === null ? {} : t.push }).toEqual({ push: {}, pull_request: { types: expect.arrayContaining(['opened', 'synchronize', 'reopened', 'edited']) } });
     });
 
     // The range step RUN, as GitHub would run it, in a repository where the push before this one

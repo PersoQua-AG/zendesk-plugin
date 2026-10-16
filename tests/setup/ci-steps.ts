@@ -32,9 +32,10 @@ export const ciTriggers = (path = CI_WORKFLOW) => {
 // A value without its `${{ }}`: GitHub evaluates `${{ false }}` to what `false` says.
 export const bare = (v: unknown) => String(v).replace(/^\$\{\{\s*|\s*\}\}$/g, '');
 
-// `success()` and `false` are what GitHub uses when `if` and continue-on-error are absent.
+// `success()` and `false` are what GitHub uses when `if` and continue-on-error are absent; `if: true`
+// is the same default, because success() is implied when no status function is named.
 const conditions = (g: Gate | undefined) => [
-  ...(g?.if === undefined || bare(g.if) === 'success()' ? [] : [g.if]),
+  ...(g?.if === undefined || ['success()', 'true'].includes(bare(g.if)) ? [] : [g.if]),
   ...(g?.['continue-on-error'] === undefined || bare(g['continue-on-error']) === 'false' ? [] : ['continue-on-error']),
 ];
 
@@ -47,7 +48,9 @@ const shells = (...gs: Array<Gate | undefined>) =>
 // job or step; any `needs`, since a skipped needed job skips this one; and an env key no script here
 // reads, which can only change how the tools run (`npm_config_script_shell`, `NODE_OPTIONS`).
 // ponytail: a script that names such a key by hand hides it. NOT read: an earlier step that rewrites
-// the command; a required status check is the boundary for that.
+// the command. No status check closes that, because the job still succeeds. The boundary is review
+// of `.github/` changes: CODEOWNERS on `.github/workflows/` plus required code-owner review, or a
+// ruleset-required workflow run from the base ref.
 export function ciJobSteps(job: string, path = CI_WORKFLOW) {
   const wf = ciWorkflow(path);
   const j = wf.jobs?.[job];
@@ -71,4 +74,4 @@ export const ciSteps = (job: string, command: string, path = CI_WORKFLOW) =>
 // Every step of `job` that uses `action` at any version, lowercased because GitHub resolves
 // `Actions/checkout` to the same repository.
 export const ciUses = (job: string, action: string, path = CI_WORKFLOW) =>
-  ciJobSteps(job, path).filter(({ step }) => String(step.uses).split('@')[0].toLowerCase() === action);
+  ciJobSteps(job, path).filter(({ step }) => typeof step.uses === 'string' && step.uses.split('@')[0].toLowerCase() === action);
