@@ -101,18 +101,27 @@ describe('plugin server from a copy without node_modules', () => {
     expect(names).toEqual(expected);
   }, 60_000);
 
+  // The bundle's timers and servers outlive the case, so the fence stays up until the file ends: after the
+  // window it refuses every call, the real `/usr/bin/security` included, and records it for afterAll.
+  const unexpected: string[] = [];
+  let fence: { opened: string[]; restore: () => void } | undefined;
+  afterAll(() => {
+    fence?.restore();
+    expect([...unexpected, ...(fence?.opened ?? [])]).toEqual([]);
+  });
+
   // What the child used to prove by doing it, and now must not: that the bundler kept the Keychain path.
   // So the bundle is driven, not read: its createServer runs its own runSecurity inside the process fence,
-  // where execFileSync of `/usr/bin/security` lands in the fake Keychain and every other route to a process
-  // is refused, checked before the bundle loads. A first start must write a key through stdin, and a second
-  // start must read that same key back and decrypt tokens with it.
+  // where, inside the window, execFileSync of `/usr/bin/security` lands in the fake Keychain and every other
+  // route the fence knows is refused, checked before the bundle loads. A first start must write a key through
+  // stdin, and a second start must read that same key back and decrypt tokens with it.
   it('keeps the Keychain path in the bundle the manifest launches', async () => {
     const fake = fakeKeychain();
-    const unexpected: string[] = [];
-    const { opened, restore } = await fenceProcesses((name, bin, args, options) => {
+    let closed = false;
+    const { opened } = (fence = await fenceProcesses((name, bin, args, options) => {
       const o = (options ?? {}) as { input?: unknown; encoding?: string; stdio?: unknown };
-      if (name !== 'execFileSync' || bin !== '/usr/bin/security') {
-        unexpected.push(`${name}(${String(bin)})`);
+      if (closed || name !== 'execFileSync' || bin !== '/usr/bin/security') {
+        unexpected.push(`${closed ? 'after the window: ' : ''}${name}(${String(bin)})`);
         throw new Error(`unexpected child_process call: ${name}(${String(bin)})`);
       }
       const { status, output } = fake.run(args as string[], String(o.input ?? ''));
@@ -120,7 +129,7 @@ describe('plugin server from a copy without node_modules', () => {
       // Node's contract: no stdout unless it is piped, and a Buffer unless a string encoding was asked for.
       if (((Array.isArray(o.stdio) ? o.stdio[1] : o.stdio) ?? 'pipe') !== 'pipe') return null;
       return o.encoding && o.encoding !== 'buffer' ? output : Buffer.from(output);
-    });
+    }));
     const requests: string[] = [];
     try {
       const dataDir = mkdtempSync(join(scratch, 'data-bundle-'));
@@ -143,7 +152,14 @@ describe('plugin server from a copy without node_modules', () => {
       await client.callTool({ name: 'zendesk_get_me', arguments: {} });
       await client.close();
     } finally {
-      restore();
+      // Deferred work lands in the fake, where the transcript below sees it, until the bundle goes quiet.
+      let n;
+      do {
+        n = fake.calls.length;
+        await delay(0);
+        await new Promise((r) => setImmediate(r));
+      } while (n !== fake.calls.length);
+      closed = true;
     }
 
     expect(requests).toEqual(['https://stored-oauth-subdomain.zendesk.com/api/v2/users/me.json Bearer at-1']);
