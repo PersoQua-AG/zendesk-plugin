@@ -98,7 +98,7 @@ describe('nothing spawns a process to open a browser', () => {
       expect(Array.isArray(call.args)).toBe(true);
       expect((call.options as { shell?: unknown } | undefined)?.shell).toBeFalsy();
     }
-    // The secret is on stdin, never in argv (#68 B4): `-w` last is what makes security prompt.
+    // The secret is on stdin, never in argv or argv0 (#68 B4): `-w` last is what makes security prompt.
     const adds = calls.filter((c) => (c.args as string[])[0] === 'add-generic-password');
     expect(adds.length).toBeGreaterThan(0);
     const secrets = [KEY, ...Object.values(values)];
@@ -111,13 +111,14 @@ describe('nothing spawns a process to open a browser', () => {
       expect((args as string[]).at(-1)).toBe('-w');
       secrets.push(value);
     }
-    // Nor any 8-character run of it in argv or the child env, plain, hex or base64 at each of the three
+    // Nor any 8-character run of it in argv, argv0 or the child env, plain, hex or base64 at each of the three
     // alignments. A finite list of encodings: a value reversed or otherwise transformed is not caught.
     const runs = (s: string) => Array.from({ length: s.length - 7 }, (_, i) => s.slice(i, i + 8));
     const forms = (s: string) => [s, Buffer.from(s).toString('hex'), ...[0, 1, 2].map((i) => Buffer.from(s.slice(i)).toString('base64'))];
     const needles = secrets.flatMap((s) => forms(s).flatMap(runs));
     const visible = (c: (typeof calls)[number]) => [
       ...(c.args as string[]),
+      String((c.options as { argv0?: unknown } | undefined)?.argv0 ?? ''),
       ...Object.values((c.options as { env?: Record<string, unknown> } | undefined)?.env ?? {}).map(String),
     ];
     expect(calls.flatMap((c) => visible(c).filter((arg) => needles.some((n) => arg.includes(n))))).toEqual([]);
