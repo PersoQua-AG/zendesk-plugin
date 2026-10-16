@@ -55,6 +55,7 @@ const dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   vi.restoreAllMocks();
+  vi.useRealTimers(); // a failed assertion mid clock-jump must not leave later tests an hour fast
 });
 
 // `clientSecret` became optional on OAuthConfig when a public client was still on the table (#68); the
@@ -815,16 +816,9 @@ describe('fail-closed membership — a damaged chain head never frees a stolen t
     dirs.push(dir);
     const store = new RefreshTokenStore(dir, config.clientSecret, 60_000);
     const token = store.mint('zendesk:777', 'claude.ai');
-    // try/finally, not bare assignment: a failing assertion in between would otherwise leave the
-    // global clock an hour fast for every later test that happens to share this worker. That is
-    // exactly what it did on the first run of this suite — three unrelated files went red.
-    const real = Date.now;
-    try {
-      Date.now = () => real() + 3_600_000; // the clock steps an hour forward
-      expect(() => store.consume(token)).toThrow(/expired/);
-    } finally {
-      Date.now = real; // ...and NTP corrects it
-    }
+    vi.setSystemTime(Date.now() + 3_600_000); // the clock steps an hour forward
+    expect(() => store.consume(token)).toThrow(/expired/);
+    vi.useRealTimers(); // ...and NTP corrects it
     // Expiry is judged before anything is destroyed, so the token survives the excursion instead of
     // coming back as a replay that revokes the user's whole chain.
     expect(spentRecord(store.consume(token))).toMatchObject({ identity: 'zendesk:777' });
