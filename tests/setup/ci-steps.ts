@@ -32,15 +32,19 @@ export const ciTriggers = (path = CI_WORKFLOW) => {
 // A value without its `${{ }}`: GitHub evaluates `${{ false }}` to what `false` says.
 const bare = (v: unknown) => String(v).replace(/^\$\{\{\s*|\s*\}\}$/g, '');
 
-// `success()` and `false` are what GitHub uses when `if` and continue-on-error are absent.
+// `success()` and `false` are what GitHub uses when `if` and continue-on-error are absent; `if: true`
+// is the same default, because success() is implied when no status function is named.
 const conditions = (g: Gate | undefined) => [
-  ...(g?.if === undefined || bare(g.if) === 'success()' ? [] : [g.if]),
+  ...(g?.if === undefined || ['success()', 'true'].includes(bare(g.if)) ? [] : [g.if]),
   ...(g?.['continue-on-error'] === undefined || bare(g['continue-on-error']) === 'false' ? [] : ['continue-on-error']),
 ];
 
 // Every step of `job` whose whole `run` is `command`, with its position and its `if` (`false`
 // included) and continue-on-error, on the job or on the step. NOT read: env, shell, needs, or an
-// earlier step that rewrites the command; a required status check is the boundary for those.
+// earlier step that rewrites the command. No status check closes these, because the job still
+// succeeds (or is skipped, which counts as success). The boundary is review of `.github/` changes:
+// CODEOWNERS on `.github/workflows/` plus required code-owner review, or a ruleset-required
+// workflow run from the base ref.
 // ponytail: whole run, not a line of it — a line after `exit 0` in a script is text, not a step,
 // and telling which lines execute would take a shell interpreter.
 export function ciSteps(job: string, command: string, path = CI_WORKFLOW) {

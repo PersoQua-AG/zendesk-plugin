@@ -36,6 +36,8 @@ jobs:
           npm run dead
       - &shared
         run: npm run anchored
+      - run: npm run always
+        if: true
   skipped:
     if: github.event_name == 'push'
     steps:
@@ -54,9 +56,10 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const at = (job: string, command: string) => ciSteps(job, command, path);
 
-  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()` and `continue-on-error: ${{ false }}`', () => {
+  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`, `if: true` and `continue-on-error: ${{ false }}`', () => {
     expect(at('build-test', 'npm ci')).toEqual([{ index: 0, conditions: [] }]);
     expect(at('build-test', 'npm run spelled-out')).toEqual([{ index: 4, conditions: [] }]);
+    expect(at('build-test', 'npm run always')).toEqual([{ index: 7, conditions: [] }]);
     expect(at('soft', 'npm run anchored')).toEqual([{ index: 1, conditions: ['continue-on-error'] }]);
   });
 
