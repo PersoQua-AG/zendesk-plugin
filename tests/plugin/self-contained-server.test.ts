@@ -115,7 +115,8 @@ describe('plugin server from a copy without node_modules', () => {
 
   // The bundle's timers and servers outlive the case, so the fence is never lowered: after the window it
   // refuses every call, the real `/usr/bin/security` included, until the worker ends with this file.
-  // A call after afterAll is refused but not asserted.
+  // A call after afterAll is refused but not asserted. This relies on `isolate: true` (pinned in
+  // vitest.config.ts): under --no-isolate the fence would refuse every later file in the same worker.
   const unexpected: string[] = [];
   let fence: { opened: string[] } | undefined;
   afterAll(async () => {
