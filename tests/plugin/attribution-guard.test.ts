@@ -269,6 +269,7 @@ describe('no-Claude-attribution guard (#86)', () => {
       const { conditions, output, fx } = rangeFor((fx) => ({
         'github.event_name': 'push',
         'github.event.before': fx.f2,
+        'github.event.after': fx.f3,
         'github.ref': 'refs/heads/feature',
         'github.ref_name': 'feature',
         'github.sha': fx.f3,
@@ -284,6 +285,7 @@ describe('no-Claude-attribution guard (#86)', () => {
         'github.event_name': 'push',
         'github.ref': 'refs/heads/main',
         'github.ref_name': 'main',
+        'github.event.after': fx.m,
         'github.sha': fx.m,
         'github.event.repository.default_branch': 'main',
       }));

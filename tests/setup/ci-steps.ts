@@ -40,8 +40,9 @@ const conditions = (g: Gate | undefined) => [
 ];
 
 // A declared shell decides what `run` means: `shell: bash -c 'true' {0}` never reads the script.
+// `bash -e {0}` is the command GitHub runs when no shell is declared.
 const shells = (...gs: Array<Gate | undefined>) =>
-  gs.flatMap((g) => g?.shell ?? g?.defaults?.run?.shell ?? []).map((s) => `shell: ${String(s)}`);
+  gs.flatMap((g) => g?.shell ?? g?.defaults?.run?.shell ?? []).filter((s) => s !== 'bash -e {0}').map((s) => `shell: ${String(s)}`);
 
 // Every step of `job` with its position, its env (workflow, then job, then step) and whatever stops
 // its script from gating: an `if` (`false` included), continue-on-error or a shell on the workflow,

@@ -5,7 +5,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ciSteps, ciTriggers, ciUses } from '../setup/ci-steps.js';
+import { ciJobSteps, ciSteps, ciTriggers, ciUses } from '../setup/ci-steps.js';
 
 const WORKFLOW = `
 on:
@@ -50,6 +50,8 @@ jobs:
       - uses: actions/checkout@v4
         if: false
       - uses: [actions/checkout@v4]
+      - run: npm run default-shell
+        shell: bash -e {0}
   skipped:
     if: github.event_name == 'push'
     steps:
@@ -66,6 +68,24 @@ jobs:
       - uses: actions/checkout@v4
 `;
 
+const LAYERED = `
+env:
+  A: wf
+  NODE_OPTIONS: x
+defaults:
+  run:
+    shell: sh
+jobs:
+  j:
+    env:
+      A: job
+      B: job
+    steps:
+      - run: echo "$A $B"
+        env:
+          A: step
+`;
+
 describe('ciSteps reads the workflow as GitHub does, not as text', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ci-steps-'));
   const path = join(dir, 'ci.yml');
@@ -73,11 +93,12 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const at = (job: string, command: string) => ciSteps(job, command, path);
 
-  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`, `if: true` and `continue-on-error: ${{ false }}`', () => {
+  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`, `if: true`, `continue-on-error: ${{ false }}` and `shell: bash -e {0}`', () => {
     expect(at('build-test', 'npm ci')).toEqual([{ index: 0, conditions: [] }]);
     expect(at('build-test', 'npm run spelled-out')).toEqual([{ index: 4, conditions: [] }]);
     expect(at('soft', 'npm run anchored')).toEqual([{ index: 1, conditions: ['continue-on-error', 'shell: sh', 'needs: skipped'] }]);
     expect(at('build-test', 'npm run always')).toEqual([{ index: 9, conditions: [] }]);
+    expect(at('build-test', 'npm run default-shell')).toEqual([{ index: 13, conditions: [] }]);
   });
 
   it('finds no step for a comment, an echo, a line of a script, or another job', () => {
@@ -104,6 +125,13 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
       { index: 11, with: undefined, conditions: [false] },
     ]);
     expect(uses('soft')).toEqual([{ index: 2, with: undefined, conditions: ['continue-on-error', 'shell: sh', 'needs: skipped'] }]);
+  });
+
+  it('layers env workflow, then job, then step, and reads the workflow default shell', () => {
+    const layered = join(dir, 'layered.yml');
+    writeFileSync(layered, LAYERED);
+    const { env, conditions } = ciJobSteps('j', layered)[0];
+    expect({ env, conditions }).toEqual({ env: { A: 'step', B: 'job', NODE_OPTIONS: 'x' }, conditions: ['shell: sh', 'env: NODE_OPTIONS'] });
   });
 
   it('reads the bare `on:` key that YAML 1.1 turns into true, and a quoted one', () => {
