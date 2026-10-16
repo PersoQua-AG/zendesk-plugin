@@ -141,7 +141,6 @@ describe('subdomain guard — the property, over a generated input space', () =>
     // Still not an origin defect — asserted before the rejection, so the two claims stay separate.
     expect(staysOnTheAccountHost(value)).toBe(true);
     expect(() => resolveAuthConfig(env(value), keychain())).toThrow(/ZENDESK_SUBDOMAIN/);
-    expect(() => resolveAuthConfig(env(value), keychain())).toThrow(/"zendesk_subdomain"/);
   });
 
   // The other half of that choice, and the reason the prefix itself is not refused: a REAL punycode

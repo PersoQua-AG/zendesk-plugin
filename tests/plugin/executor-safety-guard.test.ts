@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitEnv } from '../setup/git-env.js';
+import { ciSteps } from '../setup/ci-steps.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-executor-safety.mjs');
@@ -762,9 +763,9 @@ export const f = () =>
       const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
       expect(pkg.scripts['check:executors']).toBe('node scripts/assert-executor-safety.mjs src');
       expect(pkg.devDependencies.typescript).toBeDefined(); // the guard's only import, already there
-      expect(readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8')).toContain(
-        'npm run check:executors',
-      );
+      expect(ciSteps('build-test', 'npm run check:executors')).toEqual([
+        { index: expect.any(Number), conditions: [] },
+      ]);
     });
   });
 

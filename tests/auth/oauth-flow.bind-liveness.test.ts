@@ -39,19 +39,18 @@ describe('startCallbackListener settles for every port listen() refuses', () => 
       settlesWithin(`startCallbackListener(${port})`, startCallbackListener(port, 'state', 5_000)),
     );
     expect(err.message).toContain('OAuth callback server could not start on port');
-    expect(err.message).toContain('oauth_callback_port');
+    expect(err.message).toContain('ZENDESK_OAUTH_CALLBACK_PORT');
     // The node wording is replaced, not wrapped: no internals reach the MCP boundary.
     expect(err.message).not.toMatch(/RangeError|ERR_SOCKET_BAD_PORT|node:internal/);
   });
 
-  it('names the configuration field and the range the user has to fix, and leaks no internals', async () => {
+  it('names the variable and the range the user has to fix, and leaks no internals', async () => {
     const err = await rejection(
       'startCallbackListener(70000)',
       settlesWithin('startCallbackListener(70000)', startCallbackListener(70_000, 'state', 5_000)),
     );
     expect(err.message).toBe(
-      'OAuth callback server could not start on port 70000 (extension configuration field ' +
-        '"oauth_callback_port" must be a whole number between 1024 and 65535).',
+      'OAuth callback server could not start on port 70000 (ZENDESK_OAUTH_CALLBACK_PORT must be a whole number between 1024 and 65535).',
     );
     // The RangeError's own wording names node's argument validation, not a remedy.
     expect(err.message).not.toMatch(/RangeError|options\.port|ERR_SOCKET_BAD_PORT/);
@@ -62,7 +61,7 @@ describe('startCallbackListener settles for every port listen() refuses', () => 
   it('makes the CLI wrapper reject rather than wait forever', async () => {
     await expect(
       settlesWithin('waitForAuthorizationCode(70000)', waitForAuthorizationCode(70_000, 'state', 5_000)),
-    ).rejects.toThrow(/oauth_callback_port/);
+    ).rejects.toThrow(/ZENDESK_OAUTH_CALLBACK_PORT/);
   });
 
   // Port 0 is the one value listen() ACCEPTS and the configuration rejects, and it is the sharpest
@@ -84,7 +83,7 @@ describe('startCallbackListener settles for every port listen() refuses', () => 
     };
     // Producer 1 — resolveAuthConfig (src/auth/config.ts:161), used by the stdio server, the CLI
     // (src/auth/authorize.ts:49) and the remote bridge (src/remote/remote-server.ts:72).
-    expect(() => resolveAuthConfig({ ...base, ZENDESK_OAUTH_CALLBACK_PORT: '0' }, keychain())).toThrow(/oauth_callback_port/);
+    expect(() => resolveAuthConfig({ ...base, ZENDESK_OAUTH_CALLBACK_PORT: '0' }, keychain())).toThrow(/ZENDESK_OAUTH_CALLBACK_PORT/);
     // Producer 2 — the incomplete config src/server.ts carries DOES hold a callbackPort, and since #68 it
     // is the one the environment asked for rather than 0. It still travels with configError, and where
     // nothing can be stored (`setup: undefined`) runLogin answers that before it reads the port at all.
@@ -143,7 +142,7 @@ describe('the login queue survives every unusable port in the table', () => {
   it('answers each one and still starts a normal flow afterwards', async () => {
     for (const [, port] of THROWS_SYNCHRONOUSLY) {
       const text = await settlesWithin(`runLogin(${port})`, runLogin(deps(port)));
-      expect(text, `runLogin(${port})`).toContain('oauth_callback_port');
+      expect(text, `runLogin(${port})`).toContain('ZENDESK_OAUTH_CALLBACK_PORT');
     }
 
     const port = freePort();

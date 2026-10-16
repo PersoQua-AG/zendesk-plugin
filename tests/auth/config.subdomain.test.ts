@@ -52,8 +52,9 @@ describe('subdomain validation — values that move the origin', () => {
     expect(() => resolveAuthConfig(withSubdomain(tooLong), keychain())).toThrow(rejection(tooLong));
   });
 
-  it('names the user_config field, not the env var alone, and gives the worked example', () => {
-    expect(SUBDOMAIN_RULE).toContain('"zendesk_subdomain"');
+  // The message frame names the variable (`rejection` above), so the rule must not name it again.
+  it('leaves the env var to the message frame, and gives the worked example', () => {
+    expect(SUBDOMAIN_RULE).not.toContain('ZENDESK_SUBDOMAIN');
     expect(SUBDOMAIN_RULE).toContain('acme.zendesk.com');
     expect(SUBDOMAIN_RULE).toContain(String(MAX_SUBDOMAIN_LENGTH));
   });
@@ -96,7 +97,7 @@ describe('subdomain validation — values that must keep working', () => {
     // noStoredConfig: a blank subdomain is what makes resolveAuthConfig look in the Keychain, and this
     // case is about the MESSAGE for a machine where nothing is stored.
     expect(() => resolveAuthConfig(env, keychain())).toThrow(
-      'Missing required environment variable: ZENDESK_SUBDOMAIN (extension configuration field "zendesk_subdomain" is empty).',
+      'Missing required environment variable: ZENDESK_SUBDOMAIN.',
     );
   });
 });

@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../src/server.js';
 import { CONFIG_ACCOUNTS } from '../src/auth/store-key.js';
+import { diagnosisOf } from './auth/diagnosis.js';
 import { deniedKeychain, fakeKeychain, keychain, TEST_STORE_KEY, TOKEN_STORE_ACCOUNT } from './auth/keychain.js';
 import { freePort } from './auth/login-harness.js';
 import { abortLoginFlow } from '../src/tools/login.js';
@@ -67,26 +68,36 @@ describe('createServer with incomplete extension configuration', () => {
   // come FIRST, and on the Claude Code plugin that dialog does not exist any more — #68 removed its
   // user_config, because the host bridge dropped the whole server over it.
   //
-  // Both halves, in the form tests/plugin/security-level-claims.test.ts uses for shipped documents:
-  // the correction is THERE and the withdrawn promise is GONE. A remedy-only check would wave through
-  // an answer that still sent the operator to the retired extension's dialog, and this is the only
-  // gate on that text. It lives here rather than beside the shipped-text claims in
-  // security-level-claims.test.ts because the subject differs: that file reads STATIC files from disk
-  // and is scoped to #59's screening-level promise, while this string is built at RUNTIME by
+  // The whole answer, diagnosis included: every sentence names a registered tool or a variable the
+  // configuration is read from, every tool it names is CALLED and one answers with the setup page, and
+  // the retired MCPB dialog (#103) is not named. Those three negatives are a floor, not the contract:
+  // no test can tell that a sentence names no other surface without keeping a word list. It lives here
+  // rather than in security-level-claims.test.ts because this string is built at RUNTIME by
   // resolveOrDegrade, which is what this file is about.
   it('answers a Zendesk tool call by naming what is missing and how to supply it, without a stack trace', async () => {
     // A working Keychain, so what is missing really is the subdomain and not access to the Keychain.
-    const client = await connect(halfConfiguredEnv(), keychain());
+    const env = halfConfiguredEnv();
+    const security = keychain();
+    const client = await connect(env, security);
     const text = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
-    expect(text).toContain('ZENDESK_SUBDOMAIN');
-    expect(text).toMatch(/zendesk_login/);
-    expect(text).toMatch(/setup page/i);
+    const diagnosis = diagnosisOf(env, security);
+    expect(diagnosis).toContain('ZENDESK_SUBDOMAIN');
+    expect(text).toContain(diagnosis);
     expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
-    // The retired MCPB path (#103) must not come back as a remedy: there is no Desktop Extension and
-    // no settings dialog on any shipped path, so an operator sent there cannot arrive.
+
+    const registered = (await client.listTools()).tools.map((t) => t.name);
+    const sources = Object.keys(CONFIG_ACCOUNTS);
+    for (const sentence of text.split(/(?<=[.;])\s+|\n/))
+      expect([...registered, ...sources].some((way) => sentence.includes(way)), `names no way in: ${sentence}`).toBe(true);
     expect(text).not.toMatch(/desktop extension/i);
     expect(text).not.toMatch(/configuration dialog/i);
     expect(text).not.toMatch(/Settings → Extensions/);
+    // On a platform without a Keychain the environment is the only way in (#69).
+    for (const name of sources) expect(text).toContain(name);
+    const named = [...new Set(text.match(/\bzendesk_\w+/g) ?? [])];
+    expect(registered).toEqual(expect.arrayContaining(named));
+    const answers = await Promise.all(named.map(async (name) => textOf(await client.callTool({ name, arguments: {} }))));
+    expect(answers.join('\n'), `no tool the remedy names offers the setup page: ${named}`).toMatch(/\/setup\?t=/);
     await client.close();
   });
 
@@ -112,7 +123,7 @@ describe('createServer with incomplete extension configuration', () => {
 
     expect(text).toContain('ZENDESK_SUBDOMAIN');
     expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT="70000"');
-    expect(text).toContain('oauth_callback_port');
+    expect(text).toContain('must be a whole number');
     expect(text).toContain('8976');
     await client.close();
   });
@@ -129,25 +140,47 @@ describe('createServer with incomplete extension configuration', () => {
 
   // And where it CAN be stored, the answer is the setup page and nothing else. Not the subdomain, not
   // the data directory, not a stack: the page is local, and what the user types there stays local.
-  it('answers zendesk_login with the first-run setup URL, and nothing else, when the Keychain works', async () => {
-    const env = halfConfiguredEnv();
-    const client = await connect(env, keychain());
-    const text = textOf(await client.callTool({ name: 'zendesk_login', arguments: {} }));
-    const url = new URL(text.split(/\s+/).find((word) => word.startsWith('http://')) as string);
-    expect(url.hostname).toBe('127.0.0.1');
-    expect(url.pathname).toBe('/setup');
-    // The PORT this install was configured with, not the shipped default. resolveAuthConfig validates the
-    // subdomain before the port and throws there, so a degraded start used to serve on 8976 — and the one
-    // person who sets a different port does so because 8976 is taken, which is both the port the page
-    // would have told them to register and the one it could not bind.
-    expect(url.port).toBe(env.ZENDESK_OAUTH_CALLBACK_PORT);
-    const page = await fetch(url, { redirect: 'manual' });
-    expect(await page.text()).toContain(`http://localhost:${env.ZENDESK_OAUTH_CALLBACK_PORT}/callback`);
-    expect(url.searchParams.get('t')).toMatch(/^[\w-]{43}$/);
-    expect(text).not.toContain('zendesk_subdomain');
-    expect(text).not.toContain('client-abc');
-    expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
-    expect(text).not.toMatch(/\/(Users|home|var|tmp)\//);
-    await client.close();
-  });
+  // Every value the env carries is a canary, and either half of the required pair may be the one missing,
+  // so every value is present in some run; the port is exempt because the URL must carry it. The degraded
+  // answer of any other tool is held to the same canaries.
+  it.each(['ZENDESK_SUBDOMAIN', 'ZENDESK_OAUTH_CLIENT_ID'])(
+    'answers zendesk_login with the first-run setup URL, and nothing else, when the Keychain works (%s missing)',
+    async (missing) => {
+      const env: NodeJS.ProcessEnv = {
+        ...halfConfiguredEnv(),
+        ZENDESK_SUBDOMAIN: 'canary-subdomain',
+        ZENDESK_OAUTH_CLIENT_ID: 'canary-client-id',
+        ZENDESK_OAUTH_CLIENT_SECRET: 'canary-client-secret',
+      };
+      delete env[missing];
+      const security = keychain();
+      const client = await connect(env, security);
+      const degraded = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
+      expect(degraded).toContain(diagnosisOf(env, security));
+      const text = textOf(await client.callTool({ name: 'zendesk_login', arguments: {} }));
+      const link = text.split(/\s+/).find((word) => word.startsWith('http://'));
+      expect(link, 'the answer carries no URL').toBeTypeOf('string');
+      const url = new URL(link as string);
+      expect(url.hostname).toBe('127.0.0.1');
+      expect(url.pathname).toBe('/setup');
+      // The PORT this install was configured with, not the shipped default. resolveAuthConfig validates the
+      // subdomain before the port and throws there, so a degraded start used to serve on 8976 — and the one
+      // person who sets a different port does so because 8976 is taken, which is both the port the page
+      // would have told them to register and the one it could not bind.
+      expect(url.port).toBe(env.ZENDESK_OAUTH_CALLBACK_PORT);
+      const page = await fetch(url, { redirect: 'manual' });
+      expect(await page.text()).toContain(`http://localhost:${env.ZENDESK_OAUTH_CALLBACK_PORT}/callback`);
+      expect(url.searchParams.get('t')).toMatch(/^[\w-]{43}$/);
+      for (const [name, value] of Object.entries(env)) {
+        if (name === 'ZENDESK_OAUTH_CALLBACK_PORT') continue;
+        expect(text, name).not.toContain(value);
+        expect(degraded, `zendesk_get_me: ${name}`).not.toContain(value);
+      }
+      // Nor the diagnosis: the page is the answer, and what is missing is what the page collects.
+      expect(text).not.toContain(diagnosisOf(env, security));
+      expect(text).not.toMatch(/\bat .*\.(ts|js):\d+/);
+      expect(text).not.toMatch(/\/(Users|home|var|tmp)\//);
+      await client.close();
+    },
+  );
 });

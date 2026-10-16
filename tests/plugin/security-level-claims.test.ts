@@ -24,11 +24,11 @@ const readme = read('README.md');
 const manifest = JSON.parse(read('.claude-plugin/plugin.json'));
 const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
 
-const row = readme.split('\n').find((l) => l.startsWith('| `security_level` |'));
+const row = readme.split('\n').find((l) => l.startsWith('| `ZENDESK_SECURITY_LEVEL` |'));
 const bullet = readme.slice(readme.indexOf('- **Prompt-injection screening.**')).split('\n- **')[0];
 
 const contractRow = (level: string) =>
-  `| \`security_level\` | \`${level}\` | no | Prompt-injection screening. Fixed at \`${level}\` in the installed plugin — only a hand-started server or a remote-connector deployment reads \`ZENDESK_SECURITY_LEVEL\`, see [Security](#security) |`;
+  `| \`ZENDESK_SECURITY_LEVEL\` | \`${level}\` | no | Prompt-injection screening. Fixed at \`${level}\` in the installed plugin — only a hand-started server or a remote-connector deployment reads this variable, see [Security](#security) |`;
 const contractBullet = (level: string) =>
   `- **Prompt-injection screening.** Ticket/comment/user content is attacker-controllable; all inbound Zendesk content is screened and wrapped in session-scoped delimiters so the model treats it as data, not instructions. The level is **not selectable in the installed plugin**: it is fixed at \`${level}\`. \`ZENDESK_SECURITY_LEVEL\` (${SECURITY_LEVELS.map((l) => `\`${l}\``).join(' | ')}) is read only when the server is started by hand from a shell, or by a remote-connector deployment (deprioritised since 2026-09-23). At \`security_level=off\` the fence is dropped but forged delimiters are still stripped, patterns are still detected, and every tool result says screening is off.`;
 

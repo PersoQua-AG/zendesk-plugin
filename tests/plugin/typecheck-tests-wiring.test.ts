@@ -4,9 +4,9 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ciSteps } from '../setup/ci-steps.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const CI = join(root, '.github', 'workflows', 'ci.yml');
 
 // #57. The check itself is `tsc`, which needs no test. What needs one is its WIRING, because every
 // part of it fails silently: a tsconfig that lists four folders type-checks four folders and says
@@ -15,10 +15,12 @@ const CI = join(root, '.github', 'workflows', 'ci.yml');
 // green, which is why these assertions exist at all.
 describe('the test type-check is wired, and over all of tests/ (#57)', () => {
   it('runs as a CI step, in the job that has the dev toolchain installed', () => {
-    const ci = readFileSync(CI, 'utf8');
-    expect(ci).toContain('npm run typecheck:tests');
+    const install = ciSteps('build-test', 'npm ci');
+    const check = ciSteps('build-test', 'npm run typecheck:tests');
+    expect(install).toEqual([{ index: expect.any(Number), conditions: [] }]);
+    expect(check).toEqual([{ index: expect.any(Number), conditions: [] }]);
     // After `npm ci`: tsc is not installed before it, so a step above the install cannot run.
-    expect(ci.indexOf('npm run typecheck:tests')).toBeGreaterThan(ci.indexOf('- run: npm ci'));
+    expect(check[0]!.index).toBeGreaterThan(install[0]!.index);
   });
 
   it('is a package script, so CI and a developer run the same command', () => {
