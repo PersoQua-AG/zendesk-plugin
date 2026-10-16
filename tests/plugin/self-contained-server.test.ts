@@ -51,6 +51,16 @@ function fileNotDirectory(path: string): string {
   return path;
 }
 
+// Turns the event loop until count() stops growing, so work the bundle deferred runs while the fence is up.
+async function settle(count: () => number): Promise<void> {
+  let n;
+  do {
+    n = count();
+    await delay(0);
+    await new Promise((r) => setImmediate(r));
+  } while (n !== count());
+}
+
 async function inProcessToolNames(env: Record<string, string>): Promise<string[]> {
   const { server } = createServer(env, { security: keychain() });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
@@ -105,7 +115,8 @@ describe('plugin server from a copy without node_modules', () => {
   // window it refuses every call, the real `/usr/bin/security` included, and records it for afterAll.
   const unexpected: string[] = [];
   let fence: { opened: string[]; restore: () => void } | undefined;
-  afterAll(() => {
+  afterAll(async () => {
+    await settle(() => unexpected.length);
     fence?.restore();
     expect([...unexpected, ...(fence?.opened ?? [])]).toEqual([]);
   });
@@ -152,13 +163,8 @@ describe('plugin server from a copy without node_modules', () => {
       await client.callTool({ name: 'zendesk_get_me', arguments: {} });
       await client.close();
     } finally {
-      // Deferred work lands in the fake, where the transcript below sees it, until the bundle goes quiet.
-      let n;
-      do {
-        n = fake.calls.length;
-        await delay(0);
-        await new Promise((r) => setImmediate(r));
-      } while (n !== fake.calls.length);
+      // Deferred work lands in the fake, where the transcript below sees it.
+      await settle(() => fake.calls.length);
       closed = true;
     }
 
