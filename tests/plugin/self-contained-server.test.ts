@@ -113,13 +113,13 @@ describe('plugin server from a copy without node_modules', () => {
     expect(names).toEqual(expected);
   }, 60_000);
 
-  // The bundle's timers and servers outlive the case, so the fence stays up until the file ends: after the
-  // window it refuses every call, the real `/usr/bin/security` included, and records it for afterAll.
+  // The bundle's timers and servers outlive the case, so the fence is never lowered: after the window it
+  // refuses every call, the real `/usr/bin/security` included, until the worker ends with this file.
+  // A call after afterAll is refused but not asserted.
   const unexpected: string[] = [];
-  let fence: { opened: string[]; restore: () => void } | undefined;
+  let fence: { opened: string[] } | undefined;
   afterAll(async () => {
-    // Never lowered while refusals still arrive, or a repeating caller would reach the real module.
-    if (await settle(() => unexpected.length)) fence?.restore();
+    await settle(() => unexpected.length);
     expect([...unexpected, ...(fence?.opened ?? [])]).toEqual([]);
   });
 
