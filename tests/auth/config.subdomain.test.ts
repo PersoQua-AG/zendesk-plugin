@@ -52,8 +52,9 @@ describe('subdomain validation — values that move the origin', () => {
     expect(() => resolveAuthConfig(withSubdomain(tooLong), keychain())).toThrow(rejection(tooLong));
   });
 
-  it('names the user_config field, not the env var alone, and gives the worked example', () => {
-    expect(SUBDOMAIN_RULE).toContain('ZENDESK_SUBDOMAIN');
+  // The message frame names the variable (`rejection` above), so the rule must not name it again.
+  it('leaves the env var to the message frame, and gives the worked example', () => {
+    expect(SUBDOMAIN_RULE).not.toContain('ZENDESK_SUBDOMAIN');
     expect(SUBDOMAIN_RULE).toContain('acme.zendesk.com');
     expect(SUBDOMAIN_RULE).toContain(String(MAX_SUBDOMAIN_LENGTH));
   });

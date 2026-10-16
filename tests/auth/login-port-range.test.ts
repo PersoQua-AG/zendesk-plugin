@@ -16,7 +16,7 @@ describe('zendesk_login with an unusable callback port', () => {
     // oauth-flow.bind-liveness.test.ts. Handwriting it a second time here pins a sentence; what
     // this case is about is that the sentence reaches the MCP boundary intact.
     expect(text).toBe(
-      `Zendesk login failed: OAuth callback server could not start on port 70000 (${CALLBACK_PORT_RULE}). ` +
+      `Zendesk login failed: OAuth callback server could not start on port 70000 (ZENDESK_OAUTH_CALLBACK_PORT ${CALLBACK_PORT_RULE}). ` +
         'Run zendesk_login again once that is resolved.',
     );
     // NOT subsumed by the toBe() above, measured rather than assumed (#94). That assertion

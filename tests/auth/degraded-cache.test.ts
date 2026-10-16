@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer, type ServerDeps } from '../../src/server.js';
 import { keychain } from './keychain.js';
+import { diagnosisOf } from './diagnosis.js';
 import { modeBitsIgnored } from '../setup/mode-bits.js';
 
 // A FILE as data dir makes mkdirSync throw ENOTDIR deterministically, no chmod, even as root.
@@ -114,9 +115,13 @@ describe('createServer with a data directory the cache cannot be created in', ()
 
   it('names both problems when the configuration is incomplete as well', async () => {
     const dataDir = unwritableDataDir();
-    const client = await connect({ ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_DATA_DIR: dataDir });
+    const env = { ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_DATA_DIR: dataDir };
+    const client = await connect(env);
     const text = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
-    expect(text).toContain('ZENDESK_SUBDOMAIN');
+    // The diagnosis, not the remedy line after it, which names every variable whatever is missing.
+    const diagnosis = diagnosisOf(env, keychain());
+    expect(diagnosis).toContain('ZENDESK_SUBDOMAIN');
+    expect(text).toContain(diagnosis);
     expectCacheProblem(text, dataDir);
     expect(text.match(/reload the extension/g)).toHaveLength(1);
     await client.close();

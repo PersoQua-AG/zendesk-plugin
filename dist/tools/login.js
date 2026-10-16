@@ -63,7 +63,7 @@ function failureText(err, deps) {
     // carries OUTSIDE text — the authorization server's `error` value — and oauth-flow.ts squeezes
     // that through the spec's character set before it ever reaches this line.
     return /EADDRINUSE|address already in use/i.test(message)
-        ? `Zendesk login could not start: local port ${port} is already in use, so the OAuth callback cannot be received. Close whatever is listening on port ${port}, or set ZENDESK_OAUTH_CALLBACK_PORT to a different port and restart the extension.`
+        ? `Zendesk login could not start: local port ${port} is already in use, so the OAuth callback cannot be received. Close whatever is listening on port ${port}, or set ZENDESK_OAUTH_CALLBACK_PORT to a different port and restart Claude Code.`
         : `Zendesk login failed: ${message}`;
 }
 // Call 1: build the URL, bind the listener, keep the flow, return — without waiting for the user.

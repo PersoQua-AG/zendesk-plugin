@@ -143,7 +143,8 @@ function resolveOrDegrade(env: NodeJS.ProcessEnv, security: RunSecurity): AuthRe
       // bridge does not support one), and the MCPB extension, whose dialog used to be named here
       // last, is retired (#103). On a platform without a Keychain the environment is the only way in
       // (#69). Naming a dialog the product does not have would send a half-configured operator into a
-      // path that cannot be reached, so the clause is pinned shut in tests/server.unconfigured.test.ts.
+      // path that cannot be reached, so tests/server.unconfigured.test.ts holds every sentence to a
+      // registered tool or a variable and keeps the retired dialog's wordings out.
       reason:
         `${reason}${problem ? ` ${problem}` : ''} Call the zendesk_login tool: on macOS it answers with a local setup page that ` +
         'collects the subdomain, client id and client secret. Otherwise pass them in the environment ' +

@@ -83,7 +83,7 @@ export const MAX_CALLBACK_PORT = 65535;
 // One rule, one wording: stated here, reused verbatim by the callback listener in oauth-flow.ts for
 // a port that reached it from somewhere other than this resolver.
 export const CALLBACK_PORT_RULE =
-  `ZENDESK_OAUTH_CALLBACK_PORT must be a whole number between ${MIN_CALLBACK_PORT} and ${MAX_CALLBACK_PORT}`;
+  `must be a whole number between ${MIN_CALLBACK_PORT} and ${MAX_CALLBACK_PORT}`;
 
 // Rejected, never clamped. The port is half of the redirect_uri the user registered with Zendesk, so
 // substituting a different one trades a loud startup error for an authorization that dies at
@@ -127,7 +127,7 @@ export function callbackPortOrDefault(env: NodeJS.ProcessEnv): { port: number; p
 // https://evil.example.com for s="evil.example.com/x", and the same for a '#', a '?' or an '@'
 // (userinfo). That POST carries client_id, client_secret and refresh_token in its body, so a moved
 // host is disclosure of secrets, not a failed request. The value is NOT attacker-supplied — it comes
-// from the local configuration dialog — so this guards a copy-paste (an instruction, a support
+// from the environment or the local setup page — so this guards a copy-paste (an instruction, a support
 // ticket, a shared setup snippet), and a copy-paste would hand the secrets over just as completely.
 //
 // The rule is Zendesk's own documented character set, not a tighter invention: a subdomain "can
@@ -141,16 +141,16 @@ const SUBDOMAIN_PATTERN = /^[a-z0-9-]+$/i;
 
 // One rule, one wording — stated once here, the way CALLBACK_PORT_RULE is.
 export const SUBDOMAIN_RULE =
-  `ZENDESK_SUBDOMAIN must be the subdomain by itself \u2014 letters, digits and dashes, at most ` +
+  `must be the subdomain by itself \u2014 letters, digits and dashes, at most ` +
   `${MAX_SUBDOMAIN_LENGTH} characters; for acme.zendesk.com the value is "acme"`;
 
 // The second wording, for a value that satisfies the rule above and still is not a host name.
 const SUBDOMAIN_NOT_A_HOST_RULE =
-  `ZENDESK_SUBDOMAIN is not a usable host name \u2014 a value starting with "xn--" is an ` +
+  `not a usable host name \u2014 a value starting with "xn--" is an ` +
   `internationalized-domain prefix and this one does not decode; for acme.zendesk.com the value is "acme"`;
 
 // Surrounding whitespace is a copy-paste artifact, not an opinion: trimmed, not rejected, because
-// "acme " and "acme" are indistinguishable in the settings dialog that produced them.
+// "acme " and "acme" look the same wherever the value was pasted.
 function subdomain(env: NodeJS.ProcessEnv): string {
   return validateSubdomain(required(env, 'ZENDESK_SUBDOMAIN'));
 }

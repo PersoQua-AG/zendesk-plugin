@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from '../../src/server.js';
 import { keychain } from './keychain.js';
+import { diagnosisOf } from './diagnosis.js';
 import { rejection } from './rejection.js';
 
 // resolveOrDegrade (src/server.ts:50) keeps the server alive with an EMPTY subdomain, so the http
@@ -24,6 +25,13 @@ function degradedEnv(): NodeJS.ProcessEnv {
   return { ZENDESK_OAUTH_CLIENT_ID: 'client-abc', ZENDESK_DATA_DIR: dataDir };
 }
 
+// The diagnosis, not the remedy line after it, which names every variable whatever is missing.
+function emptyFieldDiagnosis(env: NodeJS.ProcessEnv): string {
+  const diagnosis = diagnosisOf(env, keychain());
+  expect(diagnosis).toContain('ZENDESK_SUBDOMAIN');
+  return diagnosis;
+}
+
 function spyFetch() {
   return vi.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
 }
@@ -31,17 +39,19 @@ function spyFetch() {
 describe('an incompletely configured server never reaches the network', () => {
   it('rejects a JSON request at the token boundary, naming the empty field, without fetching', async () => {
     const fetchImpl = spyFetch();
-    const { ctx } = createServer(degradedEnv(), { fetchImpl, security: keychain() });
-    await expect(ctx.httpClient.request('/users/me.json')).rejects.toThrow(/ZENDESK_SUBDOMAIN/);
+    const env = degradedEnv();
+    const { ctx } = createServer(env, { fetchImpl, security: keychain() });
+    await expect(ctx.httpClient.request('/users/me.json')).rejects.toThrow(emptyFieldDiagnosis(env));
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('rejects the binary upload path the same way, without fetching', async () => {
     const fetchImpl = spyFetch();
-    const { ctx } = createServer(degradedEnv(), { fetchImpl, security: keychain() });
+    const env = degradedEnv();
+    const { ctx } = createServer(env, { fetchImpl, security: keychain() });
     await expect(
       ctx.httpClient.requestUpload('/uploads.json', new Uint8Array([1, 2, 3]), 'text/plain'),
-    ).rejects.toThrow(/ZENDESK_SUBDOMAIN/);
+    ).rejects.toThrow(emptyFieldDiagnosis(env));
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

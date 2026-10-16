@@ -31,7 +31,7 @@ const plain = (s: string) => s.replace(/`/g, '');
 const CLAIM_SITES = [
   {
     where: 'README.md plugin-configuration table row',
-    text: () => lineWith(readme, '| `security_level` | `strict`'),
+    text: () => lineWith(readme, '| `ZENDESK_SECURITY_LEVEL` |'),
     withdrawn: 'Prompt-injection screening (default `standard`) |',
   },
   {

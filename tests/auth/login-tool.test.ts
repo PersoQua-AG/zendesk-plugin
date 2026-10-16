@@ -187,6 +187,8 @@ describe('zendesk_login negative paths', () => {
       expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT');
       expect(text).not.toMatch(/EADDRINUSE/);
       expect(text).not.toContain('https://');
+      // No extension ships (#103), so the remedy names neither one nor its dialog.
+      expect(text).not.toMatch(/extension|configuration dialog|Settings → Extensions/i);
     } finally {
       await release();
     }

@@ -11,11 +11,11 @@ import { authorizationUrl, deps, freePort, rebind, redirect, setupLoginHarness }
 setupLoginHarness('login-queue-');
 
 // Whatever an overlapping call answers, it must never be the advice that would destroy the live
-// flow: close the process on the port, or change ZENDESK_OAUTH_CALLBACK_PORT and restart the extension.
+// flow: close the process on the port, or change ZENDESK_OAUTH_CALLBACK_PORT and restart Claude Code.
 function expectNoPortBlame(text: string): void {
   expect(text, `the overlapping call blamed the port:\n${text}`).not.toContain('Close whatever is listening');
   expect(text).not.toContain('ZENDESK_OAUTH_CALLBACK_PORT');
-  expect(text).not.toMatch(/restart the extension/i);
+  expect(text).not.toMatch(/restart Claude Code/);
 }
 
 describe('overlapping zendesk_login calls', () => {

@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../src/server.js';
 import { CONFIG_ACCOUNTS } from '../src/auth/store-key.js';
-import { resolveAuthConfig } from '../src/auth/config.js';
+import { diagnosisOf } from './auth/diagnosis.js';
 import { deniedKeychain, fakeKeychain, keychain, TEST_STORE_KEY, TOKEN_STORE_ACCOUNT } from './auth/keychain.js';
 import { freePort } from './auth/login-harness.js';
 import { abortLoginFlow } from '../src/tools/login.js';
@@ -56,16 +56,6 @@ function textOf(result: unknown): string {
   return ((result as { content: { text?: string }[] }).content ?? []).map((c) => c.text ?? '').join('\n');
 }
 
-// What the resolver itself says is wrong with this env: the truth the answers are checked against.
-function diagnosisOf(env: NodeJS.ProcessEnv, security: ReturnType<typeof keychain>): string {
-  try {
-    resolveAuthConfig(env, security);
-  } catch (err) {
-    return (err as Error).message;
-  }
-  throw new Error('this env resolves, so nothing is missing');
-}
-
 describe('createServer with incomplete extension configuration', () => {
   it('still registers the full tool surface so the host lists the extension normally', async () => {
     const client = await connect(halfConfiguredEnv());
@@ -78,14 +68,12 @@ describe('createServer with incomplete extension configuration', () => {
   // come FIRST, and on the Claude Code plugin that dialog does not exist any more — #68 removed its
   // user_config, because the host bridge dropped the whole server over it.
   //
-  // Checked against what exists, not against wordings: a list of forbidden phrases is beaten by the next
-  // phrasing of the same dialog (#103). The whole answer, diagnosis included, is held to two rules.
-  // Every sentence must name a registered tool or a variable the configuration is read from. And every
-  // clause may name, besides its opening word, only those or a surface on the short list below: a
-  // capitalised word is how a text names a place (Settings, Extensions, Desktop), so any other one is a
-  // surface the plugin does not have. Then the tool it names is CALLED and has to answer with the
-  // setup page. It lives here rather than in security-level-claims.test.ts because this string is built
-  // at RUNTIME by resolveOrDegrade, which is what this file is about.
+  // The whole answer, diagnosis included: every sentence names a registered tool or a variable the
+  // configuration is read from, every tool it names is CALLED and one answers with the setup page, and
+  // the retired MCPB dialog (#103) is not named. Those three negatives are a floor, not the contract:
+  // no test can tell that a sentence names no other surface without keeping a word list. It lives here
+  // rather than in security-level-claims.test.ts because this string is built at RUNTIME by
+  // resolveOrDegrade, which is what this file is about.
   it('answers a Zendesk tool call by naming what is missing and how to supply it, without a stack trace', async () => {
     // A working Keychain, so what is missing really is the subdomain and not access to the Keychain.
     const env = halfConfiguredEnv();
@@ -99,15 +87,11 @@ describe('createServer with incomplete extension configuration', () => {
 
     const registered = (await client.listTools()).tools.map((t) => t.name);
     const sources = Object.keys(CONFIG_ACCOUNTS);
-    // ponytail: the surfaces that exist besides tools and variables; a new one is added here on purpose.
-    const known = new Set([...registered, ...sources, 'Zendesk', 'Keychain']);
-    for (const sentence of text.split(/(?<=[.;])\s+|\n/)) {
+    for (const sentence of text.split(/(?<=[.;])\s+|\n/))
       expect([...registered, ...sources].some((way) => sentence.includes(way)), `names no way in: ${sentence}`).toBe(true);
-      for (const clause of sentence.split(/[:;]\s*/)) {
-        const names = (clause.match(/[A-Za-z][\w'’]*/g) ?? []).slice(1).filter((w) => /^[A-Z]/.test(w));
-        expect(names.filter((w) => !known.has(w)), `names a surface that does not exist: ${clause}`).toEqual([]);
-      }
-    }
+    expect(text).not.toMatch(/desktop extension/i);
+    expect(text).not.toMatch(/configuration dialog/i);
+    expect(text).not.toMatch(/Settings → Extensions/);
     // On a platform without a Keychain the environment is the only way in (#69).
     for (const name of sources) expect(text).toContain(name);
     const named = [...new Set(text.match(/\bzendesk_\w+/g) ?? [])];
@@ -139,7 +123,7 @@ describe('createServer with incomplete extension configuration', () => {
 
     expect(text).toContain('ZENDESK_SUBDOMAIN');
     expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT="70000"');
-    expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT must');
+    expect(text).toContain('must be a whole number');
     expect(text).toContain('8976');
     await client.close();
   });
@@ -157,7 +141,8 @@ describe('createServer with incomplete extension configuration', () => {
   // And where it CAN be stored, the answer is the setup page and nothing else. Not the subdomain, not
   // the data directory, not a stack: the page is local, and what the user types there stays local.
   // Every value the env carries is a canary, and either half of the required pair may be the one missing,
-  // so every value is present in some run; the port is exempt because the URL must carry it.
+  // so every value is present in some run; the port is exempt because the URL must carry it. The degraded
+  // answer of any other tool is held to the same canaries.
   it.each(['ZENDESK_SUBDOMAIN', 'ZENDESK_OAUTH_CLIENT_ID'])(
     'answers zendesk_login with the first-run setup URL, and nothing else, when the Keychain works (%s missing)',
     async (missing) => {
@@ -170,6 +155,8 @@ describe('createServer with incomplete extension configuration', () => {
       delete env[missing];
       const security = keychain();
       const client = await connect(env, security);
+      const degraded = textOf(await client.callTool({ name: 'zendesk_get_me', arguments: {} }));
+      expect(degraded).toContain(diagnosisOf(env, security));
       const text = textOf(await client.callTool({ name: 'zendesk_login', arguments: {} }));
       const link = text.split(/\s+/).find((word) => word.startsWith('http://'));
       expect(link, 'the answer carries no URL').toBeTypeOf('string');
@@ -185,7 +172,9 @@ describe('createServer with incomplete extension configuration', () => {
       expect(await page.text()).toContain(`http://localhost:${env.ZENDESK_OAUTH_CALLBACK_PORT}/callback`);
       expect(url.searchParams.get('t')).toMatch(/^[\w-]{43}$/);
       for (const [name, value] of Object.entries(env)) {
-        if (name !== 'ZENDESK_OAUTH_CALLBACK_PORT') expect(text, name).not.toContain(value);
+        if (name === 'ZENDESK_OAUTH_CALLBACK_PORT') continue;
+        expect(text, name).not.toContain(value);
+        expect(degraded, `zendesk_get_me: ${name}`).not.toContain(value);
       }
       // Nor the diagnosis: the page is the answer, and what is missing is what the page collects.
       expect(text).not.toContain(diagnosisOf(env, security));

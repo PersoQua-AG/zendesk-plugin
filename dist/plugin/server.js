@@ -21252,7 +21252,7 @@ function dataDirOf(env) {
 }
 var MIN_CALLBACK_PORT = 1024;
 var MAX_CALLBACK_PORT = 65535;
-var CALLBACK_PORT_RULE = `ZENDESK_OAUTH_CALLBACK_PORT must be a whole number between ${MIN_CALLBACK_PORT} and ${MAX_CALLBACK_PORT}`;
+var CALLBACK_PORT_RULE = `must be a whole number between ${MIN_CALLBACK_PORT} and ${MAX_CALLBACK_PORT}`;
 function callbackPort(env) {
   const raw = env.ZENDESK_OAUTH_CALLBACK_PORT;
   if (!raw) return DEFAULT_CALLBACK_PORT;
@@ -21275,8 +21275,8 @@ function callbackPortOrDefault(env) {
 }
 var MAX_SUBDOMAIN_LENGTH = 63;
 var SUBDOMAIN_PATTERN = /^[a-z0-9-]+$/i;
-var SUBDOMAIN_RULE = `ZENDESK_SUBDOMAIN must be the subdomain by itself \u2014 letters, digits and dashes, at most ${MAX_SUBDOMAIN_LENGTH} characters; for acme.zendesk.com the value is "acme"`;
-var SUBDOMAIN_NOT_A_HOST_RULE = `ZENDESK_SUBDOMAIN is not a usable host name \u2014 a value starting with "xn--" is an internationalized-domain prefix and this one does not decode; for acme.zendesk.com the value is "acme"`;
+var SUBDOMAIN_RULE = `must be the subdomain by itself \u2014 letters, digits and dashes, at most ${MAX_SUBDOMAIN_LENGTH} characters; for acme.zendesk.com the value is "acme"`;
+var SUBDOMAIN_NOT_A_HOST_RULE = `not a usable host name \u2014 a value starting with "xn--" is an internationalized-domain prefix and this one does not decode; for acme.zendesk.com the value is "acme"`;
 function subdomain(env) {
   return validateSubdomain(required2(env, "ZENDESK_SUBDOMAIN"));
 }
@@ -21491,7 +21491,7 @@ function startCallbackListener(port, expectedState, timeoutMs = DEFAULT_CALLBACK
       close();
       const kind = err instanceof Error && /^[A-Za-z]{0,40}Error$/.test(err.name) ? err.name : "an error";
       const badPort = err instanceof RangeError && err.code === "ERR_SOCKET_BAD_PORT";
-      throw badPort ? new Error(`OAuth callback server could not start on port ${port} (${CALLBACK_PORT_RULE}).`, {
+      throw badPort ? new Error(`OAuth callback server could not start on port ${port} (ZENDESK_OAUTH_CALLBACK_PORT ${CALLBACK_PORT_RULE}).`, {
         cause: err
       }) : new Error(
         // NOTHING ABOUT THE RANGE, AND NOTHING ABOUT THE RULE. Two rewrites of this sentence
@@ -22171,7 +22171,7 @@ function failureText(err, deps) {
   const raw = err instanceof Error ? err.message : String(err);
   const message = raw.split("\n")[0].split(deps.tokensPath).join("the token store").split(dirname2(deps.tokensPath)).join("the data directory");
   const port = deps.config.callbackPort;
-  return /EADDRINUSE|address already in use/i.test(message) ? `Zendesk login could not start: local port ${port} is already in use, so the OAuth callback cannot be received. Close whatever is listening on port ${port}, or set ZENDESK_OAUTH_CALLBACK_PORT to a different port and restart the extension.` : `Zendesk login failed: ${message}`;
+  return /EADDRINUSE|address already in use/i.test(message) ? `Zendesk login could not start: local port ${port} is already in use, so the OAuth callback cannot be received. Close whatever is listening on port ${port}, or set ZENDESK_OAUTH_CALLBACK_PORT to a different port and restart Claude Code.` : `Zendesk login failed: ${message}`;
 }
 async function beginFlow(deps, listen, timeoutMs) {
   const verifier = generateCodeVerifier();
@@ -29812,7 +29812,8 @@ function resolveOrDegrade(env, security) {
       // bridge does not support one), and the MCPB extension, whose dialog used to be named here
       // last, is retired (#103). On a platform without a Keychain the environment is the only way in
       // (#69). Naming a dialog the product does not have would send a half-configured operator into a
-      // path that cannot be reached, so the clause is pinned shut in tests/server.unconfigured.test.ts.
+      // path that cannot be reached, so tests/server.unconfigured.test.ts holds every sentence to a
+      // registered tool or a variable and keeps the retired dialog's wordings out.
       reason: `${reason}${problem ? ` ${problem}` : ""} Call the zendesk_login tool: on macOS it answers with a local setup page that collects the subdomain, client id and client secret. Otherwise pass them in the environment (ZENDESK_SUBDOMAIN, ZENDESK_OAUTH_CLIENT_ID, ZENDESK_OAUTH_CLIENT_SECRET).`,
       dataDir,
       tokensPath: join3(dataDir, "tokens.enc")
