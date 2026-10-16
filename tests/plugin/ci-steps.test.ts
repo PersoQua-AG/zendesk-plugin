@@ -41,7 +41,7 @@ jobs:
       - uses: Actions/Checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         if: false
       - uses: [actions/checkout@v4]
   skipped:
