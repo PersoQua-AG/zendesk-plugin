@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitEnv } from '../setup/git-env.js';
+import { ciSteps, ciTriggers, ciWorkflow } from '../setup/ci-steps.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-attribution.mjs');
@@ -200,13 +201,17 @@ describe('no-Claude-attribution guard (#86)', () => {
   describe('wiring', () => {
     const ci = () => readFileSync(CI, 'utf8');
 
-    it('runs as its own CI job on both push and pull_request', () => {
-      expect(ci()).toContain('attribution-guard:');
-      expect(ci()).toContain('scripts/assert-no-attribution.mjs --range');
+    it('runs as its own CI job', () => {
+      expect(
+        ciSteps('attribution-guard', "node scripts/assert-no-attribution.mjs --range '${{ steps.range.outputs.range }}'"),
+      ).toEqual([{ index: expect.any(Number), conditions: [] }]);
     });
 
     it('checks the pull request description too', () => {
-      expect(ci()).toContain("--stdin 'the pull request description'");
+      const command = `printf '%s' "$PR_BODY" | node scripts/assert-no-attribution.mjs --stdin 'the pull request description'`;
+      expect(ciSteps('attribution-guard', command)).toEqual([
+        { index: expect.any(Number), conditions: ["github.event_name == 'pull_request'"] },
+      ]);
     });
 
     // Both halves of the event coverage, because both revert to green. `edited` is not a
@@ -214,11 +219,19 @@ describe('no-Claude-attribution guard (#86)', () => {
     // is never re-read. The push range is the merge base and not `before..after`, because
     // cancel-in-progress can cancel the run that would have read the skipped commits.
     it('covers a pull request description edited after the green run', () => {
-      expect(ci()).toMatch(/pull_request:[\s\S]*?types:.*\bedited\b/);
+      // Named in full: naming the list replaces the defaults, so dropping `synchronize` would leave
+      // a pushed commit on an open PR unchecked.
+      // These four in any order; the order means nothing to GitHub, and an extra type only adds a run.
+      // A bare `push:` parses as null and means the same as `push: {}`; a missing push stays undefined.
+      const t = ciTriggers() as Record<string, unknown>;
+      expect({ ...t, push: t.push === null ? {} : t.push }).toEqual({ push: {}, pull_request: { types: expect.arrayContaining(['opened', 'synchronize', 'reopened', 'edited']) } });
     });
 
     it('computes the push range from the merge base, which no cancelled run can shorten', () => {
-      expect(ci()).toContain('git merge-base FETCH_HEAD "$AFTER"');
+      // A line of the range script, not a step of its own. An `exit 0` above it is not seen here; it
+      // leaves the range output empty, and `--range ''` exits 1 (case 'refuses a range git cannot resolve').
+      const range = ciWorkflow().jobs?.['attribution-guard']?.steps?.find((s) => s.id === 'range');
+      expect(String(range?.run).split('\n').map((l) => l.trim())).toContain('base="$(git merge-base FETCH_HEAD "$AFTER")"');
       expect(ci()).not.toContain('$BEFORE..$AFTER');
     });
 
