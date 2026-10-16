@@ -131,8 +131,8 @@ describe('manifest release gate', () => {
   // Asserted on WHICH sites are flagged plus the whole drift line, never on a bare needle: both
   // package-lock sites print the same filename and DRIFT may appear in any line, so a needle was
   // carried by whichever line existed (a mislabelled reader, a swapped or dropped operand stayed green).
-  // The `  - <label>: …` stderr list is the script's only output (it exports nothing), so it is the
-  // contract; rewording the drift line goes red on purpose.
+  // The `  - <label>: …` stderr list is the script's only failure output besides the exit code (it
+  // exports nothing), so it is the contract; rewording the drift line goes red on purpose.
   const flagged = (stderr: string): string[] =>
     stderr
       .split('\n')
@@ -162,6 +162,7 @@ describe('manifest release gate', () => {
     const r = runValidatorOn({}, { 'package.json': DRIFT });
     expect(r.status).not.toBe(0);
     expect(flagged(r.stderr)).toEqual(SITES);
+    for (const s of SITES) expect(r.stderr).toContain(`  - ${s}: declares ${VERSION}, package.json declares ${DRIFT}`);
   });
 
   it.each(['.claude-plugin/marketplace.json', 'src/server.ts', 'dist/server.js'])(
