@@ -51,14 +51,16 @@ function fileNotDirectory(path: string): string {
   return path;
 }
 
-// Turns the event loop until count() stops growing, so work the bundle deferred runs while the fence is up.
-async function settle(count: () => number): Promise<void> {
-  let n;
-  do {
-    n = count();
+// Turns the event loop until count() stops growing, so work the bundle deferred runs while the fence is up;
+// false if it still grows after 50 turns, as under a repeating caller.
+async function settle(count: () => number): Promise<boolean> {
+  for (let turn = 0; turn < 50; turn++) {
+    const n = count();
     await delay(0);
     await new Promise((r) => setImmediate(r));
-  } while (n !== count());
+    if (n === count()) return true;
+  }
+  return false;
 }
 
 async function inProcessToolNames(env: Record<string, string>): Promise<string[]> {
@@ -116,8 +118,8 @@ describe('plugin server from a copy without node_modules', () => {
   const unexpected: string[] = [];
   let fence: { opened: string[]; restore: () => void } | undefined;
   afterAll(async () => {
-    await settle(() => unexpected.length);
-    fence?.restore();
+    // Never lowered while refusals still arrive, or a repeating caller would reach the real module.
+    if (await settle(() => unexpected.length)) fence?.restore();
     expect([...unexpected, ...(fence?.opened ?? [])]).toEqual([]);
   });
 
@@ -142,6 +144,7 @@ describe('plugin server from a copy without node_modules', () => {
       return o.encoding && o.encoding !== 'buffer' ? output : Buffer.from(output);
     }));
     const requests: string[] = [];
+    let drained = false;
     try {
       const dataDir = mkdtempSync(join(scratch, 'data-bundle-'));
       const bundle = await import(join(root, 'dist', 'plugin', 'server.js'));
@@ -164,9 +167,11 @@ describe('plugin server from a copy without node_modules', () => {
       await client.close();
     } finally {
       // Deferred work lands in the fake, where the transcript below sees it.
-      await settle(() => fake.calls.length);
+      drained = await settle(() => fake.calls.length);
       closed = true;
     }
+
+    expect(drained, 'the bundle keeps calling the Keychain after the case').toBe(true);
 
     expect(requests).toEqual(['https://stored-oauth-subdomain.zendesk.com/api/v2/users/me.json Bearer at-1']);
     const find = (account: string) => ['find-generic-password', '-s', 'zendesk-plugin', '-a', account, '-w'];
@@ -179,6 +184,5 @@ describe('plugin server from a copy without node_modules', () => {
     expect(argv.filter((a) => a.includes(TOKEN_STORE_ACCOUNT))).toEqual([find(TOKEN_STORE_ACCOUNT), add, find(TOKEN_STORE_ACCOUNT)]);
     expect(argv).toEqual(expect.arrayContaining(config));
     for (const a of argv) expect([...config, find(TOKEN_STORE_ACCOUNT), add]).toContainEqual(a);
-    expect([...unexpected, ...opened]).toEqual([]);
   });
 });
