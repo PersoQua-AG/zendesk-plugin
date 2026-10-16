@@ -19,6 +19,11 @@
       "file": "skills/guide-authoring/SKILL.md",
       "line": 36,
       "quote": "For each create/update, show the target"
+    },
+    {
+      "file": "skills/guide-authoring/SKILL.md",
+      "line": 19,
+      "quote": "1. Create the base article in `en-us`: `zendesk_create_article`"
     }
   ],
   "input": {

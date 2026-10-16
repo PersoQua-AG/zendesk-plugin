@@ -49,9 +49,9 @@ const shells = (...gs: Array<Gate | undefined>) =>
 // job or step; any `needs`, since a skipped needed job skips this one; and an env key no script here
 // reads, which can only change how the tools run (`npm_config_script_shell`, `NODE_OPTIONS`).
 // ponytail: a script that names such a key by hand hides it. NOT read: an earlier step that rewrites
-// the command. No status check closes that, because the job still succeeds. The boundary is review
-// of `.github/` changes: CODEOWNERS on `.github/workflows/` plus required code-owner review, or a
-// ruleset-required workflow run from the base ref.
+// the command. No check on this workflow's own jobs closes that, because the job still succeeds.
+// The boundary is review of `.github/` changes: CODEOWNERS on `.github/workflows/` plus required
+// code-owner review, or a ruleset-required workflow run from the base ref.
 export function ciJobSteps(job: string, path = CI_WORKFLOW) {
   const wf = ciWorkflow(path);
   const j = wf.jobs?.[job];

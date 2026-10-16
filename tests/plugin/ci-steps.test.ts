@@ -43,11 +43,11 @@ jobs:
           READ: an input
           NODE_OPTIONS: --import=./exit0.mjs
       - run: npm run always
-        if: true
+        if: \${{ true }}
       - uses: Actions/Checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         if: false
       - uses: [actions/checkout@v4]
       - run: npm run default-shell
@@ -93,7 +93,7 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const at = (job: string, command: string) => ciSteps(job, command, path);
 
-  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`, `if: true`, `continue-on-error: ${{ false }}` and `shell: bash -e {0}`', () => {
+  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`, `if: ${{ true }}`, `continue-on-error: ${{ false }}` and `shell: bash -e {0}`', () => {
     expect(at('build-test', 'npm ci')).toEqual([{ index: 0, conditions: [] }]);
     expect(at('build-test', 'npm run spelled-out')).toEqual([{ index: 4, conditions: [] }]);
     expect(at('soft', 'npm run anchored')).toEqual([{ index: 1, conditions: ['continue-on-error', 'shell: sh', 'needs: skipped'] }]);

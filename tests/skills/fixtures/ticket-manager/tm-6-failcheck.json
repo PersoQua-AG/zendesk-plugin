@@ -19,6 +19,11 @@
       "file": "skills/ticket-manager/SKILL.md",
       "line": 93,
       "quote": "- No `force:true` and no `replace:true` without a specific,"
+    },
+    {
+      "file": "skills/ticket-manager/SKILL.md",
+      "line": 31,
+      "quote": "Re-fetch with `zendesk_get_ticket`"
     }
   ],
   "input": {
