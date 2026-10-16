@@ -57,7 +57,7 @@ describe('a reply that has no usable URL promises none', () => {
     const release = await occupyPort(port);
     try {
       const text = await runLogin(deps(port));
-      expect(text).toContain('oauth_callback_port');
+      expect(text).toContain('ZENDESK_OAUTH_CALLBACK_PORT');
       expect(text).not.toContain('https://');
     } finally {
       await release();

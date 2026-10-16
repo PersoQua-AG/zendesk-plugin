@@ -47,8 +47,7 @@ describe('the reason a failed callback bind states', () => {
   it('keeps the port rule, verbatim, for the RangeError it is true of', async () => {
     const err = await bindFailure(70_000);
     expect(err.message).toBe(
-      'OAuth callback server could not start on port 70000 (extension configuration field ' +
-        '"oauth_callback_port" must be a whole number between 1024 and 65535).',
+      'OAuth callback server could not start on port 70000 (ZENDESK_OAUTH_CALLBACK_PORT must be a whole number between 1024 and 65535).',
     );
     expect(err.cause).toBeInstanceOf(RangeError);
   });

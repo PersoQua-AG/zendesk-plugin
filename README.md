@@ -48,7 +48,8 @@ reports those as states, never as values, so its output is safe to paste into an
 issue.
 
 Installed but not yet configured, the plugin still starts, and every tool answers
-with the configuration field that is still empty rather than failing silently.
+with the environment variable that is still missing, and how to supply it, rather
+than failing silently.
 
 To work on the plugin from source instead:
 
@@ -114,7 +115,7 @@ OAuth Clients**, create a client and set the redirect URI **exactly** to:
 http://localhost:8976/callback
 ```
 
-(Use your chosen port if you override `oauth_callback_port`.) Note the
+(Use your chosen port if you set `ZENDESK_OAUTH_CALLBACK_PORT`.) Note the
 **Client ID** and **Client Secret**.
 
 ### 2. Provide plugin configuration
@@ -122,17 +123,17 @@ These reach the server as environment variables (`ZENDESK_SUBDOMAIN`,
 `ZENDESK_OAUTH_CLIENT_ID`, …), or from the first-run setup page above — the
 plugin declares no configuration of its own (see [Install](#install)).
 
-| Key | Type | Required | Purpose |
+| Variable | Type | Required | Purpose |
 |---|---|---|---|
-| `zendesk_subdomain` | string | yes | `{subdomain}.zendesk.com` |
-| `oauth_client_id` | string | yes | From step 1 |
-| `oauth_client_secret` | string (sensitive) | yes | From step 1 — stored in the macOS Keychain when the setup page collects it, never on disk in the clear |
-| `oauth_callback_port` | number | no | Localhost redirect port (default `8976`) |
-| `security_level` | `strict`\|`standard`\|`off` | no | Prompt-injection screening. Fixed at `standard` in the installed plugin — only a hand-started server or a remote-connector deployment reads `ZENDESK_SECURITY_LEVEL`, see [Security](#security) |
-| `markdown_conversion` | boolean | no | Markdown→HTML on writes (default `true`) |
-| `timezone` | string | no | IANA tz for business-hours metrics (e.g. `Europe/Berlin`) |
-| `work_hours` | JSON | no | `{"start":"09:00","end":"17:00"}` |
-| `workdays` | JSON | no | ISO weekdays, e.g. `[1,2,3,4,5]` |
+| `ZENDESK_SUBDOMAIN` | string | yes | `{subdomain}.zendesk.com` |
+| `ZENDESK_OAUTH_CLIENT_ID` | string | yes | From step 1 |
+| `ZENDESK_OAUTH_CLIENT_SECRET` | string (sensitive) | for a confidential client | From step 1 — stored in the macOS Keychain when the setup page collects it, never on disk in the clear |
+| `ZENDESK_OAUTH_CALLBACK_PORT` | number | no | Localhost redirect port (default `8976`) |
+| `ZENDESK_SECURITY_LEVEL` | `standard` | no | Prompt-injection screening. Fixed at `standard` in the installed plugin — only a hand-started server or a remote-connector deployment reads this variable, see [Security](#security) |
+| `ZENDESK_MARKDOWN_CONVERSION` | boolean | no | Markdown→HTML on writes (default `true`) |
+| `ZENDESK_TIMEZONE` | string | no | IANA tz for business-hours metrics (e.g. `Europe/Berlin`) |
+| `ZENDESK_WORK_HOURS` | JSON | no | `{"start":"09:00","end":"17:00"}` |
+| `ZENDESK_WORKDAYS` | JSON | no | ISO weekdays, e.g. `[1,2,3,4,5]` |
 
 ### 3. Authorize (one time)
 **In a chat:** run the **`zendesk_login`** tool **twice** — or simply ask for
@@ -167,7 +168,7 @@ credentials the server uses exported:
 export ZENDESK_SUBDOMAIN=acme
 export ZENDESK_OAUTH_CLIENT_ID=...        # from step 1
 export ZENDESK_OAUTH_CLIENT_SECRET=...    # only for a confidential client
-export ZENDESK_OAUTH_CALLBACK_PORT=8976   # only if you overrode oauth_callback_port
+export ZENDESK_OAUTH_CALLBACK_PORT=8976   # only if you use a port other than 8976
 npm run authorize
 ```
 
@@ -265,7 +266,7 @@ inventory.
   nothing else, so it is not reachable from the network while it is open.
 
 ### Known limitation — rich Guide articles
-The Markdown→HTML converter handles standard comment/article formatting. For
+The Markdown→HTML converter handles common comment/article formatting. For
 Help Center articles with complex layout (nested tables, embedded media, custom
 classes), pass raw HTML directly rather than relying on Markdown conversion.
 

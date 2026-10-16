@@ -105,6 +105,7 @@ describe('ResponseCache', () => {
       }
       expect(thrown?.message).toContain('EACCES');
       expect(thrown?.message).toMatch(/free space/);
+      expect(thrown?.message).not.toMatch(/extension|configuration dialog/i);
       expect(thrown?.message).not.toContain(dir);
       expect(thrown?.message).not.toContain('.json');
       // …and the sanitized message does not throw the diagnosable original away.
