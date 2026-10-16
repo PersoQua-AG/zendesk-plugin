@@ -4,7 +4,8 @@
 // `createRequire` all resolve to, and syncBuiltinESMExports pushes that into the ESM bindings, so those
 // calls go to `fake`. process.binding, process.execve, process.dlopen and worker_threads.Worker go around
 // that object, so they throw and are recorded in `opened`. Both halves are checked before this returns.
-// Not shut: a native addon loaded before the window, and a process started outside it.
+// Not shut: a native addon loaded before the window, a process started outside it, and a child_process
+// function a module took off the object before the window; import the code under test only inside it.
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 
 type Door = [Record<string, unknown>, string];
@@ -21,7 +22,10 @@ export async function fenceProcesses(
   const saved = [...routed, ...shut].map(([o, k]) => [o, k, o[k]] as const);
   const opened: string[] = [];
   const restore = () => {
-    for (const [o, k, v] of saved) o[k] = v;
+    for (const [o, k, v] of saved) {
+      if (v === undefined) delete o[k];
+      else o[k] = v;
+    }
     syncBuiltinESMExports();
   };
   // `function`, not an arrow: `new ChildProcess()` and `new Worker()` must land here too.

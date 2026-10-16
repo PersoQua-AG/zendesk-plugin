@@ -96,25 +96,31 @@ describe('nothing spawns a process to open a browser', () => {
     for (const call of calls) {
       expect(call.file).toBe('/usr/bin/security');
       expect(Array.isArray(call.args)).toBe(true);
-      expect((call.options as { shell?: unknown }).shell).toBeFalsy();
+      expect((call.options as { shell?: unknown } | undefined)?.shell).toBeFalsy();
     }
     // The secret is on stdin, never in argv (#68 B4): `-w` last is what makes security prompt.
     const adds = calls.filter((c) => (c.args as string[])[0] === 'add-generic-password');
     expect(adds.length).toBeGreaterThan(0);
     const secrets = [KEY, ...Object.values(values)];
     for (const { args, options } of adds) {
-      const input = String((options as { input?: unknown }).input);
+      const raw = (options as { input?: unknown } | undefined)?.input;
+      const input = ArrayBuffer.isView(raw) ? Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString() : String(raw);
       const value = input.split('\n')[0];
       expect(value).not.toBe('');
       expect(input).toBe(`${value}\n${value}\n`);
       expect((args as string[]).at(-1)).toBe('-w');
       secrets.push(value);
     }
-    // Nor any 8-character run of it, plain, hex or base64 at each of the three alignments.
+    // Nor any 8-character run of it in argv or the child env, plain, hex or base64 at each of the three
+    // alignments. A finite list of encodings: a value reversed or otherwise transformed is not caught.
     const runs = (s: string) => Array.from({ length: s.length - 7 }, (_, i) => s.slice(i, i + 8));
     const forms = (s: string) => [s, Buffer.from(s).toString('hex'), ...[0, 1, 2].map((i) => Buffer.from(s.slice(i)).toString('base64'))];
     const needles = secrets.flatMap((s) => forms(s).flatMap(runs));
-    expect(calls.flatMap((c) => (c.args as string[]).filter((arg) => needles.some((n) => arg.includes(n))))).toEqual([]);
+    const visible = (c: (typeof calls)[number]) => [
+      ...(c.args as string[]),
+      ...Object.values((c.options as { env?: Record<string, unknown> } | undefined)?.env ?? {}).map(String),
+    ];
+    expect(calls.flatMap((c) => visible(c).filter((arg) => needles.some((n) => arg.includes(n))))).toEqual([]);
     // And each answer led where it should, so a spawn that throws cannot hide in a swallowed error.
     const read = expect.stringMatching(/could not be read/);
     const written = expect.stringMatching(/could not be written/);
