@@ -2,8 +2,9 @@
 // Shuts every route from a module to a new process that this suite knows, for one window. Each function
 // export of node:child_process is replaced on the one object that `import`, `import()`, `require` and
 // `createRequire` all resolve to, and syncBuiltinESMExports pushes that into the ESM bindings, so those
-// calls go to `fake`. process.binding, process.execve, process.dlopen and worker_threads.Worker go around
-// that object, so they throw and are recorded in `opened`. Both halves are checked before this returns.
+// calls go to `fake`, which gets `pass` to run the original instead. process.binding, process.execve,
+// process.dlopen and worker_threads.Worker go around that object, so they throw and are recorded in
+// `opened`. Both halves are checked before this returns.
 // Not shut: a native addon loaded before the window, a process started outside it, and a child_process
 // function a module took off the object before the window; import the code under test only inside it.
 import { createRequire, syncBuiltinESMExports } from 'node:module';
@@ -11,8 +12,8 @@ import { createRequire, syncBuiltinESMExports } from 'node:module';
 type Door = [Record<string, unknown>, string];
 
 export async function fenceProcesses(
-  fake: (name: string, file: unknown, args: unknown, options: unknown) => unknown,
-): Promise<{ opened: string[]; restore: () => void }> {
+  fake: (name: string, file: unknown, args: unknown, options: unknown, pass: () => unknown) => unknown,
+): Promise<{ opened: string[]; restore: () => void; reopen: () => void }> {
   const load = createRequire(import.meta.url);
   const cp = load('node:child_process') as Record<string, unknown>;
   const wt = load('node:worker_threads') as Record<string, unknown>;
@@ -21,15 +22,19 @@ export async function fenceProcesses(
   const shut: Door[] = [[proc, 'binding'], [proc, 'execve'], [proc, 'dlopen'], [wt, 'Worker']];
   const saved = [...routed, ...shut].map(([o, k]) => [o, k, o[k]] as const);
   const opened: string[] = [];
-  const restore = () => {
-    for (const [o, k, v] of saved) {
+  const put = (doors: typeof saved) => {
+    for (const [o, k, v] of doors) {
       if (v === undefined) delete o[k];
       else o[k] = v;
     }
     syncBuiltinESMExports();
   };
+  const restore = () => put(saved);
   // `function`, not an arrow: `new ChildProcess()` and `new Worker()` must land here too.
-  for (const [o, k] of routed) o[k] = function (file: unknown, args?: unknown, options?: unknown) { return fake(k, file, args, options); };
+  for (const [o, k] of routed) {
+    const real = o[k] as (...a: unknown[]) => unknown;
+    o[k] = function (this: unknown, ...a: unknown[]) { return fake(k, a[0], a[1], a[2], () => real.apply(this, a)); };
+  }
   for (const [o, k] of shut) o[k] = function () { opened.push(k); throw new Error(`${k} refused`); };
   syncBuiltinESMExports();
 
@@ -42,5 +47,6 @@ export async function fenceProcesses(
     throw new Error(`the process fence did not hold: opened ${opened}, ESM bindings ${esm}`);
   }
   opened.length = 0;
-  return { opened, restore };
+  // reopen puts back only the shut doors, and leaves child_process routed to `fake`.
+  return { opened, restore, reopen: () => put(saved.slice(routed.length)) };
 }

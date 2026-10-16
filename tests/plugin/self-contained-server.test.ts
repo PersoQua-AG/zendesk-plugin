@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll, vi } from 'vitest';
+import { execFileSync, execSync, spawn } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { execFileSync, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
@@ -9,7 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../../src/server.js';
-import { keychain } from '../auth/keychain.js';
+import { CONFIG_ACCOUNTS } from '../../src/auth/store-key.js';
+import { TokenStore } from '../../src/auth/token-store.js';
+import { fakeKeychain, keychain, TOKEN_STORE_ACCOUNT } from '../auth/keychain.js';
+import { fenceProcesses } from './process-fence.js';
 import { gitEnv } from '../setup/git-env.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -37,7 +40,7 @@ function copyPluginPayload(dest: string): void {
 // the first-run setup gate is skipped too. The subject of this test is unaffected — whether the bundle the
 // manifest launches runs at all, and whether it registers the same tools as this process — because the tool
 // surface is registered whatever the configuration says. What the child can no longer prove, that the
-// bundler kept the Keychain path, is asserted on the artifact in the case below.
+// bundler kept the Keychain path, the case below drives in this process.
 function keylessEnv(dataDirAsFile: string): Record<string, string> {
   return { ZENDESK_DATA_DIR: dataDirAsFile };
 }
@@ -46,6 +49,18 @@ function fileNotDirectory(path: string): string {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, '');
   return path;
+}
+
+// Turns the event loop until count() stops growing, so work the bundle deferred runs while the fence is up;
+// false if it still grows after 50 turns, as under a repeating caller.
+async function settle(count: () => number): Promise<boolean> {
+  for (let turn = 0; turn < 50; turn++) {
+    const n = count();
+    await delay(0);
+    await new Promise((r) => setImmediate(r));
+    if (n === count()) return true;
+  }
+  return false;
 }
 
 async function inProcessToolNames(env: Record<string, string>): Promise<string[]> {
@@ -98,16 +113,102 @@ describe('plugin server from a copy without node_modules', () => {
     expect(names).toEqual(expected);
   }, 60_000);
 
+  // The bundle's timers and servers outlive the case, so child_process is never lowered: after the window it
+  // refuses every call that names `security` and passes every other call to the original, and the doors around
+  // it reopen, so a later file sharing this worker (singleFork, singleThread, --no-isolate) runs unfenced except
+  // for calls that name `security`, which stay refused. A call after afterAll is refused but not asserted.
+  const unexpected: string[] = [];
+  let fence: { opened: string[]; reopen: () => void } | undefined;
+  afterAll(async () => {
+    await settle(() => unexpected.length);
+    expect([...unexpected, ...(fence?.opened ?? [])]).toEqual([]);
+  });
+
   // What the child used to prove by doing it, and now must not: that the bundler kept the Keychain path.
-  // esbuild tree-shakes, node:child_process is reached from exactly one module, and a bundle that dropped
-  // it would fail at the first login on a real machine rather than here.
-  it('keeps the Keychain path in the bundle the manifest launches', () => {
-    const bundle = readFileSync(join(root, 'dist', 'plugin', 'server.js'), 'utf8');
-    expect(bundle).toContain('node:child_process');
-    expect(bundle).toContain('/usr/bin/security');
-    expect(bundle).toContain('find-generic-password');
-    expect(bundle).toContain('add-generic-password');
-    // And the stdin form, because an argv form would put the customer's client secret in `ps`.
-    expect(bundle).toMatch(/"-U",\s*"-w"/);
+  // So the bundle is driven, not read: its createServer runs its own runSecurity inside the process fence,
+  // where, inside the window, execFileSync of `/usr/bin/security` lands in the fake Keychain and every other
+  // route the fence knows is refused, checked before the bundle loads. A first start must write a key through
+  // stdin, and a second start must read that same key back and decrypt tokens with it.
+  it('keeps the Keychain path in the bundle the manifest launches', async () => {
+    const fake = fakeKeychain();
+    let closed = false;
+    const { opened } = (fence = await fenceProcesses((name, bin, args, options, pass) => {
+      // Any call that names the Keychain tool, in any case, stays shut: a PATH lookup, a shell string, a shell's
+      // argument. A name assembled at runtime, a script on stdin or a copy of the binary passes this check; only
+      // the sandbox stops those.
+      const namesSecurity = /\bsecurity\b/i.test([bin, ...(Array.isArray(args) ? args : [])].map(String).join(' '));
+      if (closed && !namesSecurity) return pass();
+      const o = (options ?? {}) as { input?: unknown; encoding?: string; stdio?: unknown };
+      if (closed || name !== 'execFileSync' || bin !== '/usr/bin/security') {
+        unexpected.push(`${closed ? 'after the window: ' : ''}${name}(${String(bin)})`);
+        throw new Error(`unexpected child_process call: ${name}(${String(bin)})`);
+      }
+      const { status, output } = fake.run(args as string[], String(o.input ?? ''));
+      if (status !== 0) throw Object.assign(new Error(`security exited ${status}`), { status });
+      // Node's contract: no stdout unless it is piped, and a Buffer unless a string encoding was asked for.
+      if (((Array.isArray(o.stdio) ? o.stdio[1] : o.stdio) ?? 'pipe') !== 'pipe') return null;
+      return o.encoding && o.encoding !== 'buffer' ? output : Buffer.from(output);
+    }));
+    const requests: string[] = [];
+    let drained = false;
+    try {
+      const dataDir = mkdtempSync(join(scratch, 'data-bundle-'));
+      const bundle = await import(join(root, 'dist', 'plugin', 'server.js'));
+      bundle.createServer({ ZENDESK_DATA_DIR: dataDir });
+      expect([...unexpected, ...opened]).toEqual([]);
+      // Inside the window a call that does not name `security` is still refused, not passed through.
+      expect(() => execFileSync(process.execPath, ['-e', ''])).toThrow(`unexpected child_process call: execFileSync(${process.execPath})`);
+      expect(unexpected.splice(0)).toEqual([`execFileSync(${process.execPath})`]);
+      const key = fake.items.get(TOKEN_STORE_ACCOUNT) as string;
+      expect(Buffer.from(key ?? '', 'base64')).toHaveLength(32);
+
+      for (const account of Object.values(CONFIG_ACCOUNTS)) fake.items.set(account, `stored-${account}`);
+      new TokenStore(join(dataDir, 'tokens.enc'), key).save({ accessToken: 'at-1', refreshToken: 'rt-1', expiresAt: Date.now() + 3_600_000 });
+      const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
+        requests.push(`${input} ${new Headers(init?.headers).get('authorization')}`);
+        return Response.json({ user: { id: 1, name: 'Agent', email: 'agent@acme.test', role: 'admin' } });
+      }) as unknown as typeof fetch;
+      const { server } = bundle.createServer({ ZENDESK_DATA_DIR: dataDir }, { fetchImpl });
+      const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: 'bundle', version: '0.0.0' });
+      await Promise.all([server.connect(serverT), client.connect(clientT)]);
+      await client.callTool({ name: 'zendesk_get_me', arguments: {} });
+      await client.close();
+    } finally {
+      // Deferred work lands in the fake, where the transcript below sees it.
+      drained = await settle(() => fake.calls.length);
+      closed = true;
+      fence.reopen();
+    }
+
+    expect(drained, 'the bundle keeps calling the Keychain after the case').toBe(true);
+    // After the window, one call down each road, so neither depends on a late timer: the Keychain stays shut,
+    // every other child_process call and the reopened doors reach the original.
+    expect(() => execFileSync('/usr/bin/security', ['help'])).toThrow('unexpected child_process call: execFileSync(/usr/bin/security)');
+    expect(() => execFileSync('security', ['help'])).toThrow('unexpected child_process call: execFileSync(security)');
+    expect(() => execSync('/usr/bin/security help')).toThrow('unexpected child_process call: execSync(/usr/bin/security help)');
+    expect(() => execSync('cd /;SECURITY help')).toThrow('unexpected child_process call: execSync(cd /;SECURITY help)');
+    expect(unexpected.splice(0)).toEqual([
+      'after the window: execFileSync(/usr/bin/security)',
+      'after the window: execFileSync(security)',
+      'after the window: execSync(/usr/bin/security help)',
+      'after the window: execSync(cd /;SECURITY help)',
+    ]);
+    let ran: unknown;
+    expect(() => (ran = execFileSync(process.execPath, ['-e', 'process.stdout.write("passed")'], { encoding: 'utf8' }))).not.toThrow();
+    expect(ran).toBe('passed');
+    expect(() => process.dlopen({ exports: {} }, join(scratch, 'none.node'))).toThrow(/none\.node/);
+
+    expect(requests).toEqual(['https://stored-oauth-subdomain.zendesk.com/api/v2/users/me.json Bearer at-1']);
+    const find = (account: string) => ['find-generic-password', '-s', 'zendesk-plugin', '-a', account, '-w'];
+    const config = Object.values(CONFIG_ACCOUNTS).map(find);
+    // The stdin form, because an argv form would put the key in `ps`; the fake also demands it twice.
+    const add = ['add-generic-password', '-s', 'zendesk-plugin', '-a', TOKEN_STORE_ACCOUNT, '-U', '-w'];
+    // The order and arguments of what touches the key, and a read of each config item; not how often the
+    // config is read, which a cache may change.
+    const argv = fake.calls.map((c) => c.args);
+    expect(argv.filter((a) => a.includes(TOKEN_STORE_ACCOUNT))).toEqual([find(TOKEN_STORE_ACCOUNT), add, find(TOKEN_STORE_ACCOUNT)]);
+    expect(argv).toEqual(expect.arrayContaining(config));
+    for (const a of argv) expect([...config, find(TOKEN_STORE_ACCOUNT), add]).toContainEqual(a);
   });
 });
