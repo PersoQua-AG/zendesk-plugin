@@ -188,7 +188,7 @@ describe('zendesk_login negative paths', () => {
       expect(text).not.toMatch(/EADDRINUSE/);
       expect(text).not.toContain('https://');
       // No extension ships (#103), so the remedy names neither one nor its dialog.
-      expect(text).not.toMatch(/extension|configuration dialog|Settings → Extensions/i);
+      expect(text).not.toMatch(/extension|configuration dialog/i);
     } finally {
       await release();
     }
