@@ -5,11 +5,10 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitEnv } from '../setup/git-env.js';
-import { bare, ciSteps, ciTriggers, ciUses, ciWorkflow } from '../setup/ci-steps.js';
+import { bare, ciJobSteps, ciSteps, ciTriggers, ciUses } from '../setup/ci-steps.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUARD = join(root, 'scripts', 'assert-no-attribution.mjs');
-const CI = join(root, '.github', 'workflows', 'ci.yml');
 
 const temps: string[] = [];
 afterEach(() => {
@@ -25,11 +24,14 @@ const run = (args: string[], { input, cwd = root, guard = GUARD }: { input?: str
 
 // A real repository with real commits, because the guard reads commit bodies through git. Asserting
 // against a string in a file would not notice the day `git log --format` stops producing records.
+const isolated = () => ({ ...gitEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' });
+const gitIn = (dir: string, ...args: string[]) =>
+  spawnSync('git', args, { cwd: dir, encoding: 'utf8', env: isolated() }).stdout.trim();
+
 function repoWith(bodies: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'attribution-guard-'));
   temps.push(dir);
-  const git = (...args: string[]) =>
-    spawnSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...gitEnv(), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' } });
+  const git = (...args: string[]) => gitIn(dir, ...args);
   git('init', '-q', '-b', 'main');
   git('config', 'user.email', 't@example.com');
   git('config', 'user.name', 'T');
@@ -43,6 +45,13 @@ function repoWith(bodies: string[]): string {
   });
   return dir;
 }
+
+// GitHub substitutes `${{ expr }}` before the shell starts; what the event does not carry is ''.
+// A context path only, by contract: an operator such as `|| ''` is not evaluated and reads as ''.
+const expand = (text: string, ctx: Record<string, string>) =>
+  text.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_, e: string) => ctx[e] ?? '');
+const expandAll = (env: Record<string, unknown> | undefined, ctx: Record<string, string>) =>
+  Object.fromEntries(Object.entries(env ?? {}).map(([k, v]) => [k, expand(String(v), ctx)]));
 
 const inRepo = (dir: string, args: string[]): Run => run(args, { cwd: dir });
 
@@ -199,8 +208,6 @@ describe('no-Claude-attribution guard (#86)', () => {
   // The guard that is not wired into CI is a script nobody runs — the exact failure #86 was filed
   // about, one level up. Both events, because only one of them runs against the target branch.
   describe('wiring', () => {
-    const ci = () => readFileSync(CI, 'utf8');
-
     it('runs as its own CI job', () => {
       expect(
         ciSteps('attribution-guard', "node scripts/assert-no-attribution.mjs --range '${{ steps.range.outputs.range }}'"),
@@ -212,6 +219,9 @@ describe('no-Claude-attribution guard (#86)', () => {
       expect(ciSteps('attribution-guard', command)).toEqual([
         { index: expect.any(Number), conditions: ["github.event_name == 'pull_request'"] },
       ]);
+      // PR_BODY from the body; any other key that no script reads is already a condition above.
+      const env = ciJobSteps('attribution-guard').find((s) => String(s.step.run).trim() === command)?.env;
+      expect(expandAll(env, { 'github.event.pull_request.body': 'the body' })).toMatchObject({ PR_BODY: 'the body' });
     });
 
     // Both halves of the event coverage, because both revert to green. `edited` is not a
@@ -227,12 +237,70 @@ describe('no-Claude-attribution guard (#86)', () => {
       expect({ ...t, push: t.push === null ? {} : t.push }).toEqual({ push: {}, pull_request: { types: expect.arrayContaining(['opened', 'synchronize', 'reopened', 'edited']) } });
     });
 
+    // The range step RUN, as GitHub would run it, in a repository where the push before this one
+    // was cancelled: main is base, m; the branch is base, f1, f2 (before), f3 (this push). It runs in
+    // a clone, as actions/checkout leaves one: `origin` is the remote and there is no local main.
+    function rangeFor(event: (fx: Record<string, string>) => Record<string, string>) {
+      const origin = repoWith(['m']);
+      const git = (...args: string[]) => gitIn(origin, ...args);
+      const fx: Record<string, string> = { base: git('rev-parse', 'HEAD~1'), m: git('rev-parse', 'HEAD') };
+      git('checkout', '-q', '-b', 'feature', fx.base);
+      for (const c of ['f1', 'f2', 'f3']) {
+        writeFileSync(join(origin, 'f'), `${c}\n`);
+        git('commit', '-q', '-am', c);
+        fx[c] = git('rev-parse', 'HEAD');
+      }
+      const dir = mkdtempSync(join(tmpdir(), 'attribution-clone-'));
+      temps.push(dir);
+      git('clone', '-q', origin, dir);
+      const { step, env, conditions } = ciJobSteps('attribution-guard').find((s) => s.step.id === 'range') ?? {};
+      const output = join(dir, 'github-output');
+      writeFileSync(output, '');
+      const ctx = event(fx);
+      // `bash -e`, the shell GitHub uses for a `run` that declares none; `conditions` pins that it doesn't.
+      spawnSync('bash', ['-e', '-c', expand(String(step?.run), ctx)], {
+        cwd: dir,
+        env: { ...isolated(), ...expandAll(env, ctx), GITHUB_OUTPUT: output },
+      });
+      return { conditions, output: readFileSync(output, 'utf8'), fx };
+    }
+
     it('computes the push range from the merge base, which no cancelled run can shorten', () => {
-      // A line of the range script, not a step of its own. An `exit 0` above it is not seen here; it
-      // leaves the range output empty, and `--range ''` exits 1 (case 'refuses a range git cannot resolve').
-      const range = ciWorkflow().jobs?.['attribution-guard']?.steps?.find((s) => s.id === 'range');
-      expect(String(range?.run).split('\n').map((l) => l.trim())).toContain('base="$(git merge-base FETCH_HEAD "$AFTER")"');
-      expect(ci()).not.toContain('$BEFORE..$AFTER');
+      const { conditions, output, fx } = rangeFor((fx) => ({
+        'github.event_name': 'push',
+        'github.event.before': fx.f2,
+        'github.event.after': fx.f3,
+        'github.ref': 'refs/heads/feature',
+        'github.ref_name': 'feature',
+        'github.sha': fx.f3,
+        'github.event.repository.default_branch': 'main',
+      }));
+      expect(conditions).toEqual([]);
+      expect(output).toBe(`range=${fx.base}..${fx.f3}\n`);
+    });
+
+    // On the default branch the merge base IS the push, and the guard refuses an empty range.
+    it('checks the pushed tip itself on a push to the default branch', () => {
+      const { output, fx } = rangeFor((fx) => ({
+        'github.event_name': 'push',
+        'github.ref': 'refs/heads/main',
+        'github.ref_name': 'main',
+        'github.event.after': fx.m,
+        'github.sha': fx.m,
+        'github.event.repository.default_branch': 'main',
+      }));
+      expect(output).toBe(`range=${fx.m}^..${fx.m}\n`);
+    });
+
+    it('takes the pull request range from base to head', () => {
+      const { output, fx } = rangeFor((fx) => ({
+        'github.event_name': 'pull_request',
+        'github.event.pull_request.base.sha': fx.m,
+        'github.event.pull_request.head.sha': fx.f3,
+        'github.sha': fx.f2,
+        'github.event.repository.default_branch': 'main',
+      }));
+      expect(output).toBe(`range=${fx.m}..${fx.f3}\n`);
     });
 
     // A shallow clone has no base commit, so the range would not resolve and the job would be
@@ -241,9 +309,9 @@ describe('no-Claude-attribution guard (#86)', () => {
       // bare(), because the runner hands every input to the action as text: 0, '0' and ${{ 0 }} are the
       // same input, and an absent or empty one is the action's default depth of 1. This repository, at
       // its root (no `repository`, no `path`), before the range step reads it.
-      const rangeAt = ciWorkflow().jobs?.['attribution-guard']?.steps?.findIndex((s) => s.id === 'range') ?? -1;
+      const rangeAt = ciJobSteps('attribution-guard').findIndex((s) => s.step.id === 'range');
       expect(
-        ciUses('attribution-guard', 'actions/checkout').map(({ index, with: w = {}, conditions }) => ({
+        ciUses('attribution-guard', 'actions/checkout').map(({ index, step: { with: w = {} }, conditions }) => ({
           depth: bare(w['fetch-depth']), repository: w.repository, path: w.path, beforeRange: index < rangeAt, conditions,
         })),
       ).toEqual([{ depth: '0', beforeRange: true, conditions: [] }]);
