@@ -125,9 +125,9 @@ function openCacheOrDegrade(auth) {
     }
     catch (err) {
         const code = errorCode(err);
-        const problem = `The extension's data directory cannot be used (${code}), so responses cannot be cached and ` +
-            `tokens cannot be stored. Make sure it is a writable directory with free space, then reload the extension.`;
-        const reason = auth.ok ? problem : `${auth.reason.replace(/,? then reload the extension\.$/, '.')} ${problem}`;
+        const problem = `The data directory cannot be used (${code}), so responses cannot be cached and ` +
+            `tokens cannot be stored. Make sure it is a writable directory with free space, then restart Claude Code.`;
+        const reason = auth.ok ? problem : `${auth.reason} ${problem}`;
         const fail = () => {
             throw new Error(reason);
         };

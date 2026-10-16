@@ -123,7 +123,7 @@ describe('createServer with a data directory the cache cannot be created in', ()
     expect(diagnosis).toContain('ZENDESK_SUBDOMAIN');
     expect(text).toContain(diagnosis);
     expectCacheProblem(text, dataDir);
-    expect(text.match(/reload the extension/g)).toHaveLength(1);
+    expect(text).not.toMatch(/extension|configuration dialog|Settings → Extensions/i);
     await client.close();
   });
 });
