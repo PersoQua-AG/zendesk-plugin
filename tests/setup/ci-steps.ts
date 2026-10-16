@@ -41,10 +41,10 @@ const conditions = (g: Gate | undefined) => [
 
 // Every step of `job` whose whole `run` is `command`, with its position and its `if` (`false`
 // included) and continue-on-error, on the job or on the step. NOT read: env, shell, needs, or an
-// earlier step that rewrites the command. No status check closes these, because the job still
-// succeeds (or is skipped, which counts as success). The boundary is review of `.github/` changes:
-// CODEOWNERS on `.github/workflows/` plus required code-owner review, or a ruleset-required
-// workflow run from the base ref.
+// earlier step that rewrites the command. No check on this workflow's own jobs closes these,
+// because the job still succeeds (or is skipped, which counts as success). The boundary is review of
+// `.github/` changes: CODEOWNERS on `.github/workflows/` plus required code-owner review, or a
+// ruleset-required workflow run from the base ref.
 // ponytail: whole run, not a line of it — a line after `exit 0` in a script is text, not a step,
 // and telling which lines execute would take a shell interpreter.
 export function ciSteps(job: string, command: string, path = CI_WORKFLOW) {
