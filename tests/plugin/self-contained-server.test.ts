@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, vi } from 'vitest';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, execSync, spawn } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -114,10 +114,9 @@ describe('plugin server from a copy without node_modules', () => {
   }, 60_000);
 
   // The bundle's timers and servers outlive the case, so child_process is never lowered: after the window it
-  // refuses `/usr/bin/security` and passes every other call to the original, and the doors around it reopen,
-  // so a later file sharing this worker (singleFork, singleThread, --no-isolate) runs unfenced except for
-  // `/usr/bin/security`, which stays refused. A call after afterAll is
-  // refused but not asserted.
+  // refuses every call that names `security` and passes every other call to the original, and the doors around
+  // it reopen, so a later file sharing this worker (singleFork, singleThread, --no-isolate) runs unfenced except
+  // for calls that name `security`, which stay refused. A call after afterAll is refused but not asserted.
   const unexpected: string[] = [];
   let fence: { opened: string[]; reopen: () => void } | undefined;
   afterAll(async () => {
@@ -134,7 +133,9 @@ describe('plugin server from a copy without node_modules', () => {
     const fake = fakeKeychain();
     let closed = false;
     const { opened } = (fence = await fenceProcesses((name, bin, args, options, pass) => {
-      if (closed && bin !== '/usr/bin/security') return pass();
+      // Any spelling that can start the Keychain tool stays shut: a PATH lookup, a shell string, a shell's argument.
+      const namesSecurity = /(^|[\s/'"])security(?=[\s'"]|$)/.test([bin, ...(Array.isArray(args) ? args : [])].map(String).join(' '));
+      if (closed && !namesSecurity) return pass();
       const o = (options ?? {}) as { input?: unknown; encoding?: string; stdio?: unknown };
       if (closed || name !== 'execFileSync' || bin !== '/usr/bin/security') {
         unexpected.push(`${closed ? 'after the window: ' : ''}${name}(${String(bin)})`);
@@ -179,7 +180,13 @@ describe('plugin server from a copy without node_modules', () => {
     // After the window, one call down each road, so neither depends on a late timer: the Keychain stays shut,
     // every other child_process call and the reopened doors reach the original.
     expect(() => execFileSync('/usr/bin/security', ['help'])).toThrow('unexpected child_process call: execFileSync(/usr/bin/security)');
-    expect(unexpected.splice(0)).toEqual(['after the window: execFileSync(/usr/bin/security)']);
+    expect(() => execFileSync('security', ['help'])).toThrow('unexpected child_process call: execFileSync(security)');
+    expect(() => execSync('/usr/bin/security help')).toThrow('unexpected child_process call: execSync(/usr/bin/security help)');
+    expect(unexpected.splice(0)).toEqual([
+      'after the window: execFileSync(/usr/bin/security)',
+      'after the window: execFileSync(security)',
+      'after the window: execSync(/usr/bin/security help)',
+    ]);
     let ran: unknown;
     expect(() => (ran = execFileSync(process.execPath, ['-e', 'process.stdout.write("passed")'], { encoding: 'utf8' }))).not.toThrow();
     expect(ran).toBe('passed');
