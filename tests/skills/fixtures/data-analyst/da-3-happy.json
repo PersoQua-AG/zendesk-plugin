@@ -19,6 +19,11 @@
       "file": "commands/report.md",
       "line": 8,
       "quote": "Use the `data-analyst` skill. Resolve the range into"
+    },
+    {
+      "file": "commands/report.md",
+      "line": 8,
+      "quote": "then call `zendesk_report`"
     }
   ],
   "input": {

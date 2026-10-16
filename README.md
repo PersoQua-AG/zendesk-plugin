@@ -129,7 +129,7 @@ plugin declares no configuration of its own (see [Install](#install)).
 | `ZENDESK_OAUTH_CLIENT_ID` | string | yes | From step 1 |
 | `ZENDESK_OAUTH_CLIENT_SECRET` | string (sensitive) | for a confidential client | From step 1 — stored in the macOS Keychain when the setup page collects it, never on disk in the clear |
 | `ZENDESK_OAUTH_CALLBACK_PORT` | number | no | Localhost redirect port (default `8976`) |
-| `ZENDESK_SECURITY_LEVEL` | `strict`\|`standard`\|`off` | no | Prompt-injection screening. Fixed at `standard` in the installed plugin — only a hand-started server or a remote-connector deployment reads this variable, see [Security](#security) |
+| `ZENDESK_SECURITY_LEVEL` | `standard` | no | Prompt-injection screening. Fixed at `standard` in the installed plugin — only a hand-started server or a remote-connector deployment reads this variable, see [Security](#security) |
 | `ZENDESK_MARKDOWN_CONVERSION` | boolean | no | Markdown→HTML on writes (default `true`) |
 | `ZENDESK_TIMEZONE` | string | no | IANA tz for business-hours metrics (e.g. `Europe/Berlin`) |
 | `ZENDESK_WORK_HOURS` | JSON | no | `{"start":"09:00","end":"17:00"}` |
@@ -266,7 +266,7 @@ inventory.
   nothing else, so it is not reachable from the network while it is open.
 
 ### Known limitation — rich Guide articles
-The Markdown→HTML converter handles standard comment/article formatting. For
+The Markdown→HTML converter handles common comment/article formatting. For
 Help Center articles with complex layout (nested tables, embedded media, custom
 classes), pass raw HTML directly rather than relying on Markdown conversion.
 

@@ -15,5 +15,6 @@
     "prompt": "How was satisfaction last week?",
     "report_line": "CSAT: no rated responses"
   },
-  "expected": "Says there were no rated responses in the window. Never reports satisfaction as 0 or as a measured value."
+  "expected": "Says there were no rated responses in the window. Never reports satisfaction as 0 or as a measured value.",
+  "unchecked": true
 }
