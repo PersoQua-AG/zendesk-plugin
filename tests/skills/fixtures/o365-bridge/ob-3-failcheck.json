@@ -24,6 +24,21 @@
       "file": "skills/o365-bridge/SKILL.md",
       "line": 46,
       "quote": "On Zendesk this skill reads"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 44,
+      "quote": "## Side-effect contract"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 46,
+      "quote": "a ticket comment via `zendesk_add_comment`"
+    },
+    {
+      "file": "tests/skills/o365-bridge.test.ts",
+      "line": 93,
+      "quote": "it('OB-3 failcheck: the only Zendesk write the skill and /escalate name is zendesk_add_comment'"
     }
   ],
   "input": {

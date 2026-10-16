@@ -37,7 +37,7 @@ jobs:
       - &shared
         run: npm run anchored
       - run: npm run always
-        if: true
+        if: \${{ true }}
       - uses: Actions/Checkout@v4
         with:
           fetch-depth: 0
@@ -63,7 +63,7 @@ describe('ciSteps reads the workflow as GitHub does, not as text', () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const at = (job: string, command: string) => ciSteps(job, command, path);
 
-  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`, `if: true` and `continue-on-error: ${{ false }}`', () => {
+  it('finds a live step, as a `run: |` block, through an alias, or with `if: success()`, `if: ${{ true }}` and `continue-on-error: ${{ false }}`', () => {
     expect(at('build-test', 'npm ci')).toEqual([{ index: 0, conditions: [] }]);
     expect(at('build-test', 'npm run spelled-out')).toEqual([{ index: 4, conditions: [] }]);
     expect(at('build-test', 'npm run always')).toEqual([{ index: 7, conditions: [] }]);
