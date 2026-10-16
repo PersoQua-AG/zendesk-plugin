@@ -63,8 +63,8 @@ export class ResponseCache {
         /* the original failure is the one worth reporting */
       }
       throw new Error(
-        `Caching the response failed (${errorCode(err)}). Make sure the extension's data ` +
-          'directory is a writable directory with free space, then reload the extension.',
+        `Caching the response failed (${errorCode(err)}). Make sure the data directory ` +
+          'is a writable directory with free space, then restart Claude Code.',
         { cause: err },
       );
     }
