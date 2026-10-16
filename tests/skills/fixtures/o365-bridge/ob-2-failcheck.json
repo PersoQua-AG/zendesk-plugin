@@ -19,6 +19,11 @@
       "file": "commands/escalate.md",
       "line": 11,
       "quote": "Use the `o365-bridge` skill. First detect whether the"
+    },
+    {
+      "file": "skills/o365-bridge/SKILL.md",
+      "line": 42,
+      "quote": "record it on the ticket with an internal `zendesk_add_comment`"
     }
   ],
   "input": {

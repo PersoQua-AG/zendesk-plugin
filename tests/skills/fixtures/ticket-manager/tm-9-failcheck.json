@@ -9,6 +9,11 @@
       "file": "skills/ticket-manager/SKILL.md",
       "line": 82,
       "quote": "- Internal note (agents only): `zendesk_add_comment` with"
+    },
+    {
+      "file": "src/tools/tickets.ts",
+      "line": 122,
+      "quote": "export function buildComment(text: string, useMarkdown: boolean, isPublic = false)"
     }
   ],
   "input": {
