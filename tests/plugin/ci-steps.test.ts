@@ -71,6 +71,7 @@ jobs:
 const LAYERED = `
 env:
   A: wf
+  B: wf
   NODE_OPTIONS: x
 defaults:
   run:
