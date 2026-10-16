@@ -115,8 +115,9 @@ describe('plugin server from a copy without node_modules', () => {
 
   // The bundle's timers and servers outlive the case, so child_process is never lowered: after the window it
   // refuses `/usr/bin/security` and passes every other call to the original, and the doors around it reopen,
-  // so a later file sharing this worker (singleFork, singleThread, --no-isolate) runs unfenced. A call after
-  // afterAll is refused but not asserted.
+  // so a later file sharing this worker (singleFork, singleThread, --no-isolate) runs unfenced except for
+  // `/usr/bin/security`, which stays refused. A call after afterAll is
+  // refused but not asserted.
   const unexpected: string[] = [];
   let fence: { opened: string[]; reopen: () => void } | undefined;
   afterAll(async () => {
@@ -175,6 +176,14 @@ describe('plugin server from a copy without node_modules', () => {
     }
 
     expect(drained, 'the bundle keeps calling the Keychain after the case').toBe(true);
+    // After the window, one call down each road, so neither depends on a late timer: the Keychain stays shut,
+    // every other child_process call and the reopened doors reach the original.
+    expect(() => execFileSync('/usr/bin/security', ['help'])).toThrow('unexpected child_process call: execFileSync(/usr/bin/security)');
+    expect(unexpected.splice(0)).toEqual(['after the window: execFileSync(/usr/bin/security)']);
+    let ran: unknown;
+    expect(() => (ran = execFileSync(process.execPath, ['-e', 'process.stdout.write("passed")'], { encoding: 'utf8' }))).not.toThrow();
+    expect(ran).toBe('passed');
+    expect(() => process.dlopen({ exports: {} }, join(scratch, 'none.node'))).toThrow(/none\.node/);
 
     expect(requests).toEqual(['https://stored-oauth-subdomain.zendesk.com/api/v2/users/me.json Bearer at-1']);
     const find = (account: string) => ['find-generic-password', '-s', 'zendesk-plugin', '-a', account, '-w'];
